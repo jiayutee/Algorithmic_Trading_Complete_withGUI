@@ -1,0 +1,17 @@
+ALPACA_API_KEY = "***REMOVED-ALPACA-KEY***"
+ALPACA_SECRET_KEY = "***REMOVED-ALPACA-SECRET***"
+BASE_URL = "wss://stream.data.alpaca.markets/v2/iex"
+
+BINANCE_API_KEY = "***REMOVED-BINANCE-KEY***"
+BINANCE_SECRET_KEY = "***REMOVED-BINANCE-SECRET***"
+
+BINANCE_TESTNET_API_KEY = "***REMOVED-BINANCE-TESTNET-KEY***"
+BINANCE_TESTNET_SECRET_KEY = "***REMOVED-BINANCE-TESTNET-SECRET***"
+
+
+# Display Settings
+CHART_THEME = {
+    'background': '#1e1e2d',
+    'gridColor': '#2d2d3d',
+    'textColor': '#ffffff'
+}
