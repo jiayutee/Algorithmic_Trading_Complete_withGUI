@@ -14,6 +14,8 @@ import pandas as pd
 import numpy as np
 from queue import Empty
 from datetime import datetime, timedelta
+from ui.statistics_window import StatisticsWindow
+from core.news_scraper import scrape_and_analyze_finviz_news
 
 
 class MainWindow(QMainWindow):
@@ -42,19 +44,21 @@ class MainWindow(QMainWindow):
         # Symbol Selection
         self.control_layout.addWidget(QLabel("Symbol:"))
         self.symbol_combo = QComboBox()
-        self.symbol_combo.addItems(["AAPL", "TSLA", "BTCUSDT", "GOLD", "SPY", "QQQ"])
+        self.symbol_combo.addItems(["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "AAPL", "TSLA", "GOLD", "SPY", "QQQ"])
         self.control_layout.addWidget(self.symbol_combo)
+        self.symbol_combo.currentTextChanged.connect(self.load_data)
 
         # Strategy Selection
         self.control_layout.addWidget(QLabel("Strategy:"))
         self.strategy_combo = QComboBox()
         self.strategy_combo.addItems([
-            "None",
+            "False",
             "MACD/RSI",
             "EMA Crossover",
             "Stochastic",
             "LSTM Predictor",
-            "FinRL Strategy"
+            "FinRL Strategy",
+            "DDPG Strategy"
         ])
         self.control_layout.addWidget(self.strategy_combo)
 
@@ -115,6 +119,23 @@ class MainWindow(QMainWindow):
 
         # Remove all QChart-related code and replace with:
         self.plotly_view = QWebEngineView()
+        empty_html = """
+            <html>
+            <head>
+                <meta charset=\"utf-8\"/>
+                <style>
+                body {
+                    background-color: #121212;  /* Dark background */
+                    color: #ffffff;
+                    margin: 0;
+                    padding: 0;
+                }
+                </style>
+            </head>
+            <body></body>
+            </html>
+            """
+        self.plotly_view.setHtml(empty_html)
         self.main_layout.addWidget(self.plotly_view)
 
         # Initialize Plotly figure
@@ -123,7 +144,8 @@ class MainWindow(QMainWindow):
             height=600,
             margin=dict(l=20, r=20, t=20, b=20),
             xaxis_rangeslider_visible=False,
-            hovermode='x unified'
+            hovermode='x unified',
+            template='plotly_dark'
         )
 
         # Status Bar
@@ -164,38 +186,29 @@ class MainWindow(QMainWindow):
         # self.chart_view.scene().addItem(self.price_label)
         self.price_label.hide()
 
-        # Store candle references
-        self.candle_sets = []
-        # Hold the chart series
-        self.candles_series = None
-        # Store all candles
-        self.all_candles = []
-        self.total_candles = 0
-        self.visible_candles = 150
-        # Store scroll state
-        self.current_position = 0
-        # init x_axis
-        self.x_axis = None
-        self.y_axis = None
-
         # Add realtime streaming attributes
         self.realtime_timer = QTimer()
         self.realtime_timer.timeout.connect(self.process_realtime_updates)
         self.is_streaming = False
-        self.realtime_series = None
         self.historical_candles = []
-        self.current_candle = None
-        self.current_candle_set = None
+        self.current_candle = False
         self.current_interval = '1m'
-        self.last_candle_time = None
+        self.last_candle_time = False
+        self.max_candles = 130 # Max candles to display in real-time chart
 
         # Add simulation attributes
         self.simulation_timer = QTimer()
         self.simulation_timer.timeout.connect(self.update_simulation_chart)
-        self.simulation_data = None
+        self.simulation_data = False
         self.simulation_index = 0
         self.buy_signal_plotted = False
         self.sell_signal_plotted = False
+
+        # Add news scraping attributes
+        self.news_timer = QTimer()
+        self.news_timer.timeout.connect(self.update_live_news)
+        self.last_seen_headline = ""
+        self.latest_sentiment = {'positive': 0.0, 'negative': 0.0, 'neutral': 1.0}
 
 
     def check_strategy_signal(self, data):
@@ -295,7 +308,7 @@ class MainWindow(QMainWindow):
 
     def play_simulation(self):
         """Play the simulation"""
-        if self.simulation_data is None:
+        if self.simulation_data is False:
             return
         # Start the index from the end of the initial window
         if self.simulation_index == 0:
@@ -331,7 +344,7 @@ class MainWindow(QMainWindow):
         strategy_name = self.strategy_combo.currentText()
 
         # Execute strategy if one is selected
-        if strategy_name != "None":
+        if strategy_name != "False":
             signal = self.check_strategy_signal(current_data)
             
             if signal == 1 and self.sim_portfolio['position'] == 0: # Buy
@@ -428,7 +441,7 @@ class MainWindow(QMainWindow):
 
 
     def plot_candles(self):
-        """Plot candlestick chart using Plotly"""
+        """Plot candlestick chart with volume using Plotly"""
         if not hasattr(self, 'df') or self.df.empty:
             return
 
@@ -444,7 +457,7 @@ class MainWindow(QMainWindow):
             self.df.index = pd.to_datetime(self.df.index)
 
         # Handle timezones properly
-        if self.df.index.tz is None:
+        if self.df.index.tz is False:
             # If no timezone info, assume UTC for historical data
             self.df.index = self.df.index.tz_localize('America/New_York')
         else:
@@ -457,12 +470,15 @@ class MainWindow(QMainWindow):
         print("OHLC dtypes:\n", self.df[['Open', 'High', 'Low', 'Close']].dtypes)
         print("NaN counts:\n", self.df.isna().sum())
 
-        # Create fresh figure
-        self.fig = go.Figure()
+        # Create figure with subplots
+        self.fig = make_subplots(rows=5, cols=1, shared_xaxes=True,
+                                 vertical_spacing=0.08, subplot_titles=('Price', 'Volume', 'MACD', 'RSI', 'Stochastic'),
+                                 row_width=[0.15, 0.15, 0.15, 0.10, 0.75],
+                                 specs=[[{"secondary_y": True}], [{}], [{}], [{}], [{}]])  # Add secondary_y for the first subplot
 
         # Add candlestick trace
         self.fig.add_trace(go.Candlestick(
-            x=self.df.index.astype(str),
+            x=self.df.index,
             open=self.df['Open'],
             high=self.df['High'],
             low=self.df['Low'],
@@ -470,24 +486,29 @@ class MainWindow(QMainWindow):
             name='Price',
             increasing_line_color='green',
             decreasing_line_color='red'
-        ))
+        ), row=1, col=1)
 
-        # Explicit layout configuration
-        self.fig.update_layout(
-            height=600,
-            margin=dict(l=20, r=20, t=20, b=20),
-            xaxis=dict(
-                type='date',
-                rangeslider=dict(visible=True)
-            ),
-            yaxis=dict(
-                title='Price',
-                side='right'
-            ),
-            hovermode='x unified'
-        )
+        colors = np.where(self.df['Close'] >= self.df['Open'], 'green', 'red')
+        # Add volume trace
+        self.fig.add_trace(go.Bar(
+            x=self.df.index,
+            y=self.df['Volume'],
+            name='Volume',
+            marker_color=colors,
+            opacity=0.4
+        ), row=1, col=1, secondary_y=True)
 
-        
+        self.fig.add_trace(go.Scatter(
+            x=self.df.index,
+            y=self.df['Volume'],
+            name='Volume Line',
+            line=dict(color='orange'),
+            opacity=0.4
+        ), row=1, col=1)
+
+        self.fig.update_yaxes(title_text="Volume", row=1, col=1)
+        self.fig.update_xaxes(rangeslider_visible=False)
+
 
         # Calculate all technical indicators upfront
         self.calculate_technical_indicators()
@@ -495,20 +516,63 @@ class MainWindow(QMainWindow):
         self.add_technical_indicators()
 
         # Create buttons for indicator toggles
+        # buttons arrangement:    
+        #    * Trace 0 (`go.Candlestick`): The main price data
+        #    * Trace 1 (`go.Bar`): Volume bars
+        #    * Trace 2 (`go.Scatter`): Volume line
+        #    * Trace 3 (`go.Scatter`): Moving Average 20 (MA20)
+        #    * Trace 4 (`go.Scatter`): Moving Average 50 (MA50)
+        #    * Trace 5 (`go.Scatter`): Moving Average 200 (MA200)
+        #    * Trace 6 (`go.Scatter`): Exponential Moving Average 12 (EMA12)
+        #    * Trace 7 (`go.Scatter`): Exponential Moving Average 26 (EMA26)
+        #    * Trace 8 (`go.Scatter`): MACD Line
+        #    * Trace 9 (`go.Scatter`): MACD Signal Line
+        #    * Trace 10 (`go.Scatter`): Relative Strength Index (RSI)
+        #    * Trace 11 (`go.Scatter`): Stochastic Oscillator %K
+        #    * Trace 12 (`go.Scatter`): Stochastic Oscillator %D
         indicator_buttons = [
-            dict(label="MA", method="update", args=[
-                {"visible": [True, True, True, True, False, False, False, False, False, False, False, False]}]),
-            dict(label="EMA", method="update", args=[
-                {"visible": [True, False, False, False, True, True, False, False, False, False, False, False]}]),
-            dict(label="MACD", method="update", args=[
-                {"visible": [True, False, False, False, False, False, True, True, False, False, False, False]}]),
-            dict(label="RSI", method="update", args=[
-                {"visible": [True, False, False, False, False, False, False, False, True, False, False, False]}]),
-            dict(label="Stochastic", method="update", args=[
-                {"visible": [True, False, False, False, False, False, False, False, False, True, True, False]}]),
-            dict(label="All Off", method="update", args=[
-                {"visible": [True, False, False, False, False, False, False, False, False, False, False, False]}]),
+            dict(label="MA", method="restyle", args=["visible", [True, True, True, True, True, True, False, False, False, False, False, False, False]],
+                args2=["visible", [True, True, True, False, False, False, False, False, False, False, False, False, False]]),
+            dict(label="EMA", method="restyle", args=["visible", [True, True, True, False, False, False, True, True, False, False, False, False, False]],
+                args2=["visible", [True, True, True, False, False, False, False, False, False, False, False, False, False]]),
+            dict(label="MACD", method="restyle", args=["visible", [True, True, True, False, False, False, False, False, True, True, False, False, False]],
+                args2=["visible", [True, True, True, False, False, False, False, False, False, False, False, False, False]]), 
+            dict(label="RSI", method="restyle", args=["visible", [True, True, True, False, False, False, False, False, False, False, True, False, False]],
+                args2=["visible", [True, True, True, False, False, False, False, False, False, False, False, False, False]]), 
+            dict(label="Stochastic", method="restyle", args=["visible", [True, True, True, False, False, False, False, False, False, False, False, True, True]],
+                args2=["visible", [True, True, True, False, False, False, False, False, False, False, False, False, False]]), 
+            dict(label="All Off", method="restyle", args=[
+                {"visible": [True, True, True, False, False, False, False, False, False, False, False, False, False]}],args2=[
+                {"visible": [True, True, True, False, False, False, False, False, False, False, False, False, False]}]),
         ]
+
+        if len(self.df.index) > 200:
+            initial_range = [self.df.index[-200], self.df.index[-1]]
+        else:
+            initial_range = [self.df.index[0], self.df.index[-1]]
+
+        self.is_crypto = "USD" in self.symbol_combo.currentText().upper() if hasattr(self, 'symbol_combo') else False
+        
+        xaxis_config = dict(
+                            type='date',
+                            rangeslider=dict(visible=True),
+                            rangeselector=dict(
+                                buttons=list([
+                                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                                    dict(count=3, label="3m", step="month", stepmode="backward"),
+                                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                                    dict(count=1, label="YTD", step="year", stepmode="todate"),
+                                    dict(count=1, label="1y", step="year", stepmode="backward"),
+                                    dict(step="all")
+                                ])
+                            ),
+                            range=initial_range,
+                            tickmode='auto',
+                            nticks=10
+                        )
+        # Only add rangebreaks for non-crypto assets
+        if not self.is_crypto:
+            xaxis_config["rangebreaks"] = [dict(bounds=["sat", "mon"]),dict(bounds=[16, 9.5], pattern="hour")] # skip weekends and outside trading hours
 
         # Update layout with buttons
         self.fig.update_layout(
@@ -526,40 +590,15 @@ class MainWindow(QMainWindow):
                     pad={"r": 10, "t": 10}
                 )
             ],
-            xaxis=dict(
-                type='date',
-                rangeslider=dict(visible=True),  # Re-enable the rangeslider
-                rangeselector=dict(
-                    buttons=list([
-                        dict(count=1, label="1m", step="month", stepmode="backward"),
-                        dict(count=3, label="3m", step="month", stepmode="backward"),
-                        dict(count=6, label="6m", step="month", stepmode="backward"),
-                        dict(count=1, label="YTD", step="year", stepmode="todate"),
-                        dict(count=1, label="1y", step="year", stepmode="backward"),
-                        dict(step="all")
-                    ])
-                )
-            ),
-            xaxis2=dict(title='Date'),
-            yaxis=dict(title='Price', side='right', fixedrange=False),
-            yaxis2=dict(title='Volume', side='right'),
+            xaxis=xaxis_config,
+            yaxis=dict(title='Price', side='left', fixedrange=False, showgrid=True),
+            yaxis2=dict(title='Volume', side='right', overlaying='y', showgrid=True, range=[0, self.df['Volume'].max() * 3]), # Secondary y-axis for volume
+            xaxis2=dict(title='Date', showgrid=True),
             hovermode='x unified',
-            dragmode='pan'  # Enable panning
+            dragmode='pan',  # Enable panning
+            template='plotly_dark'
         )
 
-        # Add range selector buttons (same as before)
-        self.fig.update_xaxes(
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1, label="1m", step="month", stepmode="backward"),
-                    dict(count=3, label="3m", step="month", stepmode="backward"),
-                    dict(count=6, label="6m", step="month", stepmode="backward"),
-                    dict(count=1, label="YTD", step="year", stepmode="todate"),
-                    dict(count=1, label="1y", step="year", stepmode="backward"),
-                    dict(step="all")
-                ])
-            )
-        )
 
         # Update the view
         self.update_plotly_view()
@@ -647,60 +686,60 @@ class MainWindow(QMainWindow):
             x=self.df.index, y=self.df['MA20'],
             name='MA20', line=dict(color='blue'),
             visible=False
-        ))
+        ), row=1, col=1)
         self.fig.add_trace(go.Scatter(
             x=self.df.index, y=self.df['MA50'],
             name='MA50', line=dict(color='orange'),
             visible=False
-        ))
+        ), row=1, col=1)
         self.fig.add_trace(go.Scatter(
             x=self.df.index, y=self.df['MA200'],
             name='MA200', line=dict(color='purple'),
             visible=False
-        ))
+        ), row=1, col=1)
 
         # EMA Traces
         self.fig.add_trace(go.Scatter(
             x=self.df.index, y=self.df['EMA12'],
             name='EMA12', line=dict(color='cyan'),
             visible=False
-        ))
+        ), row=1, col=1)
         self.fig.add_trace(go.Scatter(
             x=self.df.index, y=self.df['EMA26'],
             name='EMA26', line=dict(color='magenta'),
             visible=False
-        ))
+        ), row=1, col=1)
 
         # MACD Traces
         self.fig.add_trace(go.Scatter(
             x=self.df.index, y=self.df['MACD'],
             name='MACD', line=dict(color='blue'),
             visible=False
-        ))
+        ), row=3, col=1)
         self.fig.add_trace(go.Scatter(
             x=self.df.index, y=self.df['Signal'],
             name='Signal', line=dict(color='red'),
             visible=False
-        ))
+        ), row=3, col=1)
 
         # RSI Trace
         self.fig.add_trace(go.Scatter(
             x=self.df.index, y=self.df['RSI'],
             name='RSI', line=dict(color='purple'),
             visible=False
-        ))
+        ), row=4, col=1)
 
         # Stochastic Traces
         self.fig.add_trace(go.Scatter(
             x=self.df.index, y=self.df['K'],
             name='K', line=dict(color='blue'),
             visible=False
-        ))
+        ), row=5, col=1)
         self.fig.add_trace(go.Scatter(
             x=self.df.index, y=self.df['D'],
             name='D', line=dict(color='red'),
             visible=False
-        ))
+        ), row=5, col=1)
 
     def reset_chart_zoom(self):
         """Reset the chart to its default zoom level."""
@@ -724,7 +763,7 @@ class MainWindow(QMainWindow):
                 # print(f"[DEBUG] Mapped chart value: {chart_pos.x()}, {chart_pos.y()}")
 
                 # Find nearest candle
-                closest = None
+                closest = False
                 min_dist = float('inf')
 
                 for candle_set in self.candle_sets:
@@ -846,20 +885,19 @@ class MainWindow(QMainWindow):
 
     
 
-    def run_backtest(self):
-        """Run backtest with selected strategy"""
+    def _run_backtest_logic(self):
         strategy_name = self.strategy_combo.currentText()
-        if strategy_name == "None":
+        if strategy_name == "False":
             self.statusBar().showMessage("No strategy selected!")
-            return
+            return False
 
         if not hasattr(self, 'df') or self.df.empty:
             self.statusBar().showMessage("Please load data before running a backtest.")
-            return
+            return False
 
         if strategy_name == "FinRL Strategy":
             self.statusBar().showMessage("FinRL strategies are designed for portfolio management and cannot be backtested on a single stock.")
-            return
+            return False
 
         try:
             if strategy_name == "LSTM Predictor":
@@ -875,25 +913,43 @@ class MainWindow(QMainWindow):
                 data=self.df,
                 cash=float(self.cash_input.text())
             )
-
-            # Plot strategy signals
-            self.plot_signals(results['signals'])
-
-            trade_analysis = results.get('trade_analysis', {})
-            unrealized_pnl = trade_analysis.get('pnl', {}).get('net', {}).get('total', 0)
-            realized_pnl = results.get('cumulative_pnl', 0)
-
-            msg = (f"Backtest complete | "
-                   f"Final Value: ${results['final_value']:,.2f} | "
-                   f"Sharpe: {results['sharpe']['sharperatio']:.2f} | "
-                   f"Total Realized P&L: ${realized_pnl:,.2f} | "
-                   f"Total Unrealized P&L: ${unrealized_pnl:,.2f}")
-            self.statusBar().showMessage(msg)
-            print(msg)
+            return results
 
         except Exception as e:
             self.statusBar().showMessage(f"Backtest error: {str(e)}")
             print(f"Backtest error: {str(e)}")
+            return False
+
+    def run_backtest(self):
+        """Run backtest with selected strategy"""
+        results = self._run_backtest_logic()
+        if results is False:
+            return
+
+        self.plot_signals(results.get('signals', []))
+
+        summary = results.get('summary', {})
+        final_value = summary.get('Final Value', 0)
+        sharpe_ratio = summary.get('Sharpe Ratio', 'N/A')
+        realized_pnl = np.sum(results.get('profit_per_trade', []))
+        
+        sharpe_str = f"{sharpe_ratio:.2f}" if isinstance(sharpe_ratio, float) else "N/A"
+
+        msg = (f"Backtest complete | "
+               f"Final Value: ${final_value:,.2f} | "
+               f"Sharpe: {sharpe_str} | "
+               f"Total Realized P&L: ${realized_pnl:,.2f}")
+        self.statusBar().showMessage(msg)
+        print(msg)
+
+    def show_statistics(self):
+        """Run backtest and show the statistics window"""
+        results = self._run_backtest_logic()
+        if results is False:
+            return
+
+        self.stats_window = StatisticsWindow(results)
+        self.stats_window.show()
 
     def plot_signals(self, signals):
         """Plot buy/sell signals on chart"""
@@ -930,12 +986,28 @@ class MainWindow(QMainWindow):
 
         self.update_plotly_view()
 
+    def update_live_news(self):
+        symbol = self.symbol_combo.currentText()
+        print(f"Checking for new news for {symbol}...")
+        
+        news_df = scrape_and_analyze_finviz_news(symbol)
+        
+        if not news_df.empty:
+            latest_headline = news_df.iloc[0]['headline']
+            if latest_headline != self.last_seen_headline:
+                print(f"New news found: {latest_headline}")
+                self.last_seen_headline = latest_headline
+                self.latest_sentiment['positive'] = news_df.iloc[0]['positive']
+                self.latest_sentiment['negative'] = news_df.iloc[0]['negative']
+                self.latest_sentiment['neutral'] = news_df.iloc[0]['neutral']
+                self.statusBar().showMessage(f"New News: {latest_headline}", 5000)
+
     def start_trading(self):
         """Start live trading with selected broker"""
         broker_name = self.broker_combo.currentText()
         strategy_name = self.strategy_combo.currentText()
 
-        if strategy_name == "None":
+        if strategy_name == "False":
             self.statusBar().showMessage("No strategy selected!")
             return
 
@@ -1015,9 +1087,9 @@ class MainWindow(QMainWindow):
         self.setup_realtime_axes()
 
         # Initialize realtime tracking
-        self.current_candle = None
-        self.current_candle_set = None
-        self.last_candle_time = None
+        self.current_candle = False
+        self.current_candle_set = False
+        self.last_candle_time = False
 
         # Start streaming
         print("[DEBUG] Starting data stream...")
@@ -1101,11 +1173,11 @@ class MainWindow(QMainWindow):
                 if hasattr(self, 'realtime_series'):
                     self.realtime_series.clear()
                     self.chart.removeSeries(self.realtime_series)
-                    self.realtime_series = None
+                    self.realtime_series = False
 
                 self.historical_candles = []
-                self.current_candle = None
-                self.current_candle_set = None
+                self.current_candle = False
+                self.current_candle_set = False
                 self.is_streaming = False
 
             except Exception as e:
@@ -1136,7 +1208,7 @@ class MainWindow(QMainWindow):
         price = data['price']
 
         # Initialize first candle if needed
-        if self.current_candle is None:
+        if self.current_candle is False:
             print("[DEBUG] Creating first candle")
             self.current_candle = {
                 'timestamp': timestamp,
@@ -1201,7 +1273,7 @@ class MainWindow(QMainWindow):
             self.realtime_series.remove(oldest)
 
         # Reset current candle visualization
-        self.current_candle_set = None
+        self.current_candle_set = False
 
     def update_realtime_chart(self):
         """Update the Plotly chart with streaming data"""

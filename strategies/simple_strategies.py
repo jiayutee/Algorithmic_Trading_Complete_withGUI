@@ -41,7 +41,7 @@ class MACD_RSI_Strategy(bt.Strategy):
                 print(f"BUY: {order.executed.size} @ {order.executed.price:.2f}")
             elif order.issell():
                 self.signals.append({'date': self.data.datetime.date(), 'type': 'sell', 'price': order.executed.price})
-                pnl = (order.executed.price - self.last_buy_price) * order.executed.size
+                pnl = (order.executed.price - self.last_buy_price) * abs(order.executed.size)
                 self.cumulative_pnl += pnl
                 print(f"SELL: {order.executed.size} @ {order.executed.price:.2f}, PnL: {pnl:.2f}, Cumulative PnL: {self.cumulative_pnl:.2f}")
                 self.last_buy_price = 0
@@ -76,7 +76,7 @@ class EMACrossoverStrategy(bt.Strategy):
                 print(f"BUY: {order.executed.size} @ {order.executed.price:.2f}")
             elif order.issell():
                 self.signals.append({'date': self.data.datetime.date(), 'type': 'sell', 'price': order.executed.price})
-                pnl = (order.executed.price - self.last_buy_price) * order.executed.size
+                pnl = (order.executed.price - self.last_buy_price) * abs(order.executed.size)
                 self.cumulative_pnl += pnl
                 print(f"SELL: {order.executed.size} @ {order.executed.price:.2f}, PnL: {pnl:.2f}, Cumulative PnL: {self.cumulative_pnl:.2f}")
                 self.last_buy_price = 0
@@ -116,7 +116,7 @@ class StochasticStrategy(bt.Strategy):
                 print(f"BUY: {order.executed.size} @ {order.executed.price:.2f}")
             elif order.issell():
                 self.signals.append({'date': self.data.datetime.date(), 'type': 'sell', 'price': order.executed.price})
-                pnl = (order.executed.price - self.last_buy_price) * order.executed.size
+                pnl = (order.executed.price - self.last_buy_price) * abs(order.executed.size)
                 self.cumulative_pnl += pnl
                 print(f"SELL: {order.executed.size} @ {order.executed.price:.2f}, PnL: {pnl:.2f}, Cumulative PnL: {self.cumulative_pnl:.2f}")
                 self.last_buy_price = 0

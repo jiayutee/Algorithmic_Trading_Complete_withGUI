@@ -6,7 +6,7 @@ from core.data_loader import DataLoader
 from core.strategy_manager import StrategyManager
 from core.broker_manager import BrokerManager
 from ui.main_window import MainWindow
-from config.settings import ALPACA_API_KEY, ALPACA_SECRET_KEY, BINANCE_API_KEY, BINANCE_SECRET_KEY, BINANCE_TESTNET_API_KEY, BINANCE_TESTNET_SECRET_KEY
+from config.settings import ALPACA_API_KEY, ALPACA_SECRET_KEY, KUCOIN_API_KEY, KUCOIN_SECRET_KEY, BINANCE_API_KEY, BINANCE_SECRET_KEY, BINANCE_TESTNET_API_KEY, BINANCE_TESTNET_SECRET_KEY
 
 
 class TradingApp:
@@ -14,7 +14,9 @@ class TradingApp:
         # Initialize core components
         self.data_loader = DataLoader(
             live_api_key=ALPACA_API_KEY,
-            live_secret_key=ALPACA_SECRET_KEY
+            live_secret_key=ALPACA_SECRET_KEY,
+            kucoin_key=KUCOIN_API_KEY,
+            kucoin_secret=KUCOIN_SECRET_KEY
         )
 
         self.strategy_manager = StrategyManager()

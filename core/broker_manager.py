@@ -8,9 +8,9 @@ class BrokerManager:
                  binance_key=None, binance_secret=None, binance_testnet_key=None, binance_testnet_secret=None):
         self.brokers = {
             "Simulator": SimulatedBroker(),
-            "Alpaca": AlpacaConnector(alpaca_key, alpaca_secret),
-            "Binance": BinanceConnector(binance_key, binance_secret),
-            "Binance_testnet": BinanceConnector(binance_testnet_key,binance_testnet_secret)
+            "Alpaca": AlpacaConnector(alpaca_key, alpaca_secret) if alpaca_key and alpaca_secret else None,
+            "Binance": BinanceConnector(binance_key, binance_secret, paper=False) if binance_key and binance_secret else None,
+            "Binance_testnet": BinanceConnector(binance_testnet_key, binance_testnet_secret, paper=True) if binance_testnet_key and binance_testnet_secret else None
         }
 
     def get_broker(self, name):
