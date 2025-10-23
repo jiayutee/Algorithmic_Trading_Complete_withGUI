@@ -12,8 +12,12 @@ import threading
 import asyncio
 
 
+from core.news_scraper import scrape_and_analyze_finviz_news
+
+import ccxt
+
 class DataLoader:
-    def __init__(self, live_api_key=None, live_secret_key=None):
+    def __init__(self, live_api_key=None, live_secret_key=None, kucoin_key=None, kucoin_secret=None):
         self.live_mode = bool(live_api_key and live_secret_key)
         if self.live_mode:
             self.client = StockHistoricalDataClient(live_api_key, live_secret_key)
@@ -22,13 +26,54 @@ class DataLoader:
             self.active_symbol = None
             self.stream_thread = None
 
+        self.kucoin_connector = None
+        if kucoin_key and kucoin_secret:
+            self.kucoin_connector = ccxt.kucoin({
+                'apiKey': kucoin_key,
+                'secret': kucoin_secret,
+                'enableRateLimit': True,
+            })
+
     def load_data(self, symbol, source="Historical", live=False, days=365, interval='1d'):
         """Load data from either live, historical, or FinRL source"""
         if source == "FinRL-Yahoo":
-            return self._get_finrl_data(symbol, days, interval)
-        if live and self.live_mode:
-            return self._get_live_data(symbol, days, interval)
-        return self._get_historical_data(symbol, days, interval)
+            df = self._get_finrl_data(symbol, days, interval)
+        elif live and self.live_mode:
+            df = self._get_live_data(symbol, days, interval)
+        else:
+            df = self._get_historical_data(symbol, days, interval)
+
+        # --- News Sentiment Integration ---
+        print(f"Fetching news sentiment for {symbol}...")
+        news_df = scrape_and_analyze_finviz_news(symbol)
+        if not news_df.empty:
+            # Convert news datetime to timezone-aware datetime objects
+            news_df['datetime'] = pd.to_datetime(news_df['datetime'])
+            news_df['datetime'] = news_df['datetime'].dt.tz_localize('America/New_York')
+            news_df.set_index('datetime', inplace=True)
+
+            # Ensure df index is also timezone-aware
+            if df.index.tz is None:
+                df.index = df.index.tz_localize('America/New_York')
+            else:
+                df.index = df.index.tz_convert('America/New_York')
+
+            # Merge sentiment data into the main dataframe
+            df = pd.merge_asof(df.sort_index(), news_df[['positive', 'negative', 'neutral']],
+                                    left_index=True, right_index=True,
+                                    direction='backward')
+            # Forward-fill sentiment scores
+            df[['positive', 'negative', 'neutral']] = df[['positive', 'negative', 'neutral']].ffill().fillna(0)
+            print("News sentiment data merged successfully.")
+        else:
+            # If no news, add zero-filled columns
+            df['positive'] = 0
+            df['negative'] = 0
+            df['neutral'] = 0
+            print("No news sentiment data found. Added zero-filled columns.")
+        # --- End News Sentiment Integration ---
+
+        return df
 
     
 
@@ -66,28 +111,55 @@ class DataLoader:
         
 
     def _get_historical_data(self, symbol, days, interval='1d'):
-        """Get historical data from Yahoo Finance with interval support"""
-        if symbol == 'BTCUSDT':
-            symbol = 'BTC-USD'
-        if interval in ['1m', '5m', '15m', '30m']:
-            raise ValueError(f"Yahoo Finance doesn't support {interval} interval")
+        """Get historical data from Yahoo Finance or crypto exchanges with interval support"""
+        is_crypto = "USDT" in symbol
 
-        valid_intervals = ['1h', '1d']  # Yahoo Finance supported intervals
-        if interval not in valid_intervals:
-            interval = '1d'  # Fallback to daily
+        if is_crypto:
+            if self.kucoin_connector:
+                try:
+                    print(f"Fetching crypto historical data from KuCoin for {symbol}...")
+                    # KuCoin uses a different symbol format (e.g., BTC/USDT)
+                    kucoin_symbol = symbol.replace("USDT", "/USDT")
+                    
+                    # Convert interval to ccxt format
+                    # ccxt intervals are typically '1m', '5m', '1h', '1d'
+                    # Our intervals are already in this format
 
-        df = yf.download(symbol, period=f"{days}d", interval=interval)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
-        df = df.reset_index()
-        if interval == '1d':
-            df['Datetime'] = pd.to_datetime(df['Date'])
-        elif interval == '1h':
-            df['Datetime'] = pd.to_datetime(df['Datetime'])
-        df.set_index('Datetime', inplace=True)
+                    # Fetch klines
+                    # KuCoin fetch_ohlcv returns [timestamp, open, high, low, close, volume]
+                    ohlcv = self.kucoin_connector.fetch_ohlcv(kucoin_symbol, interval, limit=days) # limit is number of candles
+                    
+                    df = pd.DataFrame(ohlcv, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
+                    df['Datetime'] = pd.to_datetime(df['Datetime'], unit='ms')
+                    df.set_index('Datetime', inplace=True)
+                    df = df.astype(float)
+                    return df
+                except Exception as e:
+                    print(f"KuCoin historical data failed: {e}. No crypto historical data source available.")
+                    raise ValueError(f"No crypto historical data source available for {symbol}")
+            else:
+                raise ValueError(f"No crypto historical data source configured for {symbol}")
+        else: # Not crypto, use Yahoo Finance
+            if symbol == 'BTCUSDT': # This case should not happen if is_crypto is correctly detected
+                symbol = 'BTC-USD'
+            if interval in ['1m', '5m', '15m', '30m']:
+                raise ValueError(f"Yahoo Finance doesn't support {interval} interval")
 
+            valid_intervals = ['1h', '1d']  # Yahoo Finance supported intervals
+            if interval not in valid_intervals:
+                interval = '1d'  # Fallback to daily
 
-        return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+            df = yf.download(symbol, period=f"{days}d", interval=interval)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+            df = df.reset_index()
+            if interval == '1d':
+                df['Datetime'] = pd.to_datetime(df['Date'])
+            elif interval == '1h':
+                df['Datetime'] = pd.to_datetime(df['Datetime'])
+            df.set_index('Datetime', inplace=True)
+
+            return df[['Open', 'High', 'Low', 'Close', 'Volume']]
 
     def _get_live_data(self, symbol, days, interval='1d'):
         """Get live data from Alpaca with interval support"""
