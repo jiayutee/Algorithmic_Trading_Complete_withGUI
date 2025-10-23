@@ -64,3 +64,7 @@ class BinanceConnector:
                 'current_price': float(self.client.get_symbol_ticker(symbol=symbol)['price']),
                 'unrealized_pl': None  # Not directly available for spot
             }
+
+    def get_historical_klines(self, symbol, interval, start_str, end_str=None):
+        """Get historical klines from Binance"""
+        return self.client.get_historical_klines(symbol, interval, start_str, end_str)
