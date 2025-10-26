@@ -14,4 +14,12 @@ class BrokerManager:
         }
 
     def get_broker(self, name):
-        return self.brokers.get(name)
+        broker = self.brokers.get(name)
+        if broker is None:
+            # For Simulator, always return it even if it's None (shouldn't happen)
+            if name == "Simulator":
+                return self.brokers["Simulator"]
+            raise ValueError(f"Broker '{name}' is not configured properly. Please check API keys in config/settings.py.")
+        return broker
+    def get_availabele_brokers(self):
+        return [name for name, broker in self.brokers.items() if broker is not None]

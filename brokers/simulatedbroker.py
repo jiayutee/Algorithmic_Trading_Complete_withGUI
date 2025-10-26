@@ -36,6 +36,7 @@ class Order:
     price: Optional[float] = None
     limit_price: Optional[float] = None
     stop_price: Optional[float] = None
+    execution_price: Optional[float] = None 
     status: OrderStatus = OrderStatus.PENDING
     filled_qty: float = 0
     filled_avg_price: float = 0
@@ -118,7 +119,8 @@ class SimulatedBroker:
             order_type: Union[str, OrderType] = OrderType.MARKET,
             limit_price: Optional[float] = None,
             stop_price: Optional[float] = None,
-            leverage: float = 1.0
+            leverage: float = 1.0,
+            execution_price: Optional[float] = None
     ) -> Order:
         """
         Submit an order to the simulated broker
@@ -144,7 +146,12 @@ class SimulatedBroker:
 
             # Create order
             order_id = self._generate_order_id()
-            current_price = self._get_market_price(symbol)
+            # Use execution_price if provided, otherwise get from market data
+            if execution_price is not None:
+                current_price = execution_price
+                print(f"🔍 Using execution price: ${execution_price:.2f}")
+            else:
+                current_price = self._get_market_price(symbol)
 
             order = Order(
                 id=order_id,
@@ -154,7 +161,8 @@ class SimulatedBroker:
                 order_type=order_type,
                 price=current_price,
                 limit_price=limit_price,
-                stop_price=stop_price
+                stop_price=stop_price,
+                execution_price=execution_price
             )
 
             # Process order based on type
@@ -196,45 +204,104 @@ class SimulatedBroker:
 
     def _fill_order(self, order: Order, fill_price: float):
         """Execute an order fill"""
-        # Calculate required capital (negative for sells)
-        required_capital = order.qty * fill_price
-        if order.side == OrderSide.SELL:
-            required_capital *= -1
+        # USE EXECUTION PRICE IF PROVIDED, otherwise use fill_price
+        print(f"🔍 FILL ORDER DETAILED DEBUG:")
+        print(f"   Before fill - Balance: ${self.balance:.2f}")
+        print(f"   Before fill - Positions: {self.positions}")
+        
+        # USE EXECUTION PRICE IF PROVIDED, otherwise use fill_price
+        if order.execution_price is not None:
+            actual_fill_price = order.execution_price
+        else:
+            actual_fill_price = fill_price
 
-        # Check if we have enough buying power
-        if required_capital > self.balance:
+        # CALCULATE MAX AFFORDABLE QUANTITY
+        max_affordable_qty = self.balance / actual_fill_price if actual_fill_price > 0 else 0
+        
+        # For buys: use minimum of requested quantity and affordable quantity
+        if order.side == OrderSide.BUY:
+            executable_qty = min(order.qty, max_affordable_qty)
+            if executable_qty <= 0:
+                print(f"   ❌ INSUFFICIENT FUNDS: Cannot afford any {order.symbol}")
+                order.status = OrderStatus.REJECTED
+                return
+            # If we can't execute full quantity, adjust the order
+            if executable_qty < order.qty:
+                print(f"   ⚠️ Adjusting quantity: {order.qty} -> {executable_qty:.6f} (max affordable)")
+                order.qty = executable_qty
+        else:
+            # For sells: check if we have the position
+            executable_qty = order.qty
+            if order.symbol in self.positions:
+                current_position = self.positions[order.symbol].qty
+                executable_qty = min(order.qty, abs(current_position))
+                if executable_qty < order.qty:
+                    print(f"   ⚠️ Adjusting sell quantity: {order.qty} -> {executable_qty:.6f} (position size)")
+                    order.qty = executable_qty
+
+        # Calculate required capital
+        required_capital = executable_qty * actual_fill_price
+        if order.side == OrderSide.SELL:
+            required_capital *= -1  # Negative for sells (we receive money)
+
+        print(f"   Order: {order.side.value} {executable_qty:.6f} {order.symbol} @ ${actual_fill_price:.2f}")
+        print(f"   Required Capital: ${required_capital:.2f}")
+
+        # Check if we have enough buying power (for buys)
+        if order.side == OrderSide.BUY and required_capital > self.balance:
+            print(f"   ❌ INSUFFICIENT FUNDS: Need ${required_capital:.2f}, Have ${self.balance:.2f}")
             order.status = OrderStatus.REJECTED
             return
 
         # Update position
         if order.symbol in self.positions:
             position = self.positions[order.symbol]
+            print(f"   Existing position: {position.qty:.6f} @ ${position.avg_price:.2f}")
+            
             if (position.qty > 0 and order.side == OrderSide.BUY) or \
                 (position.qty < 0 and order.side == OrderSide.SELL):
-                # Adding to position
-                total_qty = position.qty + (order.qty if order.side == OrderSide.BUY else -order.qty)
-                position.avg_price = (position.avg_price * abs(position.qty) + (fill_price * order.qty)) / abs(total_qty)
+                # Adding to position - calculate new average price
+                total_qty = position.qty + (executable_qty if order.side == OrderSide.BUY else -executable_qty)
+                old_value = position.avg_price * abs(position.qty)
+                new_value = actual_fill_price * executable_qty
+                position.avg_price = (old_value + new_value) / abs(total_qty)
                 position.qty = total_qty
+                print(f"   Adding to position -> New: {position.qty:.6f} @ ${position.avg_price:.2f}")
             else:
                 # Reducing or reversing position
-                position.qty += (order.qty if order.side == OrderSide.BUY else -order.qty)
+                old_qty = position.qty
+                position.qty += (executable_qty if order.side == OrderSide.BUY else -executable_qty)
+                print(f"   Changing position: {old_qty:.6f} -> {position.qty:.6f}")
+                
+                # Remove position if zero
+                if abs(position.qty) < 0.000001:  # Floating point tolerance
+                    del self.positions[order.symbol]
+                    print(f"   🗑️ Position closed and removed")
         else:
-            #   New position
+            # New position
+            position_qty = executable_qty if order.side == OrderSide.BUY else -executable_qty
             self.positions[order.symbol] = Position(
                 symbol=order.symbol,
-                qty=order.qty if order.side == OrderSide.BUY else -order.qty,
-                avg_price=fill_price,
+                qty=position_qty,
+                avg_price=actual_fill_price,
                 leverage=1.0
             )
+            print(f"   New position: {position_qty:.6f} @ ${actual_fill_price:.2f}")
 
         # Update balance
+        old_balance = self.balance
         self.balance -= required_capital
+        print(f"   Balance: ${old_balance:.2f} -> ${self.balance:.2f}")
 
         # Update order status
         order.status = OrderStatus.FILLED
-        order.filled_qty = order.qty
-        order.filled_avg_price = fill_price
+        order.filled_qty = executable_qty
+        order.filled_avg_price = actual_fill_price
         order.updated_at = time.time()
+        
+        print(f"   After fill - Balance: ${self.balance:.2f}")
+        print(f"   After fill - Positions: {self.positions}")
+        print("🔍" + "="*50)
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an open order"""

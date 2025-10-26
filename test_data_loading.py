@@ -6,7 +6,7 @@ from brokers.binance_connector import BinanceConnector
 
 # Mocking BinanceConnector for isolated testing
 class MockBinanceConnector:
-    def get_historical_data(self, symbol, interval, start_str, end_str=None):
+    def get_historical_klines(self, symbol, interval, start_str, end_str=None):
         # Simulate data for testing
         if interval == '1m':
             freq = 'T'
@@ -40,7 +40,8 @@ def data_loader():
     # Initialize DataLoader with dummy keys for testing purposes
     # In a real scenario, you might mock the external API calls
     return DataLoader(live_api_key="test_key", live_secret_key="test_secret",
-                      binance_api_key="test_binance_key", binance_secret_key="test_binance_secret")
+                      kucoin_key="test_kucoin_key", kucoin_secret="test_kucoin_secret",
+                      binance_key="test_binance_key", binance_secret="test_binance_secret")
 
 @pytest.fixture(autouse=True)
 def mock_binance_connector(monkeypatch):
@@ -48,7 +49,7 @@ def mock_binance_connector(monkeypatch):
     def mock_init(self, api_key, secret_key, paper=True):
         self.client = None # No actual client needed for mock
     monkeypatch.setattr(BinanceConnector, '__init__', mock_init)
-    monkeypatch.setattr(BinanceConnector, 'get_historical_data', MockBinanceConnector().get_historical_data)
+    monkeypatch.setattr(BinanceConnector, 'get_historical_klines', MockBinanceConnector().get_historical_klines)
 
 
 def test_get_historical_data_yahoo_1m(data_loader):
