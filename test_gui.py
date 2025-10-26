@@ -5,8 +5,9 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget,
     QPushButton, QComboBox, QLabel
 )
-from PyQt5.QtChart import QChart, QChartView, QLineSeries
+
 from PyQt5.QtCore import Qt, QDateTime
+from PyQt5.QtChart import QChart, QChartView, QLineSeries
 
 
 class MockTradingGUI(QMainWindow):
@@ -31,6 +32,8 @@ class MockTradingGUI(QMainWindow):
         self.chart = QChart()
         self.chart_view = QChartView(self.chart)
 
+        
+
         # Layout
         central = QWidget()
         layout = QVBoxLayout()
@@ -41,6 +44,7 @@ class MockTradingGUI(QMainWindow):
         layout.addWidget(self.fetch_btn)
         layout.addWidget(self.status_label)
         layout.addWidget(self.chart_view)
+        
         central.setLayout(layout)
         self.setCentralWidget(central)
 
