@@ -1,0 +1,6 @@
+# KuCoin API credentials
+KUCOIN_API_KEY = "YOUR_API_KEY"
+KUCOIN_SECRET_KEY = "YOUR_SECRET_KEY"
+KUCOIN_PASSWORD = "YOUR_API_PASSWORD" # if you have one
+
+# Other settings can be added here
