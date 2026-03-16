@@ -1,0 +1,45 @@
+# UI
+PyQt5
+PyQtWebEngine
+
+# Data and ML
+pandas
+numpy
+scikit-learn
+tensorflow
+torch
+transformers
+stable-baselines3
+gym
+joblib
+
+# Finance and Trading
+# FinRL is often installed from github:
+# pip install git+https://github.com/AI4Finance-Foundation/FinRL.git
+finrl
+yfinance
+backtrader
+python-binance
+ccxt
+alpaca-trade-api
+ib-insync
+ta
+pandas-ta
+PyPortfolioOpt
+
+# Web and API
+requests
+websockets
+websocket-client
+openai
+
+# Utilities
+beautifulsoup4
+matplotlib
+plotly
+scipy
+statsmodels
+python-dotenv
+
+# Testing
+pytest

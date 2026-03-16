@@ -9,9 +9,26 @@ class BrokerManager:
         self.brokers = {
             "Simulator": SimulatedBroker(),
             "Alpaca": AlpacaConnector(alpaca_key, alpaca_secret) if alpaca_key and alpaca_secret else None,
-            "Binance": BinanceConnector(binance_key, binance_secret, paper=False) if binance_key and binance_secret else None,
-            "Binance_testnet": BinanceConnector(binance_testnet_key, binance_testnet_secret, paper=True) if binance_testnet_key and binance_testnet_secret else None
         }
+        
+        # Initialize Binance with error handling
+        try:
+            if binance_key and binance_secret:
+                self.brokers["Binance"] = BinanceConnector(binance_key, binance_secret, paper=False)
+            else:
+                self.brokers["Binance"] = None
+        except Exception as e:
+            print(f"⚠️ Failed to connect to Binance: {e}")
+            self.brokers["Binance"] = None
+            
+        try:
+            if binance_testnet_key and binance_testnet_secret:
+                self.brokers["Binance_testnet"] = BinanceConnector(binance_testnet_key, binance_testnet_secret, paper=True)
+            else:
+                self.brokers["Binance_testnet"] = None
+        except Exception as e:
+            print(f"⚠️ Failed to connect to Binance Testnet: {e}")
+            self.brokers["Binance_testnet"] = None
 
     def get_broker(self, name):
         broker = self.brokers.get(name)

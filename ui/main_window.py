@@ -1,7 +1,7 @@
 # ui/main_window.py
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QComboBox, QPushButton, QLabel, QGroupBox, QLineEdit, QTextEdit)
-from PyQt5.QtGui import QIntValidator
+from PyQt5.QtGui import QIntValidator, QDoubleValidator
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 import plotly.graph_objects as go
@@ -15,15 +15,15 @@ from datetime import datetime, timedelta
 from ui.statistics_window import StatisticsWindow
 from typing import Dict
 from core.news_scraper import scrape_and_analyze_finviz_news
+from core.logger import logger
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, data_loader, strategy_manager, broker_manager, ai_analyzer):
+    def __init__(self, data_loader, strategy_manager, broker_manager):
         super().__init__()
         self.data_loader = data_loader
         self.strategy_manager = strategy_manager
         self.broker_manager = broker_manager
-        self.ai_analyzer = ai_analyzer
         self.setWindowTitle("Algorithmic Trading Terminal")
         self.resize(1400, 800)
 
@@ -94,6 +94,7 @@ class MainWindow(QMainWindow):
         self.setup_interval_controls()
         self.setup_days_input()
         self.setup_cash_input()
+        self.setup_fee_inputs()
 
         self.main_layout.addLayout(self.control_layout)
 
@@ -126,12 +127,6 @@ class MainWindow(QMainWindow):
         self.broker_timer.timeout.connect(self.refresh_account_info)
         self.broker_timer.start(5000)
 
-        # 4. DeepSeek AI Analysis Controls (middle-bottom)
-        if self.ai_analyzer:
-            self.setup_ai_analysis_ui()
-        else:
-            print("AI Analyzer not initialized; AI features disabled.")
-
         # 5. Status Bar & P&L (bottom)
         self.statusBar().showMessage("Ready")
         self.pnl_label = QLabel("P&L: $0.00")
@@ -150,13 +145,50 @@ class MainWindow(QMainWindow):
         self.play_btn.clicked.connect(self.play_simulation)
         self.pause_btn.clicked.connect(self.pause_simulation)
 
+    def setup_interval_controls(self):
+        self.interval_combo = QComboBox()
+        self.interval_combo.addItems(['1d', '1h', '15m', '5m', '1m'])
+        self.control_layout.addWidget(QLabel("Interval:"))
+        self.control_layout.addWidget(self.interval_combo)
+
+    def setup_days_input(self):
+        self.days_input = QLineEdit("365")
+        self.days_input.setValidator(QIntValidator(1, 10000))
+        self.days_input.setFixedWidth(50)
+        self.control_layout.addWidget(QLabel("Days:"))
+        self.control_layout.addWidget(self.days_input)
+
+    def setup_cash_input(self):
+        self.cash_input = QLineEdit("100000")
+        self.cash_input.setValidator(QIntValidator(1000, 10000000))
+        self.cash_input.setFixedWidth(80)
+        self.control_layout.addWidget(QLabel("Cash:"))
+        self.control_layout.addWidget(self.cash_input)
+        
+    def setup_fee_inputs(self):
+        from PyQt5.QtGui import QDoubleValidator
+        self.market_fee_input = QLineEdit("0.1") # Default 0.1%
+        self.market_fee_input.setValidator(QDoubleValidator(0, 10, 4))
+        self.market_fee_input.setFixedWidth(50)
+        self.control_layout.addWidget(QLabel("Mkt Fee %:"))
+        self.control_layout.addWidget(self.market_fee_input)
+
+        self.limit_fee_input = QLineEdit("0.05") # Default 0.05%
+        self.limit_fee_input.setValidator(QDoubleValidator(0, 10, 4))
+        self.limit_fee_input.setFixedWidth(50)
+        self.control_layout.addWidget(QLabel("Lim Fee %:"))
+        self.control_layout.addWidget(self.limit_fee_input)
+        
+        self.pause_btn.clicked.connect(self.pause_simulation)
+
         # Realtime & Simulation Timers
         self.realtime_timer = QTimer()
         self.realtime_timer.timeout.connect(self.process_realtime_updates)
         self.is_streaming = False
 
-        # Initialize with sample data
-        self.load_data()
+        # Initialize with sample data - Defer to allow UI to show
+        # self.load_data()
+        QTimer.singleShot(100, self.load_data)
         self.realtime_df = pd.DataFrame()
         self.current_interval = '1m'
         self.max_candles = 130
@@ -380,6 +412,14 @@ class MainWindow(QMainWindow):
         self.update_plotly_view()
         self.simulation_index += 1
 
+    def reset_chart_zoom(self):
+        """Reset the chart zoom to the initial view."""
+        if hasattr(self, 'fig'):
+            self.plot_candles()
+            self.statusBar().showMessage("Chart zoom reset.")
+
+    # ... (previous methods) ...
+
     def load_data(self):
         source = self.data_source_combo.currentText()
         symbol = self.symbol_combo.currentText()
@@ -395,6 +435,7 @@ class MainWindow(QMainWindow):
                 self.stop_realtime_stream()
 
             days = int(self.days_input.text())
+            # Map 'Live' from UI to 'live' arg in DataLoader (which now fetches recent data)
             self.df = self.data_loader.load_data(
                 symbol=symbol,
                 source=source,
@@ -416,256 +457,21 @@ class MainWindow(QMainWindow):
             import traceback
             print(traceback.format_exc())
 
-    def plot_candles(self):
-        if not hasattr(self, 'df') or self.df.empty:
-            return
-
-        if isinstance(self.df.index, pd.MultiIndex):
-            self.df = self.df.droplevel('Ticker')
-        if 'Ticker' in self.df.columns.names:
-            self.df.columns = self.df.columns.droplevel('Ticker')
-        if not isinstance(self.df.index, pd.DatetimeIndex):
-            self.df.index = pd.to_datetime(self.df.index)
-        if self.df.index.tz is None:
-            self.df.index = self.df.index.tz_localize('UTC')
-        else:
-            self.df.index = self.df.index.tz_convert('UTC')
-
-        self.calculate_technical_indicators()
-
-        self.fig = make_subplots(
-            rows=5, cols=1, shared_xaxes=True,
-            vertical_spacing=0.08,
-            subplot_titles=('Price', 'Volume', 'MACD', 'RSI', 'Stochastic'),
-            row_width=[0.15, 0.15, 0.15, 0.10, 0.75]
-        )
-
-        self.fig.add_trace(go.Candlestick(
-            x=self.df.index,
-            open=self.df['Open'],
-            high=self.df['High'],
-            low=self.df['Low'],
-            close=self.df['Close'],
-            name='Price'
-        ), row=1, col=1)
-
-        colors = np.where(self.df['Close'] >= self.df['Open'], 'green', 'red')
-        self.fig.add_trace(go.Bar(
-            x=self.df.index,
-            y=self.df['Volume'],
-            name='Volume',
-            marker_color=colors,
-            opacity=0.4,
-            yaxis='y2'
-        ), row=1, col=1)
-
-        self.add_technical_indicators()
-
-        # Create buttons for indicator toggles
-        # buttons arrangement:    
-        #    * Trace 0 (`go.Candlestick`): The main price data
-        #    * Trace 1 (`go.Bar`): Volume bars
-        #    * Trace 2 (`go.Scatter`): Volume line xxxx
-        #    * Trace 3 (`go.Scatter`): Moving Average 20 (MA20)
-        #    * Trace 4 (`go.Scatter`): Moving Average 50 (MA50)
-        #    * Trace 5 (`go.Scatter`): Moving Average 200 (MA200)
-        #    * Trace 6 (`go.Scatter`): Exponential Moving Average 12 (EMA12)
-        #    * Trace 7 (`go.Scatter`): Exponential Moving Average 26 (EMA26)
-        #    * Trace 8 (`go.Scatter`): MACD Line
-        #    * Trace 9 (`go.Scatter`): MACD Signal Line
-        #    * Trace 10 (`go.Scatter`): Relative Strength Index (RSI)
-        #    * Trace 11 (`go.Scatter`): Stochastic Oscillator %K
-        #    * Trace 12 (`go.Scatter`): Stochastic Oscillator %D
-        buttons = [
-            dict(label="MA", method="restyle", args=["visible", [True, True, True, True, True, False, False, False, False, False, False, False, False]],
-                args2=["visible", [True, True, False, False, False, False, False, False, False, False, False, False, False]]),
-            dict(label="EMA", method="restyle", args=["visible", [True, True, False, False, False, True, True, False, False, False, False, False, False]],
-                args2=["visible", [True, True, False, False, False, False, False, False, False, False, False, False, False]]),
-            dict(label="MACD", method="restyle", args=["visible", [True, True, False, False, False, False, False, True, True, False, False, False, False]],
-                args2=["visible", [True, True, False, False, False, False, False, False, False, False, False, False, False]]),
-            dict(label="RSI", method="restyle", args=["visible", [True, True, False, False, False, False, False, False, False, True, False, False, False]],
-                args2=["visible", [True, True, False, False, False, False, False, False, False, False, False, False, False]]),
-            dict(label="Stochastic", method="restyle", args=["visible", [True, True, False, False, False, False, False, False, False, False, True, True, False]],
-                args2=["visible", [True, True, False, False, False, False, False, False, False, False, False, False, False]]),
-            dict(label="All Off", method="restyle", args=[
-                {"visible": [True, True, False, False, False, False, False, False, False, False, False, False, False]}],args2=[
-                {"visible": [True, True, False, False, False, False, False, False, False, False, False, False, False]}]),
-        ]
-
-        initial_range = [self.df.index[-250], self.df.index[-1]] if len(self.df) > 250 else [self.df.index[0], self.df.index[-1]]
-        is_crypto = "USD" in self.symbol_combo.currentText().upper()
-
-        # Calculate y-range for initial view
-        view_df = self.df.loc[initial_range[0]:initial_range[1]]
-        low_min = view_df['Low'].min()
-        high_max = view_df['High'].max()
-        price_range = high_max - low_min
-        padding = price_range * 0.125 if price_range > 0 else high_max * 0.01
-        y_range = [low_min - padding, high_max + padding]
-
-        xaxis_config = dict(
-            type='date',
-            rangeslider=dict(visible=True),
-            rangeselector=dict(buttons=[
-                dict(count=1, label="1m", step="month", stepmode="backward"),
-                dict(count=3, label="3m", step="month", stepmode="backward"),
-                dict(count=6, label="6m", step="month", stepmode="backward"),
-                dict(count=1, label="YTD", step="year", stepmode="todate"),
-                dict(count=1, label="1y", step="year", stepmode="backward"),
-                dict(step="all")
-            ]),
-            range=initial_range
-        )
-        if not is_crypto:
-            xaxis_config["rangebreaks"] = [dict(bounds=["sat", "mon"]), dict(bounds=[16, 9.5], pattern="hour")]
-
-        self.fig.update_layout(
-            height=800,
-            margin=dict(l=20, r=20, t=40, b=20),
-            updatemenus=[dict(
-                type="buttons", direction="right", x=0.5, y=1.15,
-                xanchor="center", yanchor="top", buttons=buttons
-            )],
-            xaxis=xaxis_config,
-            yaxis=dict(title='Price', side='left', range=y_range),
-            # yaxis2=dict(title='Volume', side='right', overlaying='y', range=[0, self.df['Volume'].max() * 3]),
-            # yaxis=dict(title='Price', side='left', fixedrange=False),
-            yaxis2=dict(title='Volume', side='right', overlaying='y', rangemode='tozero', showgrid=False, showline=False, zeroline=False, tickformat=".2s"),
-            hovermode='x unified',
-            template='plotly_dark'
-        )
-
-        self.update_plotly_view()
-
-    def add_technical_indicators(self):
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['MA20'], name='MA20', line=dict(color='blue'),visible=False), row=1, col=1)
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['MA50'], name='MA50', line=dict(color='orange'),visible=False), row=1, col=1)
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['MA200'], name='MA200', line=dict(color='purple'),visible=False), row=1, col=1)
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['EMA12'], name='EMA12', line=dict(color='cyan'),visible=False), row=1, col=1)
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['EMA26'], name='EMA26', line=dict(color='magenta'),visible=False), row=1, col=1)
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['MACD'], name='MACD', line=dict(color='blue'),visible=False), row=3, col=1)
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['Signal'], name='Signal', line=dict(color='red'),visible=False), row=3, col=1)
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['RSI'], name='RSI', line=dict(color='purple'),visible=False), row=4, col=1)
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['K'], name='K', line=dict(color='blue'),visible=False), row=5, col=1)
-        self.fig.add_trace(go.Scatter(x=self.df.index, y=self.df['D'], name='D', line=dict(color='red'),visible=False), row=5, col=1)
-
-    def update_plotly_view(self):
-        try:
-            if self.fig and self.fig.data:
-                print(f"[DEBUG] Updating plot view. Number of points in first trace: {len(self.fig.data[0].x)}")
-            else:
-                print("[DEBUG] Updating plot view, but no data in figure.")
-            fig_dict = self.fig.to_dict()
-            raw_html = f'''
-                <html>
-                <head><meta charset="utf-8"/>
-                <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
-                <style>#plotly-div {{ width: 100%; height: 600px; }} body {{ margin:0; padding:0; }}</style>
-                </head>
-                <body><div id="plotly-div"></div>
-                <script>
-                    try {{
-                        var graph = {json.dumps(fig_dict, cls=PlotlyJSONEncoder)};
-                        Plotly.newPlot('plotly-div', graph);
-                    }} catch (e) {{ console.error(e); }}
-                </script></body></html>'''
-            self.plotly_view.setHtml(raw_html)
-        except Exception as e:
-            print("Error in update_plotly_view:", str(e))
-
-    def reset_chart_zoom(self):
-        if hasattr(self, 'fig') and hasattr(self, 'df') and not self.df.empty:
-            self.fig.update_xaxes(autorange=True)
-            self.fig.update_yaxes(autorange=True)
-            self.update_plotly_view()
-
-    def setup_interval_controls(self):
-        interval_label = QLabel("Candle Interval:")
-        self.interval_combo = QComboBox()
-        self.interval_combo.addItems(['1m', '5m', '15m', '30m', '1h', '1d'])
-        self.interval_combo.setCurrentText('1d')
-        self.control_layout.insertWidget(4, interval_label)
-        self.control_layout.insertWidget(5, self.interval_combo)
-        self.interval_combo.currentTextChanged.connect(self.on_interval_changed)
-        self.data_source_combo.currentTextChanged.connect(self.update_interval_states)
-
-    def on_interval_changed(self, interval):
-        symbol = self.symbol_combo.currentText()
-        source = self.data_source_combo.currentText()
-        is_crypto = "USDT" in symbol.upper()
-        if source == "Historical" and not is_crypto and interval in ["1m", "5m", "15m", "30m"]:
-            self.statusBar().showMessage(f"Yahoo Finance doesn't support {interval} for stocks")
-            self.interval_combo.setCurrentText("1h")
-            return
-        self.statusBar().showMessage(f"Loading {interval} data for {symbol}")
-        self.load_data()
-
-    def update_interval_states(self):
-        source = self.data_source_combo.currentText()
-        for i in range(self.interval_combo.count()):
-            interval = self.interval_combo.itemText(i)
-            enabled = not (source == "Historical" and interval in ['1m', '5m', '15m', '30m'])
-            self.interval_combo.model().item(i).setEnabled(enabled)
-        if not self.interval_combo.currentData(Qt.UserRole + 1):
-            self.interval_combo.setCurrentText('1d')
-
-    def setup_days_input(self):
-        days_label = QLabel("Days to Plot:")
-        self.days_input = QLineEdit("365")
-        self.days_input.setFixedWidth(60)
-        self.days_input.setValidator(QIntValidator(1, 365*5))
-        days_layout = QHBoxLayout()
-        days_layout.addWidget(days_label)
-        days_layout.addWidget(self.days_input)
-        self.control_layout.insertLayout(self.control_layout.count() - 4, days_layout)
-        self.days_input.returnPressed.connect(self.load_data)
-
-    def setup_cash_input(self):
-        cash_label = QLabel("Initial Cash:")
-        self.cash_input = QLineEdit("100000")
-        self.cash_input.setFixedWidth(100)
-        self.cash_input.setValidator(QIntValidator(100, 100000000))
-        cash_layout = QHBoxLayout()
-        cash_layout.addWidget(cash_label)
-        cash_layout.addWidget(self.cash_input)
-        self.control_layout.insertLayout(self.control_layout.count() - 4, cash_layout)
+    # ... (plot_candles, add_technical_indicators, update_plotly_view, reset_chart_zoom, setup_interval_controls, on_interval_changed, update_interval_states, setup_days_input, setup_cash_input) ...
 
     def _run_backtest_logic(self):
-        strategy_name = self.strategy_combo.currentText()
-        print(f"DEBUG: Strategy name: {strategy_name}")
-
-        if strategy_name == "False":
-            self.statusBar().showMessage("No strategy selected!")
-            return False
-        if not hasattr(self, 'df') or self.df.empty:
-            self.statusBar().showMessage("Please load data before backtest.")
-            return False
-        if strategy_name == "FinRL Strategy":
-            self.statusBar().showMessage("FinRL strategies not supported for single-symbol backtest.")
-            return False
-        try:
-            if strategy_name == "LSTM Predictor":
-                symbol = self.symbol_combo.currentText()
-                strategy = self.strategy_manager.get_strategy(strategy_name, ticker=symbol, sequence_length=60)
-            else:
-                strategy = self.strategy_manager.get_strategy(strategy_name)
-            results = self.strategy_manager.run_backtest(strategy, self.df, float(self.cash_input.text()))
-            # Check what the strategy manager returns
-            print(f"DEBUG: Strategy type: {type(strategy)}")
-            print(f"DEBUG: Strategy attributes: {dir(strategy)}")
-            return results
-        except Exception as e:
-            self.statusBar().showMessage(f"Backtest error: {str(e)}")
-            print(f"Backtest error: {str(e)}")
-            import traceback
-            print(traceback.format_exc())
-            return False
+        """Unified backtest entry point called by background thread worker usually."""
+        return self._run_unified_backtest()
 
     def _run_backtest_logic_with_broker(self, broker):
-        """Run backtest logic but execute trades through the broker"""
+        """Unified backtest entry point with broker called by background thread worker."""
+        # For the unified system, we pass the broker mode and object to the manager
+        return self._run_unified_backtest(broker=broker)
+
+    def _run_unified_backtest(self, broker=None):
         strategy_name = self.strategy_combo.currentText()
         print(f"DEBUG: Strategy name: {strategy_name}")
-        
+
         if strategy_name == "False":
             self.statusBar().showMessage("No strategy selected!")
             return False
@@ -673,49 +479,51 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'df') or self.df.empty:
             self.statusBar().showMessage("Please load data before backtest.")
             return False
-            
+
         try:
-            # Get strategy - HANDLE BACKTRADER STRATEGIES DIFFERENTLY
+            # 1. Get standardized strategy wrapper
+            kwargs = {}
             if strategy_name == "LSTM Predictor":
-                symbol = self.symbol_combo.currentText()
-                strategy = self.strategy_manager.get_strategy(strategy_name, ticker=symbol, sequence_length=60)
-                # For LSTM, use normal approach
-                results = self.strategy_manager.run_backtest(strategy, self.df, float(self.cash_input.text()))
-                
-            else:
-                # For backtrader strategies (MACD/RSI, EMA Crossover, Stochastic)
-                # Get the strategy CLASS, not instance
-                strategy_class = self.strategy_manager.get_strategy(strategy_name)
-                print(f"🔍 Strategy class: {strategy_class}")
-                
-                # Run backtest using backtrader's Cerebro
-                results = self._run_backtrader_backtest(strategy_class, self.df, float(self.cash_input.text()), broker)
+                kwargs = {'ticker': self.symbol_combo.currentText(), 'sequence_length': 60}
+
+            strategy_wrapper = self.strategy_manager.get_strategy(strategy_name, **kwargs)
+            if not strategy_wrapper:
+                 self.statusBar().showMessage(f"Failed to load strategy: {strategy_name}")
+                 return False
+
+            # 2. Determine broker mode
+            broker_mode = "simulated"
+            real_broker = None
             
-            # # EXECUTE TRADES THROUGH BROKER (only if we have signals)
-            # if results and 'signals' in results:
-            #     signals = results.get('signals', [])
-            #     print(f"🔍 Executing {len(signals)} signals through broker")
-                
-            #     for signal in signals:
-            #         if signal['type'] == 'buy':
-            #             broker.submit_order(
-            #                 symbol=self.symbol_combo.currentText(),
-            #                 qty=signal.get('qty', 1),
-            #                 side='buy',
-            #                 order_type='market'
-            #             )
-            #         elif signal['type'] == 'sell':
-            #             broker.submit_order(
-            #                 symbol=self.symbol_combo.currentText(),
-            #                 qty=signal.get('qty', 1),
-            #                 side='sell', 
-            #                 order_type='market'
-            #             )
-            # else:
-            #     print("🔍 No signals found in results")
-                
+            current_broker_name = self.broker_combo.currentText()
+            if current_broker_name != "Simulator":
+                 if broker:
+                     broker_mode = "real"
+                     real_broker = broker
+            
+            # 3. Extract fees from GUI
+            try:
+                market_fee = float(self.market_fee_input.text()) / 100.0  # Convert % to decimal
+                limit_fee = float(self.limit_fee_input.text()) / 100.0    # Convert % to decimal
+            except ValueError:
+                market_fee = 0.001  # Fallback to 0.1%
+                limit_fee = 0.0005  # Fallback to 0.05%
+
+            # 4. Run Backtest
+            initial_cash = float(self.cash_input.text())
+            
+            results = self.strategy_manager.run_backtest(
+                strategy_wrapper=strategy_wrapper, 
+                data=self.df, 
+                cash=initial_cash,
+                broker_mode=broker_mode,
+                broker=real_broker,
+                market_fee=market_fee,
+                limit_fee=limit_fee
+            )
+            
             return results
-            
+
         except Exception as e:
             self.statusBar().showMessage(f"Backtest error: {str(e)}")
             print(f"❌ Backtest error: {str(e)}")
@@ -723,485 +531,19 @@ class MainWindow(QMainWindow):
             print(traceback.format_exc())
             return False
 
-    def _run_backtrader_backtest(self, strategy_class, data, initial_cash, broker):
-        """Run backtest for backtrader strategies WITH analytics"""
-        import backtrader as bt
-        import numpy as np
-        
-        print("🔍 Running backtrader backtest with analytics...")
-        
-        # Create Cerebro engine
-        cerebro = bt.Cerebro()
-        cerebro.broker.setcash(initial_cash)
-        
-        # ADD ANALYZERS
-        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', timeframe=bt.TimeFrame.Days)
-        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
-        cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
-        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-        
-        # Add strategy
-        cerebro.addstrategy(strategy_class)
-        
-        # Convert DataFrame to backtrader data format
-        bt_data = bt.feeds.PandasData(dataname=data)
-        cerebro.adddata(bt_data)
-        
-        # Run backtest
-        print("🔍 Starting cerebro run with analyzers...")
-        strat_list = cerebro.run()
-        print(f"🔍 Cerebro completed. Strategies returned: {len(strat_list)}")
-        
-        # Extract results AND execute trades in broker
-        if strat_list:
-            strategy_instance = strat_list[0]
-            return self._extract_enhanced_backtrader_results(strategy_instance, initial_cash, broker)
-        else:
-            return {'signals': [], 'summary': {}}
+    # Deprecated/Removed methods
 
-    def _extract_enhanced_backtrader_results(self, strategy_instance, initial_cash, broker):
-        """Extract results with backtrader's built-in analytics and enhanced summary"""
-        import numpy as np
-        
-        final_value = strategy_instance.broker.getvalue()
-        total_pnl = final_value - initial_cash
-        
-        # EXTRACT ANALYZER RESULTS
-        sharpe_ratio = 0.0
-        total_closed_trades = 0
-        winning_trades = 0
-        profit_per_trade = []
-        
-        if hasattr(strategy_instance, 'analyzers'):
-            # Sharpe Ratio
-            if hasattr(strategy_instance.analyzers.sharpe, 'get_analysis'):
-                try:
-                    sharpe_analysis = strategy_instance.analyzers.sharpe.get_analysis()
-                    sharpe_ratio = sharpe_analysis.get('sharperatio', 0.0)
-                    sharpe_ratio = float(sharpe_ratio) if sharpe_ratio is not None else 0.0
-                    print(f"🔍 Sharpe ratio: {sharpe_ratio}")
-                except Exception as e:
-                    print(f"❌ Sharpe analyzer error: {e}")
-                    sharpe_ratio = 0.0
-            
-            # Trade Analysis
-            if hasattr(strategy_instance.analyzers.trades, 'get_analysis'):
-                try:
-                    trade_analysis = strategy_instance.analyzers.trades.get_analysis()
-                    print(f"🔍 Trade analysis available: {bool(trade_analysis)}")
-                    
-                    if trade_analysis:
-                        # Get total closed trades
-                        if 'total' in trade_analysis and hasattr(trade_analysis['total'], 'closed'):
-                            total_closed_trades = trade_analysis['total'].closed
-                        elif 'total' in trade_analysis and isinstance(trade_analysis['total'], dict):
-                            total_closed_trades = trade_analysis['total'].get('closed', 0)
+
+
                         
-                        # Get winning trades
-                        if 'won' in trade_analysis and hasattr(trade_analysis['won'], 'total'):
-                            winning_trades = trade_analysis['won'].total
-                        elif 'won' in trade_analysis and isinstance(trade_analysis['won'], dict):
-                            winning_trades = trade_analysis['won'].get('total', 0)
-                        
-                        profit_per_trade = self._extract_pnl_from_trade_analysis(trade_analysis)
-                        
-                    print(f"🔍 From analyzer: {total_closed_trades} closed trades, {winning_trades} winning trades")
-                        
-                except Exception as e:
-                    print(f"❌ Trade analyzer error: {e}")
-        
-        # METHOD 1: Extract from cerebro's trade records
-        if not profit_per_trade:
-            profit_per_trade = self._extract_trades_from_cerebro(strategy_instance)
-            print(f"🔍 From cerebro: {len(profit_per_trade)} trades")
-        
-        # METHOD 2: Use strategy's signal-based P&L calculation
-        if not profit_per_trade and hasattr(strategy_instance, 'signals'):
-            profit_per_trade = self._calculate_pnl_from_signals(strategy_instance)
-            print(f"🔍 From signals: {len(profit_per_trade)} trades")
-        
-        # METHOD 3: Use cumulative P&L from strategy
-        if not profit_per_trade and hasattr(strategy_instance, 'cumulative_pnl'):
-            cumulative = strategy_instance.cumulative_pnl
-            cumulative_float = float(cumulative) if cumulative is not None else 0.0
-            if cumulative_float != 0:
-                profit_per_trade = [cumulative_float]
-                if total_closed_trades == 0:
-                    total_closed_trades = 1
-                    winning_trades = 1 if cumulative_float > 0 else 0
-                print(f"🔍 Using cumulative P&L: ${cumulative_float:+,.2f}")
-        
-        # METHOD 4: Use total P&L as single trade
-        if not profit_per_trade and total_pnl != 0:
-            profit_per_trade = [total_pnl]
-            if total_closed_trades == 0:
-                total_closed_trades = 1
-                winning_trades = 1 if total_pnl > 0 else 0
-            print(f"🔍 Using total P&L as single trade: ${total_pnl:+,.2f}")
-        
-        # SANITIZE profit_per_trade - CONVERT ALL VALUES TO FLOATS
-        sanitized_profit_per_trade = []
-        for pnl in profit_per_trade:
-            try:
-                if pnl is None:
-                    sanitized_pnl = 0.0
-                elif isinstance(pnl, str):
-                    clean_str = pnl.replace('$', '').replace(',', '').strip()
-                    sanitized_pnl = float(clean_str) if clean_str else 0.0
-                else:
-                    sanitized_pnl = float(pnl)
-                sanitized_profit_per_trade.append(sanitized_pnl)
-            except (ValueError, TypeError) as e:
-                print(f"⚠️ Could not convert P&L value '{pnl}' to float: {e}")
-                sanitized_profit_per_trade.append(0.0)
-        
-        print(f"🔍 Sanitized P&L values: {[f'${x:+.2f}' for x in sanitized_profit_per_trade]}")
-        
-        # Calculate win rate
-        if total_closed_trades == 0:
-            total_closed_trades = len(sanitized_profit_per_trade)
-            winning_trades = len([p for p in sanitized_profit_per_trade if p > 0])
-        
-        win_rate = (winning_trades / total_closed_trades * 100) if total_closed_trades > 0 else 0
-        
-        # CALCULATE METRICS WITH SANITIZED NUMBERS
-        try:
-            avg_profit = np.mean(sanitized_profit_per_trade) if sanitized_profit_per_trade else 0
-            median_profit = np.median(sanitized_profit_per_trade) if sanitized_profit_per_trade else 0
-            largest_win = max(sanitized_profit_per_trade) if sanitized_profit_per_trade else 0
-            largest_loss = min(sanitized_profit_per_trade) if sanitized_profit_per_trade else 0
-        except Exception as e:
-            print(f"❌ Error calculating metrics: {e}")
-            avg_profit = total_pnl
-            median_profit = total_pnl
-            largest_win = total_pnl if total_pnl > 0 else 0
-            largest_loss = total_pnl if total_pnl < 0 else 0
-        
-        # Create enhanced summary
-        summary = {
-            'Final Value': float(final_value),
-            'P&L': float(total_pnl),
-            'Return %': float((total_pnl / initial_cash) * 100),
-            'Sharpe Ratio': float(sharpe_ratio),
-            'Total Trades': int(total_closed_trades),
-            'Winning Trades': int(winning_trades),
-            'Win Rate': f"{win_rate:.2f}%",
-            'Average Profit per Trade': float(avg_profit),
-            'Median Profit per Trade': float(median_profit),
-            'Largest Win': float(largest_win),
-            'Largest Loss': float(largest_loss),
-        }
-        
-        print(f"🔍 Enhanced results: {total_closed_trades} trades, Win Rate: {win_rate:.1f}%, Sharpe: {sharpe_ratio:.2f}")
-        
-        # Extract and execute signals
-        signals = []
-        if hasattr(strategy_instance, 'signals'):
-            signals = strategy_instance.signals
-            print(f"🔍 Found {len(signals)} trading signals")
-        
-        # Execute trades in broker
-        self._execute_historical_trades_in_broker(signals, broker)
-        
-        return {
-            'signals': signals,
-            'summary': summary,
-            'profit_per_trade': sanitized_profit_per_trade
-        }
 
-    def _extract_trades_from_cerebro(self, strategy_instance):
-        """Extract trades from backtrader's cerebro instance"""
-        profit_per_trade = []
         
-        try:
-            # Method 1: Check cerebro's trade records
-            if hasattr(strategy_instance, 'env') and hasattr(strategy_instance.env, 'trades'):
-                for trade in strategy_instance.env.trades:
-                    if hasattr(trade, 'pnl') and hasattr(trade, 'isclosed') and trade.isclosed:
-                        profit_per_trade.append(trade.pnl)
-                print(f"🔍 Found {len(profit_per_trade)} trades in cerebro.env.trades")
-            
-            # Method 2: Check strategy's trade records
-            elif hasattr(strategy_instance, 'trades'):
-                for trade in strategy_instance.trades:
-                    if hasattr(trade, 'pnl') and hasattr(trade, 'isclosed') and trade.isclosed:
-                        profit_per_trade.append(trade.pnl)
-                print(f"🔍 Found {len(profit_per_trade)} trades in strategy.trades")
-                
-        except Exception as e:
-            print(f"❌ Trade extraction from cerebro error: {e}")
-        
-        return profit_per_trade
 
-    def _extract_pnl_from_trade_analysis(self, trade_analysis):
-        """Safely extract P&L values from trade analysis"""
-        profit_per_trade = []
-        
-        try:
-            # Method 1: Try to get from pnl.net
-            if 'pnl' in trade_analysis and 'net' in trade_analysis['pnl']:
-                pnl_data = trade_analysis['pnl']['net']
-                if hasattr(pnl_data, '__iter__') and not isinstance(pnl_data, str):
-                    for pnl in pnl_data:
-                        try:
-                            profit_per_trade.append(float(pnl))
-                        except (ValueError, TypeError):
-                            pass
-                else:
-                    try:
-                        profit_per_trade.append(float(pnl_data))
-                    except (ValueError, TypeError):
-                        pass
-            
-            # Method 2: Try to get from individual trades
-            if not profit_per_trade and 'trades' in trade_analysis:
-                trades_list = trade_analysis['trades']
-                if hasattr(trades_list, '__iter__'):
-                    for trade in trades_list:
-                        if hasattr(trade, 'pnl'):
-                            try:
-                                profit_per_trade.append(float(trade.pnl))
-                            except (ValueError, TypeError):
-                                pass
-            
-            print(f"🔍 Extracted {len(profit_per_trade)} P&L values from trade analysis")
-            
-        except Exception as e:
-            print(f"❌ P&L extraction from trade analysis error: {e}")
-        
-        return profit_per_trade
 
-    def _calculate_pnl_from_signals(self, strategy_instance):
-        """Calculate P&L from buy/sell signals with type safety"""
-        profit_per_trade = []
-        
-        try:
-            signals = strategy_instance.signals
-            buy_signals = [s for s in signals if s['type'] == 'buy']
-            sell_signals = [s for s in signals if s['type'] == 'sell']
-            
-            # Match buy and sell signals to calculate P&L
-            min_trades = min(len(buy_signals), len(sell_signals))
-            for i in range(min_trades):
-                buy = buy_signals[i]
-                sell = sell_signals[i]
-                
-                buy_price = float(buy['price']) if buy['price'] is not None else 0.0
-                sell_price = float(sell['price']) if sell['price'] is not None else 0.0
-                qty = float(buy.get('qty', 1)) if buy.get('qty') is not None else 1.0
-                
-                trade_pnl = (sell_price - buy_price) * qty
-                profit_per_trade.append(trade_pnl)
-            
-            print(f"🔍 Calculated {len(profit_per_trade)} trades from signal matching")
-            
-        except Exception as e:
-            print(f"❌ P&L calculation from signals error: {e}")
-        
-        return profit_per_trade
 
-    def _execute_historical_trades_in_broker(self, signals, broker):
-        """Execute trades in broker - WITH FORCE CLOSE"""
-        print(f"🔍 Executing {len(signals)} historical trades in broker")
-        
-        executed_count = 0
-        current_position = 0
-        
-        # Process signals sequentially
-        i = 0
-        while i < len(signals):
-            signal = signals[i]
-            
-            try:
-                execution_price = signal.get('price')
-                if execution_price is None:
-                    i += 1
-                    continue
-                
-                # Use consistent position sizing
-                available_cash = broker.balance
-                risk_percent = 0.1  # Same as your strategy's risk_per_trade
-                position_value = available_cash * risk_percent
-                qty = position_value / execution_price if execution_price > 0 else 0
-                
-                if qty <= 0.0001:
-                    i += 1
-                    continue
-                
-                print(f"🔍 Processing signal {i}: {signal['type']} @ ${execution_price:.2f}, qty={qty:.6f}")
-                
-                if signal['type'] == 'sell_short' and current_position == 0:
-                    # ENTER SHORT
-                    broker.submit_order(
-                        symbol=self.symbol_combo.currentText(),
-                        qty=qty,
-                        side='sell',
-                        order_type='market',
-                        execution_price=execution_price
-                    )
-                    current_position = -qty
-                    executed_count += 1
-                    print(f"📉 ENTER SHORT: {qty:.6f} @ ${execution_price:.2f}")
-                    
-                elif signal['type'] == 'buy' and current_position < 0:
-                    # EXIT SHORT (buy to cover)
-                    broker.submit_order(
-                        symbol=self.symbol_combo.currentText(),
-                        qty=abs(current_position),  # Cover entire short position
-                        side='buy',
-                        order_type='market',
-                        execution_price=execution_price
-                    )
-                    current_position = 0
-                    executed_count += 1
-                    print(f"🔚 EXIT SHORT: {abs(current_position):.6f} @ ${execution_price:.2f}")
-                    
-                elif signal['type'] == 'buy' and current_position == 0:
-                    # ENTER LONG
-                    broker.submit_order(
-                        symbol=self.symbol_combo.currentText(),
-                        qty=qty,
-                        side='buy',
-                        order_type='market',
-                        execution_price=execution_price
-                    )
-                    current_position = qty
-                    executed_count += 1
-                    print(f"📈 ENTER LONG: {qty:.6f} @ ${execution_price:.2f}")
-                    
-                elif signal['type'] == 'sell' and current_position > 0:
-                    # EXIT LONG
-                    broker.submit_order(
-                        symbol=self.symbol_combo.currentText(),
-                        qty=current_position,  # Sell entire long position
-                        side='sell',
-                        order_type='market',
-                        execution_price=execution_price
-                    )
-                    current_position = 0
-                    executed_count += 1
-                    print(f"🔚 EXIT LONG: {current_position:.6f} @ ${execution_price:.2f}")
-                
-                elif signal['type'] == 'sell_short' and current_position > 0:
-                    # We have a long position but got a short signal - CLOSE LONG FIRST
-                    print(f"🔄 Switching from LONG to SHORT: Closing long position first")
-                    broker.submit_order(
-                        symbol=self.symbol_combo.currentText(),
-                        qty=current_position,
-                        side='sell',
-                        order_type='market',
-                        execution_price=execution_price
-                    )
-                    current_position = 0
-                    executed_count += 1
-                    print(f"🔚 EXIT LONG (switch): {current_position:.6f} @ ${execution_price:.2f}")
-                    
-                    # Then ENTER SHORT with the same signal
-                    broker.submit_order(
-                        symbol=self.symbol_combo.currentText(),
-                        qty=qty,
-                        side='sell',
-                        order_type='market',
-                        execution_price=execution_price
-                    )
-                    current_position = -qty
-                    executed_count += 1
-                    print(f"📉 ENTER SHORT (switch): {qty:.6f} @ ${execution_price:.2f}")
-                
-                i += 1
-                    
-            except Exception as e:
-                print(f"❌ Error executing signal: {e}")
-                i += 1
-        
-        # DEBUG: Check position synchronization before force close
-        print(f"🔍 PRE-FORCE CLOSE DEBUG:")
-        print(f"   current_position tracking: {current_position:.6f}")
-        
-        broker_position_qty = 0
-        if hasattr(broker, 'positions') and self.symbol_combo.currentText() in broker.positions:
-            broker_position_qty = broker.positions[self.symbol_combo.currentText()].qty
-            print(f"   broker actual position: {broker_position_qty:.6f}")
-        else:
-            print(f"   broker actual position: No position found")
-        
-        # Check if positions are synchronized
-        if abs(current_position - broker_position_qty) > 0.000001:
-            print(f"⚠️  POSITION DESYNC: tracking={current_position:.6f}, broker={broker_position_qty:.6f}")
-        
-        # CRITICAL: FORCE CLOSE ANY REMAINING POSITIONS
-        self._force_close_all_positions(broker, current_position)
-        
-        print(f"🔍 Successfully executed {executed_count} trades")
 
-    def _force_close_all_positions(self, broker, tracked_position=0):
-        """Force close all remaining positions at current market price with enhanced debugging"""
-        try:
-            current_symbol = self.symbol_combo.currentText()
-            current_price = self.df['Close'].iloc[-1] if hasattr(self, 'df') and not self.df.empty else 0
-            
-            print(f"🔍 FORCE CLOSE ANALYSIS:")
-            print(f"   Tracked position: {tracked_position:.6f}")
-            print(f"   Current price: ${current_price:.2f}")
-            
-            # Method 1: Close based on tracked position (your original logic)
-            if abs(tracked_position) > 0.000001:
-                print(f"🔄 Closing based on tracked position...")
-                if tracked_position > 0:  # Long position
-                    broker.submit_order(
-                        symbol=current_symbol,
-                        qty=tracked_position,
-                        side='sell',
-                        order_type='market',
-                        execution_price=current_price
-                    )
-                    print(f"🔄 FORCE CLOSE LONG (tracked): {tracked_position:.6f} @ ${current_price:.2f}")
-                else:  # Short position
-                    broker.submit_order(
-                        symbol=current_symbol,
-                        qty=abs(tracked_position),
-                        side='buy',
-                        order_type='market',
-                        execution_price=current_price
-                    )
-                    print(f"🔄 FORCE CLOSE SHORT (tracked): {abs(tracked_position):.6f} @ ${current_price:.2f}")
-            
-            # Method 2: Close based on actual broker positions (backup safety)
-            if hasattr(broker, 'positions'):
-                for symbol, position in list(broker.positions.items()):
-                    if abs(position.qty) > 0.000001:  # Has position
-                        print(f"🔄 Closing based on broker position...")
-                        if position.qty > 0:  # Long position
-                            broker.submit_order(
-                                symbol=symbol,
-                                qty=position.qty,
-                                side='sell',
-                                order_type='market',
-                                execution_price=current_price
-                            )
-                            print(f"🔄 FORCE CLOSE LONG (broker): {position.qty:.6f} @ ${current_price:.2f}")
-                        else:  # Short position
-                            broker.submit_order(
-                                symbol=symbol,
-                                qty=abs(position.qty),
-                                side='buy',
-                                order_type='market',
-                                execution_price=current_price
-                            )
-                            print(f"🔄 FORCE CLOSE SHORT (broker): {abs(position.qty):.6f} @ ${current_price:.2f}")
-            
-            # Final verification
-            final_broker_position = 0
-            if hasattr(broker, 'positions') and current_symbol in broker.positions:
-                final_broker_position = broker.positions[current_symbol].qty
-            
-            if abs(final_broker_position) < 0.000001:
-                print(f"✅ FORCE CLOSE SUCCESS: All positions closed")
-            else:
-                print(f"❌ FORCE CLOSE WARNING: Position still exists: {final_broker_position:.6f}")
-                
-        except Exception as e:
-            print(f"❌ Error force closing positions: {e}")
+    # Legacy methods removed during refactoring
+
 
     
     def run_backtest(self):
@@ -1225,6 +567,13 @@ class MainWindow(QMainWindow):
             backtest_broker.order_history = []  # Clear ALL previous orders
             backtest_broker.closed_positions = []  # Clear closed positions
             backtest_broker.orders = {}  # Clear pending orders
+            
+            # Apply user-defined fees to the broker instance
+            try:
+                backtest_broker.market_fee = float(self.market_fee_input.text()) / 100.0
+                backtest_broker.limit_fee = float(self.limit_fee_input.text()) / 100.0
+            except ValueError:
+                pass
             
             print(f"🔍 Broker reset: Balance=${backtest_broker.balance:.2f}, Orders={len(backtest_broker.order_history)}")
 
@@ -1256,7 +605,16 @@ class MainWindow(QMainWindow):
             # Plot trading signals
             self.plot_signals(results.get('signals', []))
             
+            # Manually update backtest_broker state from results for UI display
+            # (Since the actual backtest ran in a separate engine loop)
+            if 'Final Value' in summary:
+                 backtest_broker.balance = float(summary['Final Value'])
+                 backtest_broker.portfolio_value = float(summary['Final Value'])
+                 # Note: Positions are not easily reconstructible here without replay, 
+                 # but balance helps the user see the result in the 'Account' label.
+
             # Show broker positions in UI
+
             self.current_broker = backtest_broker
             self.refresh_account_info()
             
@@ -1581,11 +939,19 @@ class MainWindow(QMainWindow):
         try:
             # get broker instance
             broker = self.broker_manager.get_broker(broker_name)
-            self.current_broker = broker_name
+            self.current_broker = broker
 
             if not self.current_broker:
                 self.statusBar().showMessage(f"Broker {broker_name} not configured!")
                 return
+
+            # Apply user-defined fees if using Simulator
+            if broker_name == "Simulator":
+                try:
+                    self.current_broker.market_fee = float(self.market_fee_input.text()) / 100.0
+                    self.current_broker.limit_fee = float(self.limit_fee_input.text()) / 100.0
+                except ValueError:
+                    pass
 
             # SET INITIAL CASH FROM USER INPUT
             initial_cash = float(self.cash_input.text())
@@ -1645,15 +1011,37 @@ class MainWindow(QMainWindow):
             pass
 
     def process_realtime_data(self, data):
-        ts = pd.to_datetime(data['timestamp'], unit='s', utc=True)
-        price = data['price']
+        ts = pd.Timestamp(data['timestamp'])
+        
+        # Check if the data is an order book depth update
+        if 'bids' in data and 'asks' in data and data['bids'] and data['asks']:
+            # Extract best bid and best ask
+            best_bid = float(data['bids'][0][0])
+            best_ask = float(data['asks'][0][0])
+            price = (best_bid + best_ask) / 2
+        elif 'price' in data: # Fallback for other data types if they have 'price'
+            price = data['price']
+        else:
+            logger.warning(f"Real-time data missing 'price' or 'bids'/'asks' for candlestick: {data}")
+            return # Skip processing if no price information
+
+        # Map interval to unambiguous pandas frequency string
+        if self.current_interval.endswith('m'):
+            freq = self.current_interval.replace('m', 'min') # Use 'min' for minute
+        elif self.current_interval.endswith('h'):
+            freq = self.current_interval.replace('h', 'H') # Use 'H' for hour
+        elif self.current_interval.endswith('d'):
+            freq = self.current_interval.replace('d', 'D') # Use 'D' for day
+        else:
+            freq = self.current_interval
 
         if self.realtime_df.empty:
             new_row = pd.DataFrame([{'Open': price, 'High': price, 'Low': price, 'Close': price}], index=[ts])
             self.realtime_df = pd.concat([self.realtime_df, new_row])
         else:
-            last_ts = self.realtime_df.index[-1].floor(self.current_interval)
-            current_ts = ts.floor(self.current_interval)
+            # Existing logic for updating/adding candles
+            last_ts = self.realtime_df.index[-1].floor(freq)
+            current_ts = ts.floor(freq)
 
             if current_ts == last_ts:
                 self.realtime_df.loc[self.realtime_df.index[-1], 'High'] = max(self.realtime_df.iloc[-1]['High'], price)
@@ -1712,7 +1100,22 @@ class MainWindow(QMainWindow):
         #     yaxis=dict(title='Price'),
         #     template='plotly_dark'
         # )
-        # self.update_plotly_view()
+        self.update_plotly_view()
+
+    def update_plotly_view(self):
+        """Convert Plotly figure to HTML and display in QWebEngineView."""
+        if hasattr(self, 'fig'):
+            import os
+            from PyQt5.QtCore import QUrl
+
+            # Create a temporary file to store the HTML
+            file_path = os.path.join(os.getcwd(), "live_price_chart.html")
+            self.fig.write_html(file_path, include_plotlyjs='cdn')
+            
+            # Load the HTML from the temporary file
+            self.plotly_view.setUrl(QUrl.fromLocalFile(file_path))
+        else:
+            pass
 
     def stop_realtime_stream(self):
         if self.is_streaming:
@@ -1724,465 +1127,31 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self.is_streaming:
             self.stop_realtime_stream()
+        
+        self.broker_timer.stop()
+        self.realtime_timer.stop()
+        self.simulation_timer.stop()
+        self.news_timer.stop()
+        
         super().closeEvent(event)
 
-    def setup_ai_analysis_ui(self):
-        """Add AI analysis controls to UI - NO API KEY INPUT NEEDED"""
-        # Create a group box for better organization
-        ai_group = QGroupBox("🤖 DeepSeek AI Analysis")
-        ai_layout = QVBoxLayout()
-        
-        # Status label showing AI is ready
-        ai_status_layout = QHBoxLayout()
-        ai_status_layout.addWidget(QLabel("Status:"))
-        self.ai_status_label = QLabel("✅ Ready")
-        self.ai_status_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
-        ai_status_layout.addWidget(self.ai_status_label)
-        ai_status_layout.addStretch()
-        ai_layout.addLayout(ai_status_layout)
-        
-        # Analyze Button - NO API KEY INPUT
-        self.analyze_btn = QPushButton("Analyze Current Symbol")
-        self.analyze_btn.clicked.connect(self.run_ai_analysis)
-        self.analyze_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2ecc71;
-                color: white;
-                font-weight: bold;
-                padding: 8px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #27ae60;
-            }
-            QPushButton:disabled {
-                background-color: #7f8c8d;
-            }
-        """)
-        ai_layout.addWidget(self.analyze_btn)
 
-        # Add debug buttons (remove after testing)
-        debug_layout = QHBoxLayout()
-        
-        test_analyzer_btn = QPushButton("Test AI")
-        test_analyzer_btn.clicked.connect(self.test_ai_analyzer_directly)
-        debug_layout.addWidget(test_analyzer_btn)
-        
-        test_api_btn = QPushButton("Test API")
-        test_api_btn.clicked.connect(self.test_deepseek_connection)
-        debug_layout.addWidget(test_api_btn)
-        
-        ai_layout.addLayout(debug_layout)
-        
-        # Multi-symbol analysis button
-        self.multi_analyze_btn = QPushButton("Analyze All Major Cryptos")
-        self.multi_analyze_btn.clicked.connect(self.run_multi_ai_analysis)
-        ai_layout.addWidget(self.multi_analyze_btn)
-        
-        # AI Results Display
-        self.ai_results_text = QTextEdit()
-        self.ai_results_text.setMaximumHeight(250)
-        self.ai_results_text.setReadOnly(True)
-        self.ai_results_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #1a1a1a;
-                color: #00ff00;
-                font-family: 'Courier New', monospace;
-                font-size: 11px;
-                border: 1px solid #333;
-                border-radius: 4px;
-                padding: 8px;
-            }
-        """)
-        ai_layout.addWidget(self.ai_results_text)
-        
-        ai_group.setLayout(ai_layout)
-        
-        # Add to main layout (adjust position as needed in your layout)
-        self.main_layout.addWidget(ai_group)
-    
-    def run_ai_analysis(self):
-        """Run AI analysis - with comprehensive debugging"""
-        if not self.ai_analyzer:
-            self.statusBar().showMessage("❌ AI Analyzer not available")
-            return
-            
-        symbol = self.symbol_combo.currentText()
-        interval = self.interval_combo.currentText()
-        days = int(self.days_input.text())
-        
-        print(f"[AI DEBUG] Starting analysis for {symbol}, {interval}, {days} days")
-        
-        # Show analyzing message
-        self.ai_results_text.setPlainText(
-            f"🤖 AI ANALYSIS STARTED\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Symbol: {symbol}\n"
-            f"Interval: {interval}\n"
-            f"Period: {days} days\n"
-            f"Status: Initializing...\n\n"
-            f"Please wait...\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        )
-        
-        # Disable button during analysis
-        self.analyze_btn.setEnabled(False)
-        self.ai_status_label.setText("🔄 Analyzing...")
-        self.ai_status_label.setStyleSheet("color: #f39c12; font-weight: bold;")
-        
-        from threading import Thread
-        def analyze_thread():
-            try:
-                print(f"[AI DEBUG] Thread started")
-                
-                # Step 1: Load data
-                print(f"[AI DEBUG] Step 1: Loading data")
-                self._update_ai_display("🔄 Loading market data...")
-                
-                analysis_data = None
-                if (hasattr(self, 'df') and not self.df.empty and 
-                    len(self.df) > 10 and 
-                    self.symbol_combo.currentText() == symbol):
-                    
-                    print(f"[AI DEBUG] Using existing data: {len(self.df)} candles")
-                    analysis_data = self.df
-                else:
-                    print(f"[AI DEBUG] Loading fresh data from platform")
-                    self._update_ai_display("🌐 Fetching data from exchange...")
-                    
-                    analysis_data = self.data_loader.load_data(
-                        symbol=symbol,
-                        source="Historical",
-                        live=False,
-                        days=days,
-                        interval=interval
-                    )
-                    print(f"[AI DEBUG] Fresh data loaded: {len(analysis_data)} candles")
-                
-                if analysis_data is None or analysis_data.empty:
-                    error_msg = "❌ No data available for analysis"
-                    print(f"[AI DEBUG] {error_msg}")
-                    self.display_ai_results({'error': error_msg})
-                    return
-                
-                # Step 2: Run AI analysis
-                print(f"[AI DEBUG] Step 2: Calling AI analyzer")
-                self._update_ai_display("🤖 Analyzing with DeepSeek AI...")
-                
-                # Test if analyzer is working with a simple call first
-                print(f"[AI DEBUG] Testing AI analyzer...")
-                try:
-                    # Try a simple analysis first
-                    test_result = self.ai_analyzer.analyze_crypto_data(symbol, analysis_data)
-                    print(f"[AI DEBUG] AI analysis completed successfully")
-                    print(f"[AI DEBUG] Result keys: {test_result.keys() if isinstance(test_result, dict) else 'Not a dict'}")
-                    
-                    self.display_ai_results(test_result)
-                    
-                except Exception as ai_error:
-                    print(f"[AI DEBUG] AI analysis failed: {ai_error}")
-                    self.display_ai_results({'error': f"AI analysis error: {str(ai_error)}"})
-                
-            except Exception as e:
-                print(f"[AI DEBUG] Thread error: {e}")
-                import traceback
-                print(f"[AI DEBUG] Traceback: {traceback.format_exc()}")
-                
-                error_msg = f"❌ Analysis failed: {str(e)}"
-                self.display_ai_results({'error': error_msg})
-            finally:
-                print(f"[AI DEBUG] Thread completed, re-enabling UI")
-                # Re-enable button
-                from PyQt5.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self.analyze_btn.setEnabled(True))
-                QTimer.singleShot(0, lambda: self.ai_status_label.setText("✅ Ready"))
-                QTimer.singleShot(0, lambda: self.ai_status_label.setStyleSheet("color: #2ecc71; font-weight: bold;"))
-        
-        print(f"[AI DEBUG] Starting analysis thread")
-        Thread(target=analyze_thread, daemon=True).start()
-        print(f"[AI DEBUG] Thread started successfully")
-
-    def run_multi_ai_analysis(self):
-        """Run AI analysis on all major crypto symbols - direct data loading"""
-        if not self.ai_analyzer:
-            self.statusBar().showMessage("❌ AI Analyzer not available")
-            return
-        
-        crypto_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "BNBUSDT"]
-        interval = self.interval_combo.currentText()
-        days = int(self.days_input.text())
-        
-        self.ai_results_text.setPlainText(
-            f"🤖 Starting Multi-Crypto AI Analysis...\n"
-            f"📈 Analyzing {len(crypto_symbols)} cryptocurrencies:\n"
-            f"   {', '.join(crypto_symbols)}\n"
-            f"   Interval: {interval}, Period: {days} days\n\n"
-            f"⏳ This may take 1-2 minutes...\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        )
-        
-        self.multi_analyze_btn.setEnabled(False)
-        self.ai_status_label.setText("🔄 Multi-Analysis...")
-        self.ai_status_label.setStyleSheet("color: #f39c12; font-weight: bold;")
-        
-        from threading import Thread
-        def multi_analyze_thread():
-            try:
-                results = {}
-                for i, symbol in enumerate(crypto_symbols):
-                    try:
-                        # Update progress in UI
-                        progress_msg = f"📥 Loading {interval} data for {symbol}... ({i+1}/{len(crypto_symbols)})"
-                        self.debug_ai_analysis(progress_msg)
-                        
-                        # Load data directly from platform
-                        df = self.data_loader.load_data(
-                            symbol=symbol,
-                            source="Historical",
-                            live=False,
-                            days=days,
-                            interval=interval
-                        )
-                        
-                        if df.empty:
-                            results[symbol] = {'error': f"No data available for {symbol}"}
-                            self.debug_ai_analysis(f"❌ No data for {symbol}")
-                        else:
-                            # Run AI analysis
-                            analysis_msg = f"🤖 Analyzing {symbol}... ({i+1}/{len(crypto_symbols)})"
-                            self.debug_ai_analysis(analysis_msg)
-                            
-                            analysis = self.ai_analyzer.analyze_crypto_data(symbol, df)
-                            results[symbol] = analysis
-                            self.debug_ai_analysis(f"✅ Analysis complete for {symbol}")
-                            
-                            # Update results progressively
-                            self.update_multi_analysis_results(results)
-                            
-                    except Exception as e:
-                        error_msg = f"❌ Failed to analyze {symbol}: {str(e)}"
-                        self.debug_ai_analysis(error_msg)
-                        results[symbol] = {'error': error_msg}
-                        self.update_multi_analysis_results(results)
-                
-                self.debug_ai_analysis("✅ Multi-crypto analysis completed")
-                
-            except Exception as e:
-                error_msg = f"❌ Multi-analysis failed: {str(e)}"
-                self.debug_ai_analysis(error_msg)
-                self.display_ai_results({'error': error_msg})
-            finally:
-                from PyQt5.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self.multi_analyze_btn.setEnabled(True))
-                QTimer.singleShot(0, lambda: self.ai_status_label.setText("✅ Ready"))
-                QTimer.singleShot(0, lambda: self.ai_status_label.setStyleSheet("color: #2ecc71; font-weight: bold;"))
-        
-        Thread(target=multi_analyze_thread, daemon=True).start()
-
-    def update_multi_analysis_results(self, results: dict):
-        """Update multi-analysis results progressively"""
-        result_text = "🤖 Multi-Crypto AI Analysis Results\n"
-        result_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        
-        for symbol, analysis in results.items():
-            if 'error' in analysis:
-                result_text += f"❌ {symbol}: {analysis['error']}\n\n"
-            else:
-                rec = analysis.get('recommendation', {})
-                action = rec.get('action', 'HOLD')
-                confidence = rec.get('confidence', 50)
-                current_price = analysis.get('current_price', 0)
-                
-                # Color code the action
-                if action == 'STRONG_BUY':
-                    action_icon = "🟢"
-                elif action == 'BUY':
-                    action_icon = "🟡" 
-                elif action == 'STRONG_SELL':
-                    action_icon = "🔴"
-                elif action == 'SELL':
-                    action_icon = "🟠"
-                else:
-                    action_icon = "⚪"
-                
-                result_text += f"{action_icon} {symbol}: {action} ({confidence}%)\n"
-                result_text += f"   💰 Price: ${current_price:,.2f}\n"
-                
-                # Add price targets if available
-                targets = rec.get('price_targets', {})
-                if targets.get('short_term'):
-                    result_text += f"   🎯 Short-term: ${targets['short_term']:,.2f}\n"
-                if targets.get('medium_term'):
-                    result_text += f"   🎯 Medium-term: ${targets['medium_term']:,.2f}\n"
-                    
-                result_text += "\n"
-        
-        result_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        result_text += f"📊 {len(results)}/{5} cryptocurrencies analyzed"
-        
-        from PyQt5.QtCore import QTimer
-        QTimer.singleShot(0, lambda: self.ai_results_text.setPlainText(result_text))
-    
-    def display_ai_results(self, analysis: Dict):
-        """Display AI analysis results"""
-        if 'error' in analysis:
-            result_text = f"❌ {analysis['error']}"
-        else:
-            result_text = self._format_ai_analysis(analysis)
-        
-        from PyQt5.QtCore import QTimer
-        QTimer.singleShot(0, lambda: self._update_ai_display(result_text))
-    
-    def _update_ai_display(self, text: str):
-        """Update AI results display"""
-        self.ai_results_text.setPlainText(text)
-        self.statusBar().showMessage("AI analysis completed")
-    
-    def _format_ai_analysis(self, analysis: Dict) -> str:
-        """Format AI analysis for display"""
-        symbol = analysis.get('symbol', 'Unknown')
-        current_price = analysis.get('current_price', 0)
-        price_change = analysis.get('price_change', 0)
-        recommendation = analysis.get('recommendation', {})
-        
-        text = f"""
-            🤖 DEEPSEEK AI ANALYSIS - {symbol}
-            📊 Current Price: ${current_price:,.2f} ({price_change:+.2f}%)
-
-            🎯 TRADING RECOMMENDATION: {recommendation.get('action', 'HOLD')}
-            📈 Confidence: {recommendation.get('confidence', 50)}%
-
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-            📊 TECHNICAL ANALYSIS:
-            {analysis.get('technical_analysis', 'No technical analysis available')}
-
-            ⚠️ RISK ASSESSMENT:
-            {analysis.get('risk_assessment', 'No risk assessment available')}
-
-            💡 ADDITIONAL INSIGHTS:
-            {analysis.get('additional_insights', 'No additional insights available')}
-
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            🕒 Analysis Time: {analysis.get('timestamp', 'Unknown')}
-        """
-        
-        return text.strip()
-    
-    def _update_ai_display(self, message: str):
-        """Update AI display with progress message"""
-        from PyQt5.QtCore import QTimer
-        
-        def update_display():
-            current_text = self.ai_results_text.toPlainText()
-            lines = current_text.split('\n')
-            
-            # Find and replace the status line
-            for i, line in enumerate(lines):
-                if line.startswith("Status:") or line.startswith("🔄") or line.startswith("🌐") or line.startswith("🤖"):
-                    lines[i] = message
-                    break
-            else:
-                # Add new status line if not found
-                lines.insert(4, message)  # Insert after the header
-            
-            new_text = '\n'.join(lines)
-            self.ai_results_text.setPlainText(new_text)
-            
-            # Auto-scroll to show latest message
-            cursor = self.ai_results_text.textCursor()
-            cursor.movePosition(cursor.End)
-            self.ai_results_text.setTextCursor(cursor)
-        
-        QTimer.singleShot(0, update_display)
-
-    def test_ai_analyzer_directly(self):
-        """Test the AI analyzer directly to see if it's working"""
-        if not self.ai_analyzer:
-            print("❌ AI Analyzer not available")
-            return
-        
-        print("🧪 Testing AI Analyzer Directly...")
-        
-        # Create simple test data
-        import pandas as pd
-        from datetime import datetime, timedelta
-        
-        test_data = pd.DataFrame({
-            'Open': [40000, 41000, 41500, 42000, 42500],
-            'High': [40500, 41500, 42000, 42500, 43000],
-            'Low': [39500, 40500, 41000, 41500, 42000],
-            'Close': [40200, 41200, 41700, 42200, 42700],
-            'Volume': [1000, 1200, 1500, 1800, 2000]
-        })
-        
-        # Create datetime index
-        dates = [datetime.now() - timedelta(days=i) for i in range(4, -1, -1)]
-        test_data.index = dates
-        
-        print(f"🧪 Test data created: {len(test_data)} rows")
-        
-        try:
-            print("🧪 Calling AI analyzer...")
-            result = self.ai_analyzer.analyze_crypto_data("TESTBTC", test_data)
-            print(f"🧪 AI Analysis Result: {result}")
-            
-            if 'error' in result:
-                print(f"❌ AI Error: {result['error']}")
-            else:
-                print(f"✅ AI Success: {result.get('recommendation', 'No recommendation')}")
-                
-        except Exception as e:
-            print(f"❌ AI Test Failed: {e}")
-            import traceback
-            print(f"❌ Traceback: {traceback.format_exc()}")
-
-    def test_deepseek_connection(self):
-        """Test if we can connect to DeepSeek API"""
-        if not self.ai_analyzer:
-            print("❌ No AI Analyzer")
-            return
-        
-        print("🔌 Testing DeepSeek API Connection...")
-        
-        try:
-            # Try to import the OpenAI client directly
-            import openai
-            
-            # Test a simple API call
-            client = openai.OpenAI(
-                api_key=self.ai_analyzer.client.api_key,
-                base_url="https://api.deepseek.com"
-            )
-            
-            print("🔌 Testing simple chat completion...")
-            response = client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[{"role": "user", "content": "Say 'Hello World'"}],
-                max_tokens=10
-            )
-            
-            print(f"✅ API Connection Successful: {response.choices[0].message.content}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ API Connection Failed: {e}")
-            return False
-        
     def update_live_news(self):
         symbol = self.symbol_combo.currentText()
         print(f"Checking for new news for {symbol}...")
         
+        # Scrape news using the scraper logic
         news_df = scrape_and_analyze_finviz_news(symbol)
         
         if not news_df.empty:
             latest_headline = news_df.iloc[0]['headline']
-            if latest_headline != self.last_seen_headline:
+            if hasattr(self, 'last_seen_headline') and latest_headline != self.last_seen_headline:
                 print(f"New news found: {latest_headline}")
                 self.last_seen_headline = latest_headline
-                self.latest_sentiment['positive'] = news_df.iloc[0]['positive']
-                self.latest_sentiment['negative'] = news_df.iloc[0]['negative']
-                self.latest_sentiment['neutral'] = news_df.iloc[0]['neutral']
+                if hasattr(self, 'latest_sentiment') and self.latest_sentiment is not None:
+                    self.latest_sentiment['positive'] = news_df.iloc[0]['positive']
+                    self.latest_sentiment['negative'] = news_df.iloc[0]['negative']
+                    self.latest_sentiment['neutral'] = news_df.iloc[0]['neutral']
                 self.statusBar().showMessage(f"New News: {latest_headline}", 5000)
 
     def show_statistics(self):
@@ -2193,3 +1162,24 @@ class MainWindow(QMainWindow):
 
         self.stats_window = StatisticsWindow(results)
         self.stats_window.show()
+
+    def plot_candles(self):
+        if not hasattr(self, 'df') or self.df.empty:
+            return
+        
+        self.fig = go.Figure(data=[go.Candlestick(
+            x=self.df.index,
+            open=self.df['Open'],
+            high=self.df['High'],
+            low=self.df['Low'],
+            close=self.df['Close'],
+            name='Price'
+        )])
+
+        self.fig.update_layout(
+            height=600,
+            xaxis=dict(type='date', rangeslider_visible=False),
+            yaxis=dict(title='Price'),
+            template='plotly_dark'
+        )
+        self.update_plotly_view()

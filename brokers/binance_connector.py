@@ -4,7 +4,7 @@ import asyncio
 import json
 import numpy as np
 import pandas as pd
-import ta
+# import ta
 import configparser
 from time import sleep
 from binance.exceptions import BinanceAPIException
