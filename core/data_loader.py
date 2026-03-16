@@ -1,4 +1,4 @@
-from finrl.meta.preprocessor.yahoodownloader import YahooDownloader
+# from finrl.meta.preprocessor.yahoodownloader import YahooDownloader
 import yfinance as yf
 import pandas as pd
 import ccxt
@@ -10,13 +10,27 @@ from datetime import datetime, timedelta
 from queue import Queue
 import requests
 from core.news_scraper import scrape_and_analyze_finviz_news
+from core.logger import logger
 
 class DataLoader:
+    """
+    Manages data loading from various sources (Historical, Live, FinRL)
+    and handles real-time data streaming via WebSockets.
+    """
     def __init__(self, live_api_key=None, live_secret_key=None, kucoin_key=None, kucoin_secret=None, binance_key=None, binance_secret=None):
+        """
+        Initialize DataLoader with optional API keys.
+        """
         # Crypto exchanges
         self.kucoin_connector = None
         self.binance_connector = None
         
+        # Always initialize a public instance for historical data if keys not provided
+        self.binance_public = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+
         if kucoin_key and kucoin_secret:
             self.kucoin_connector = ccxt.kucoin({
                 'apiKey': kucoin_key,
@@ -30,6 +44,8 @@ class DataLoader:
                 'secret': binance_secret,
                 'enableRateLimit': True,
             })
+        else:
+            self.binance_connector = self.binance_public
         
         # Real-time streaming attributes
         self.realtime_queue = Queue()
@@ -40,70 +56,74 @@ class DataLoader:
         self._callback = None
 
     def load_data(self, symbol, source="Historical", live=False, days=365, interval='1d'):
-        """Load data from various sources"""
+        """
+        Load data from various sources.
+        
+        Args:
+            symbol (str): Ticker symbol.
+            source (str): Data source ("Historical", "FinRL-Yahoo").
+            live (bool): If True, loads recent data (previously 'live').
+            days (int): Number of days of history.
+            interval (str): Candle interval ('1m', '1h', '1d').
+            
+        Returns:
+            pd.DataFrame: OHLCV data.
+        """
+        logger.info(f"Loading data... Symbol: {symbol}, Source: {source}, Days: {days}, Interval: {interval}")
+        
         if source == "FinRL-Yahoo":
             df = self._get_finrl_data(symbol, days, interval)
         elif live:
-            df = self._get_live_data(symbol, days, interval)
+            df = self._get_recent_data(symbol, days, interval)
         else:
             df = self._get_historical_data(symbol, days, interval)
 
         # News sentiment integration
-        print(f"Fetching news sentiment for {symbol}...")
-        news_df = scrape_and_analyze_finviz_news(symbol)
-        if not news_df.empty:
-            news_df['datetime'] = pd.to_datetime(news_df['datetime'])
-            news_df['datetime'] = news_df['datetime'].dt.tz_localize('UTC')
-            news_df.set_index('datetime', inplace=True)
+        logger.info(f"Fetching news sentiment for {symbol}...")
+        try:
+            news_df = scrape_and_analyze_finviz_news(symbol)
+            if not news_df.empty:
+                news_df['datetime'] = pd.to_datetime(news_df['datetime'])
+                news_df['datetime'] = news_df['datetime'].dt.tz_localize('UTC')
+                news_df.set_index('datetime', inplace=True)
 
-            if df.index.tz is None:
-                df.index = df.index.tz_localize('UTC')
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize('UTC')
+                else:
+                    df.index = df.index.tz_convert('UTC')
+
+                df = pd.merge_asof(df.sort_index(), news_df[['positive', 'negative', 'neutral']],
+                                  left_index=True, right_index=True, direction='backward')
+                df[['positive', 'negative', 'neutral']] = df[['positive', 'negative', 'neutral']].ffill().fillna(0)
+                logger.info("News sentiment data merged successfully.")
             else:
-                df.index = df.index.tz_convert('UTC')
-
-            df = pd.merge_asof(df.sort_index(), news_df[['positive', 'negative', 'neutral']],
-                              left_index=True, right_index=True, direction='backward')
-            df[['positive', 'negative', 'neutral']] = df[['positive', 'negative', 'neutral']].ffill().fillna(0)
-            print("News sentiment data merged successfully.")
-        else:
+                df['positive'] = 0
+                df['negative'] = 0
+                df['neutral'] = 0
+                logger.info("No news sentiment data found.")
+        except Exception as e:
+            logger.error(f"Error fetching news sentiment: {e}")
             df['positive'] = 0
             df['negative'] = 0
             df['neutral'] = 0
-            print("No news sentiment data found.")
 
         return df
 
     def _get_finrl_data(self, symbol, days=3650, interval='1d'):
-        """Get data from FinRL's YahooDownloader"""
+        """Get data simulating FinRL's YahooDownloader using internal method"""
         if symbol == 'BTCUSDT':
             symbol = 'BTC-USD'
-            
-        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-        end_date = datetime.now().strftime('%Y-%m-%d')
-
-        df = YahooDownloader(start_date=start_date,
-                             end_date=end_date,
-                             ticker_list=[symbol]).fetch_data()
-
-        if 'tic' in df.columns:
-            df.drop(columns=['tic'], inplace=True)
-        df.rename(columns={'date': 'Datetime', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close',
-                           'volume': 'Volume'}, inplace=True)
-        df['Datetime'] = pd.to_datetime(df['Datetime'])
-        df.set_index('Datetime', inplace=True)
-
-        return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        return self._get_yahoo_historical(symbol, days, interval)
 
     def _get_historical_data(self, symbol, days, interval='1d'):
-        """Get historical data with crypto priority"""
+        """Get historical data with crypto priority using ccxt for crypto"""
         is_crypto = "USDT" in symbol.upper()
 
         if is_crypto:
-            # Try Binance first (no API keys needed for public data)
             try:
                 return self._get_binance_historical(symbol, days, interval)
             except Exception as e:
-                print(f"Binance historical failed: {e}")
+                logger.error(f"Binance historical failed: {e}")
                 # Fall back to KuCoin if configured
                 if self.kucoin_connector:
                     return self._get_kucoin_historical(symbol, days, interval)
@@ -115,180 +135,119 @@ class DataLoader:
             return self._get_yahoo_historical(symbol, days, interval)
 
     def _get_binance_historical(self, symbol, days, interval):
-        """Get historical data from Binance with batch loading to bypass 1000 limit"""
-        import requests
-        import time
+        """Get historical data from Binance using CCXT"""
+        logger.info(f"Fetching {interval} data for {symbol} from Binance via CCXT for last {days} days")
         
-        # Binance API endpoint
-        url = "https://api.binance.com/api/v3/klines"
+        # Calculate start timestamp in milliseconds
+        since = int(self.binance_public.milliseconds() - (days * 24 * 60 * 60 * 1000))
         
-        # Convert interval to Binance format
-        interval_map = {
-            '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m',
-            '1h': '1h', '1d': '1d'
-        }
-        binance_interval = interval_map.get(interval, '1d')
+        all_ohlcv = []
+        limit = 1000
         
-        # Calculate total candles needed
-        interval_to_minutes = {
-            '1m': 1, '5m': 5, '15m': 15, '30m': 30,
-            '1h': 60, '1d': 1440
-        }
-        minutes_per_candle = interval_to_minutes.get(binance_interval, 1440)
-        total_minutes = days * 24 * 60
-        total_candles_needed = total_minutes // minutes_per_candle
-        
-        print(f"[Binance] Loading {total_candles_needed} candles for {symbol} ({interval})")
-        
-        # Binance limit per request
-        BINANCE_LIMIT = 1000
-        all_candles = []
-        
-        # Calculate batch parameters
-        if total_candles_needed <= BINANCE_LIMIT:
-            # Single request if under limit
-            batches = [total_candles_needed]
-        else:
-            # Split into multiple batches
-            num_batches = (total_candles_needed + BINANCE_LIMIT - 1) // BINANCE_LIMIT
-            batches = [BINANCE_LIMIT] * (num_batches - 1)
-            remaining = total_candles_needed - (BINANCE_LIMIT * (num_batches - 1))
-            batches.append(remaining)
-        
-        print(f"[Binance] Splitting into {len(batches)} batches: {batches}")
-        
-        # Current time as end point
-        end_time = int(time.time() * 1000)
-        
-        for i, batch_size in enumerate(batches):
+        while True:
             try:
-                print(f"[Binance] Batch {i+1}/{len(batches)}: Loading {batch_size} candles...")
-                
-                # Calculate start time for this batch
-                batch_minutes = batch_size * minutes_per_candle
-                batch_ms = batch_minutes * 60 * 1000
-                start_time = end_time - batch_ms
-                
-                params = {
-                    'symbol': symbol,
-                    'interval': binance_interval,
-                    'startTime': start_time,
-                    'endTime': end_time,
-                    'limit': batch_size
-                }
-                
-                response = requests.get(url, params=params, timeout=10)
-                
-                if response.status_code != 200:
-                    raise ValueError(f"Binance API error: {response.status_code} - {response.text}")
-                
-                batch_data = response.json()
-                
-                if not batch_data:
-                    print(f"[Binance] No data returned for batch {i+1}")
+                ohlcv = self.binance_public.fetch_ohlcv(symbol, timeframe=interval, since=since, limit=limit)
+                if not ohlcv:
                     break
-                
-                # Add to collection
-                all_candles.extend(batch_data)
-                print(f"[Binance] Batch {i+1} completed: {len(batch_data)} candles")
-                
-                # Update end_time for next batch (move backward in time)
-                end_time = start_time - 1  # Move 1ms before this batch's start
-                
-                # Rate limiting - be nice to Binance API
-                if i < len(batches) - 1:  # Don't sleep after last batch
-                    time.sleep(0.2)  # 200ms delay between requests
                     
+                all_ohlcv.extend(ohlcv)
+                
+                # Check if we reached current time
+                last_timestamp = ohlcv[-1][0]
+                since = last_timestamp + 1
+                
+                if len(ohlcv) < limit:
+                    break
+                    
+                time.sleep(self.binance_public.rateLimit / 1000) # Respect rate limits
+                
             except Exception as e:
-                print(f"[Binance] Error in batch {i+1}: {e}")
-                # Continue with whatever data we have
+                logger.warning(f"Failed to fetch batch from Binance (will retry/fallback): {e}")
                 break
-        
-        if not all_candles:
+                
+        if not all_ohlcv:
             raise ValueError(f"No data returned from Binance for {symbol}")
-        
-        print(f"[Binance] Total candles loaded: {len(all_candles)}")
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(all_candles, columns=[
-            'Open time', 'Open', 'High', 'Low', 'Close', 'Volume',
-            'Close time', 'Quote asset volume', 'Number of trades',
-            'Taker buy base asset volume', 'Taker buy quote asset volume', 'Ignore'
-        ])
-        
-        # Sort by timestamp (oldest first) since we loaded newest to oldest
-        df = df.sort_values('Open time')
-        
-        # Convert columns
-        df['Datetime'] = pd.to_datetime(df['Open time'], unit='ms')
+            
+        df = pd.DataFrame(all_ohlcv, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        df['Datetime'] = pd.to_datetime(df['Datetime'], unit='ms')
         df.set_index('Datetime', inplace=True)
         
-        # Convert OHLCV to float
-        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-            df[col] = df[col].astype(float)
+        # Ensure proper types
+        df = df.astype(float)
         
-        print(f"[Binance] Final DataFrame: {len(df)} candles for {symbol}")
-        return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        logger.info(f"Binance CCXT data loaded: {len(df)} candles for {symbol}")
+        return df
 
     def _get_kucoin_historical(self, symbol, days, interval):
         """Get historical data from KuCoin"""
         try:
-            print(f"Fetching crypto historical data from KuCoin for {symbol}...")
+            logger.info(f"Fetching crypto historical data from KuCoin for {symbol}...")
             kucoin_symbol = symbol.replace("USDT", "/USDT")
             
             # Fetch OHLCV data
-            ohlcv = self.kucoin_connector.fetch_ohlcv(kucoin_symbol, interval, limit=days)
+            ohlcv = self.kucoin_connector.fetch_ohlcv(kucoin_symbol, interval, limit=days) # CCXT handles some pagination
             
+            if not ohlcv:
+                raise ValueError(f"No data returned from KuCoin for {symbol}")
+
             df = pd.DataFrame(ohlcv, columns=['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume'])
             df['Datetime'] = pd.to_datetime(df['Datetime'], unit='ms')
             df.set_index('Datetime', inplace=True)
             df = df.astype(float)
-            print(f"KuCoin historical data loaded: {len(df)} candles for {symbol}")
+            logger.info(f"KuCoin historical data loaded: {len(df)} candles for {symbol}")
             return df
         except Exception as e:
-            print(f"KuCoin historical data failed: {e}")
+            logger.error(f"KuCoin historical data failed: {e}")
             raise
 
     def _get_yahoo_crypto_historical(self, symbol, days, interval):
         """Fallback to Yahoo Finance for crypto (converts BTCUSDT to BTC-USD)"""
-        if symbol == 'BTCUSDT':
-            symbol = 'BTC-USD'
-        elif symbol == 'ETHUSDT':
-            symbol = 'ETH-USD'
-        elif symbol == 'SOLUSDT':
-            symbol = 'SOL-USD'
-        elif symbol == 'ADAUSDT':
-            symbol = 'ADA-USD'
-            
-        return self._get_yahoo_historical(symbol, days, interval)
+        symbol_map = {
+            'BTCUSDT': 'BTC-USD',
+            'ETHUSDT': 'ETH-USD',
+            'SOLUSDT': 'SOL-USD',
+            'ADAUSDT': 'ADA-USD'
+        }
+        yahoo_symbol = symbol_map.get(symbol, symbol)
+        return self._get_yahoo_historical(yahoo_symbol, days, interval)
 
     def _get_yahoo_historical(self, symbol, days, interval):
         """Get historical data from Yahoo Finance"""
         if interval in ['1m', '5m', '15m', '30m']:
-            raise ValueError(f"Yahoo Finance doesn't support {interval} interval")
+            # Yahoo might support some minute data effectively only for recent 7 or 60 days depending on interval
+            logger.warning(f"Yahoo Finance support for {interval} is limited/unreliable.")
 
-        valid_intervals = ['1h', '1d']
+        valid_intervals = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo']
         if interval not in valid_intervals:
-            interval = '1d'
+             # Map some common formats if necessary
+            if interval == '1h': interval = '60m'
+            else: interval = '1d'
 
-        df = yf.download(symbol, period=f"{days}d", interval=interval)
+        logger.info(f"Downloading Yahoo Finance data: {symbol}, period={days}d, interval={interval}")
+        df = yf.download(symbol, period=f"{days}d", interval=interval, progress=False)
+        
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.droplevel(1)
         df = df.reset_index()
         
-        if interval == '1d':
+        # Yahoo Finance column names vary slightly often ('Date' vs 'Datetime')
+        if 'Date' in df.columns:
             df['Datetime'] = pd.to_datetime(df['Date'])
-        elif interval == '1h':
+        elif 'Datetime' in df.columns:
             df['Datetime'] = pd.to_datetime(df['Datetime'])
             
         df.set_index('Datetime', inplace=True)
-        print(f"Yahoo Finance historical data loaded: {len(df)} candles for {symbol}")
+        logger.info(f"Yahoo Finance historical data loaded: {len(df)} candles for {symbol}")
         return df[['Open', 'High', 'Low', 'Close', 'Volume']]
 
-    def _get_live_data(self, symbol, days, interval='1d'):
-        """Get 'live' data - actually uses historical for display"""
+    def _get_recent_data(self, symbol, days, interval='1d'):
+        """
+        Get recent data. Previously '_get_live_data'.
+        Uses historical data for the last few days to simulate 'live' chart.
+        """
         # For live display, we use recent historical data
         # Real-time updates come through WebSocket separately
+        logger.info("Fetching recent data for display...")
         return self._get_historical_data(symbol, min(days, 7), interval)  # Limit to 7 days for performance
 
     # REAL-TIME STREAMING METHODS
@@ -300,45 +259,51 @@ class DataLoader:
         self.active_symbol = symbol
         self._callback = callback
         
-        print(f"[DataLoader] Starting real-time WebSocket for {symbol}")
+        logger.info(f"[DataLoader] Starting real-time WebSocket for {symbol}")
         
         # Use Binance WebSocket (no API keys needed for public streams)
         self._start_binance_websocket(symbol)
 
     def _start_binance_websocket(self, symbol):
         """Start Binance WebSocket for real-time crypto data"""
-        stream_name = f"{symbol.lower()}@trade"
+        stream_name = f"{symbol.lower()}@depth@100ms"
         ws_url = f"wss://stream.binance.com:9443/ws/{stream_name}"
         
         def on_message(ws, message):
             try:
                 data = json.loads(message)
-                trade_data = {
-                    'symbol': data['s'],
-                    'price': float(data['p']),
-                    'quantity': float(data['q']),
-                    'timestamp': datetime.fromtimestamp(data['T'] / 1000),
-                    'is_buyer_maker': data['m'],
-                    'exchange': 'binance',
-                    'type': 'trade'
-                }
-                # print(f"[WebSocket] {symbol}: ${trade_data['price']}")  # Optional: comment out for less noise
-                self.realtime_queue.put(trade_data)
-                if self._callback:
-                    self._callback(trade_data)
+                # logger.debug(f"[WebSocket Raw] {message}") # Debug raw message
+                
+                # Check for order book depth update structure
+                if 'b' in data and 'a' in data:
+                    order_book_update = {
+                        'symbol': data['s'],
+                        'bids': data['b'], # [[price, quantity], ...]
+                        'asks': data['a'], # [[price, quantity], ...]
+                        'timestamp': datetime.fromtimestamp(data['E'] / 1000), # Event time
+                        'exchange': 'binance',
+                        'type': 'depthUpdate'
+                    }
+                    self.realtime_queue.put(order_book_update)
+                    if self._callback:
+                        self._callback(order_book_update)
+                # Add handling for other message types if necessary
+                else:
+                    logger.warning(f"Unhandled WebSocket message type: {data.get('e', 'unknown_event')}")
+
             except Exception as e:
-                print(f"WebSocket message error: {e}")
+                logger.error(f"WebSocket message parsing error: {e}, Message: {message}")
 
         def on_error(ws, error):
-            print(f"WebSocket error: {error}")
+            logger.error(f"WebSocket error: {error}")
             self.ws_connected = False
 
         def on_close(ws, close_status_code, close_msg):
-            print(f"WebSocket connection closed for {self.active_symbol}")
+            logger.info(f"WebSocket connection closed for {self.active_symbol}")
             self.ws_connected = False
 
         def on_open(ws):
-            print(f"WebSocket connected for {self.active_symbol}")
+            logger.info(f"WebSocket connected for {self.active_symbol}")
             self.ws_connected = True
 
         # Create and start WebSocket
@@ -352,11 +317,12 @@ class DataLoader:
         
         def run_websocket():
             try:
+                # Remove daemon=True for graceful shutdown
                 self.ws.run_forever(ping_interval=30, ping_timeout=10)
             except Exception as e:
-                print(f"WebSocket run error: {e}")
+                logger.error(f"WebSocket run error: {e}")
             
-        self.ws_thread = threading.Thread(target=run_websocket, daemon=True)
+        self.ws_thread = threading.Thread(target=run_websocket) # Removed daemon=True
         self.ws_thread.start()
         
         # Wait for connection with timeout
@@ -370,18 +336,21 @@ class DataLoader:
 
     def stop_realtime_stream(self):
         """Stop the real-time WebSocket stream"""
-        print(f"[DataLoader] Stopping real-time stream for {self.active_symbol}")
+        logger.info(f"[DataLoader] Stopping real-time stream for {self.active_symbol}")
         
         if self.ws:
             try:
                 self.ws.close()
             except Exception as e:
-                print(f"Error closing WebSocket: {e}")
+                logger.error(f"Error closing WebSocket: {e}")
             finally:
                 self.ws = None
         
         if self.ws_thread:
-            self.ws_thread.join(timeout=2)
+            # Explicitly join the thread for graceful termination
+            self.ws_thread.join(timeout=2) 
+            if self.ws_thread.is_alive():
+                logger.warning("WebSocket thread did not terminate gracefully.")
             self.ws_thread = None
             
         self.ws_connected = False
@@ -417,8 +386,8 @@ class DataLoader:
     def test_binance_connection(self):
         """Test if Binance API is reachable"""
         try:
-            response = requests.get("https://api.binance.com/api/v3/ping", timeout=5)
-            return response.status_code == 200
+            self.binance_public.fetch_time()
+            return True
         except Exception as e:
-            print(f"Binance connection test failed: {e}")
+            logger.error(f"Binance connection test failed: {e}")
             return False

@@ -60,9 +60,11 @@ class SimulatedBroker:
     Supports market/limit/stop orders, leverage, and PnL tracking.
     """
 
-    def __init__(self, initial_balance: float = 100000.0):
+    def __init__(self, initial_balance: float = 100000.0, market_fee: float = 0.001, limit_fee: float = 0.0005):
         self.initial_balance = initial_balance
         self.balance = initial_balance
+        self.market_fee = market_fee
+        self.limit_fee = limit_fee
         self.positions: Dict[str, Position] = {}
         self.orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
@@ -215,19 +217,27 @@ class SimulatedBroker:
         else:
             actual_fill_price = fill_price
 
-        # CALCULATE MAX AFFORDABLE QUANTITY
-        max_affordable_qty = self.balance / actual_fill_price if actual_fill_price > 0 else 0
+        # CALCULATE FEE
+        fee_rate = self.limit_fee if order.order_type == OrderType.LIMIT else self.market_fee
+        order_value = order.qty * actual_fill_price
+        fee_amount = order_value * fee_rate
+
+        # CALCULATE MAX AFFORDABLE QUANTITY (including fee)
+        # balance >= qty * price + qty * price * fee_rate
+        # balance >= qty * price * (1 + fee_rate)
+        # qty <= balance / (price * (1 + fee_rate))
+        max_affordable_qty = self.balance / (actual_fill_price * (1 + fee_rate)) if actual_fill_price > 0 else 0
         
         # For buys: use minimum of requested quantity and affordable quantity
         if order.side == OrderSide.BUY:
             executable_qty = min(order.qty, max_affordable_qty)
             if executable_qty <= 0:
-                print(f"   ❌ INSUFFICIENT FUNDS: Cannot afford any {order.symbol}")
+                print(f"   ❌ INSUFFICIENT FUNDS: Cannot afford any {order.symbol} (incl. fees)")
                 order.status = OrderStatus.REJECTED
                 return
             # If we can't execute full quantity, adjust the order
             if executable_qty < order.qty:
-                print(f"   ⚠️ Adjusting quantity: {order.qty} -> {executable_qty:.6f} (max affordable)")
+                print(f"   ⚠️ Adjusting quantity: {order.qty} -> {executable_qty:.6f} (max affordable incl. fees)")
                 order.qty = executable_qty
         else:
             # For sells: check if we have the position
@@ -239,17 +249,23 @@ class SimulatedBroker:
                     print(f"   ⚠️ Adjusting sell quantity: {order.qty} -> {executable_qty:.6f} (position size)")
                     order.qty = executable_qty
 
-        # Calculate required capital
+        # Calculate required capital and actual fee
         required_capital = executable_qty * actual_fill_price
-        if order.side == OrderSide.SELL:
-            required_capital *= -1  # Negative for sells (we receive money)
+        actual_fee = required_capital * fee_rate
+        
+        if order.side == OrderSide.BUY:
+            total_cost = required_capital + actual_fee
+        else:
+            # For sells, fee is deducted from proceeds
+            total_cost = -(required_capital - actual_fee)
 
         print(f"   Order: {order.side.value} {executable_qty:.6f} {order.symbol} @ ${actual_fill_price:.2f}")
-        print(f"   Required Capital: ${required_capital:.2f}")
+        print(f"   Fee: ${actual_fee:.2f} ({fee_rate*100:.4f}%)")
+        print(f"   Total Cost/Proceeds: ${abs(total_cost):.2f}")
 
         # Check if we have enough buying power (for buys)
-        if order.side == OrderSide.BUY and required_capital > self.balance:
-            print(f"   ❌ INSUFFICIENT FUNDS: Need ${required_capital:.2f}, Have ${self.balance:.2f}")
+        if order.side == OrderSide.BUY and total_cost > self.balance:
+            print(f"   ❌ INSUFFICIENT FUNDS: Need ${total_cost:.2f}, Have ${self.balance:.2f}")
             order.status = OrderStatus.REJECTED
             return
 
@@ -290,7 +306,7 @@ class SimulatedBroker:
 
         # Update balance
         old_balance = self.balance
-        self.balance -= required_capital
+        self.balance -= total_cost
         print(f"   Balance: ${old_balance:.2f} -> ${self.balance:.2f}")
 
         # Update order status

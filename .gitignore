@@ -1,1 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.idea/
+
+# Environment
+.env
+.env.example
 config/settings.py
+
+# Data/Logs
+logs/
+datasets/
+results/
+tensorboard_log/
+tmp_ddpg/
+trained_models/
+*.csv
+*.log
+
+# Models
+*.pt
+*.h5
+*.pkl
+
+# UI/Charts
+live_price_chart.html
