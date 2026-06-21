@@ -12,8 +12,8 @@ from stable_baselines3 import A2C, DDPG, PPO, SAC, TD3
 
 from finrl.config import INDICATORS, TRAINED_MODEL_DIR
 
-train = pd.read_csv('train_data.csv')
-trade = pd.read_csv('trade_data.csv')
+train = pd.read_csv('data/train_data.csv')
+trade = pd.read_csv('data/trade_data.csv')
 
 # If you are not using the data generated from part 1 of this tutorial, make sure
 # it has the columns and index in the form that could be make into the environment.

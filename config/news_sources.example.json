@@ -1,0 +1,15 @@
+{
+  "newsapi": {
+    "enabled": true
+  },
+  "gdelt": {
+    "enabled": true
+  },
+  "eventregistry": {
+    "enabled": true
+  },
+  "rss": {
+    "enabled": true,
+    "feeds": []
+  }
+}

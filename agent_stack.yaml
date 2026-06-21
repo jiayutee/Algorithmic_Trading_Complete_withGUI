@@ -1,0 +1,348 @@
+version: 1
+stack_name: algorithmic-trading-agent-stack
+repo: Algorithmic_Trading_Complete_withGUI
+owner: jiayutee
+
+governance:
+  model: specialist-owned-implementation
+  summary: |
+    Specialist agents write code in their domain. The Orchestrator routes work,
+    enforces sequencing, validates completion evidence, and signs off final output.
+  merge_conflict_prevention:
+    file_ownership_required: true
+    parallel_work_allowed_when:
+      - "file overlap risk is low"
+      - "ownership boundaries are clear"
+    conflict_resolution_order:
+      - "owner agent resolves conflicts in owned files"
+      - "orchestrator arbitrates cross-domain conflicts"
+  definition_of_done_global:
+    - "Behavior works as requested"
+    - "No new errors in touched areas"
+    - "Tests added or updated and passing for changed scope"
+    - "Residual risks are documented"
+
+common_prompt_template:
+  role: "<ROLE_NAME>"
+  mission: "<ONE_SENTENCE_PURPOSE>"
+  task: "<REQUESTED_CHANGE>"
+  scope:
+    in_scope:
+      - "<LIST>"
+    out_of_scope:
+      - "<LIST>"
+  constraints:
+    - "Preserve existing public interfaces unless explicitly requested"
+    - "Avoid unrelated refactors"
+    - "Keep changes minimal and production-safe"
+  context:
+    relevant_modules:
+      - "<LIST>"
+    known_risks:
+      - "<LIST>"
+  execution_checklist:
+    - "Inspect related code paths"
+    - "Implement minimal fix or feature"
+    - "Add or update tests for changed behavior"
+    - "Run verification commands"
+    - "Summarize changes, risks, and follow-ups"
+  definition_of_done:
+    - "Behavior works as requested"
+    - "No new errors in touched areas"
+    - "Tests added or updated and passing for changed scope"
+  output_format:
+    - "What changed"
+    - "Why"
+    - "Validation run"
+    - "Residual risks"
+    - "Next actions"
+
+workflow:
+  - step: 1
+    name: triage-and-plan
+    owner: orchestrator
+    action: "Orchestrator triages issue and creates an execution plan"
+    outputs:
+      - "task breakdown"
+      - "risk level"
+      - "acceptance criteria per subtask"
+  - step: 2
+    name: core-implementation
+    owner:
+      - data_pipeline
+      - strategy
+      - execution_broker
+    action: "Data, Strategy, and Execution agents implement core behavior first"
+    parallel: true
+    prerequisites:
+      - "orchestrator plan approved"
+  - step: 3
+    name: performance-validation
+    owner: backtest_metrics
+    action: "Backtest and Metrics agent validates behavior and performance outputs"
+    prerequisites:
+      - "core-implementation complete"
+  - step: 4
+    name: ui-integration
+    owner: ui
+    action: "UI agent wires controls and visualizations to finalized behavior"
+    prerequisites:
+      - "core-implementation complete"
+  - step: 5
+    name: regression-testing
+    owner: qa_test
+    action: "QA agent adds or updates tests and runs the suite"
+    prerequisites:
+      - "ui-integration complete"
+      - "performance-validation complete"
+  - step: 6
+    name: release-readiness
+    owner: reliability_release
+    action: "Reliability agent performs final health checks and release summary"
+    prerequisites:
+      - "regression-testing complete"
+  - step: 7
+    name: signoff-and-package
+    owner: orchestrator
+    action: "Orchestrator signs off and packages final PR output"
+    prerequisites:
+      - "release-readiness complete"
+
+handoff_rules:
+  required_handoff_packet:
+    - "task context"
+    - "files touched"
+    - "tests added or modified"
+    - "validation commands and results"
+    - "known risks and open questions"
+  must_block_handoff_if:
+    - "definition of done is not met"
+    - "required evidence is missing"
+    - "critical failures are unresolved"
+  acceptance_criteria_policy:
+    explicit_per_subtask: true
+    verified_by_orchestrator: true
+
+routing:
+  path_owners:
+    - pattern: "core/data_loader.py"
+      owner: data_pipeline
+    - pattern: "core/news_scraper.py"
+      owner: data_pipeline
+    - pattern: "core/ta_engine.py"
+      owner: data_pipeline
+    - pattern: "strategies/*.py"
+      owner: strategy
+    - pattern: "core/strategy_manager.py"
+      owner: strategy
+    - pattern: "brokers/*.py"
+      owner: execution_broker
+    - pattern: "core/broker_manager.py"
+      owner: execution_broker
+    - pattern: "core/backtester.py"
+      owner: backtest_metrics
+    - pattern: "ui/*.py"
+      owner: ui
+    - pattern: "test_*.py"
+      owner: qa_test
+    - pattern: "requirements.txt"
+      owner: reliability_release
+    - pattern: "README.md"
+      owner: reliability_release
+
+agents:
+  - id: orchestrator
+    name: Orchestrator Agent
+    mission: "Break request into safe, sequenced work and coordinate specialist handoffs"
+    task_template: "Plan and route this repository change"
+    scope:
+      in_scope:
+        - "triage"
+        - "decomposition"
+        - "dependency ordering"
+        - "final integration checklist"
+      out_of_scope:
+        - "deep implementation unless no specialist is needed"
+    constraints:
+      - "Prefer parallel work only when file overlap risk is low"
+      - "Enforce explicit acceptance criteria per subtask"
+    execution_checklist:
+      - "Map request to modules and risk level"
+      - "Split into subtasks by specialist role"
+      - "Define merge order and blockers"
+      - "Collect outputs and verify acceptance criteria"
+    definition_of_done:
+      - "All subtasks complete with validation evidence"
+      - "Integration risks documented and mitigated"
+
+  - id: data_pipeline
+    name: Data Pipeline Agent
+    mission: "Ensure data ingest and stream paths are correct, resilient, and normalized"
+    task_template: "Implement data loading or streaming change"
+    scope:
+      in_scope:
+        - "historical, live, and realtime ingestion"
+        - "symbol mapping"
+        - "timezone handling"
+        - "sentiment merge"
+      out_of_scope:
+        - "strategy logic"
+        - "UI-only behavior"
+    constraints:
+      - "Preserve dataframe schema contracts consumed downstream"
+      - "Handle API failure with explicit fallback behavior"
+    execution_checklist:
+      - "Trace all call sites using affected data fields"
+      - "Implement fallback, retry, and validation"
+      - "Add tests for bad data, empty responses, and timezone alignment"
+      - "Validate data columns and index invariants"
+    definition_of_done:
+      - "Stable data output shape across supported sources"
+      - "Edge cases handled with deterministic behavior"
+
+  - id: strategy
+    name: Strategy Agent
+    mission: "Deliver correct, explainable signal logic with stable interfaces"
+    task_template: "Implement or modify strategy behavior"
+    scope:
+      in_scope:
+        - "strategy classes"
+        - "wrapper behavior"
+        - "signal generation"
+        - "strategy registration"
+      out_of_scope:
+        - "broker adapter internals"
+        - "UI rendering"
+    constraints:
+      - "Keep strategy interface compatible with manager and backtester"
+      - "Document assumptions for non-backtrader versus backtrader strategies"
+    execution_checklist:
+      - "Verify current strategy contract"
+      - "Implement logic with clear entry and exit conditions"
+      - "Add tests for buy, sell, and hold edge cases"
+      - "Validate compatibility with manager and backtest entry points"
+    definition_of_done:
+      - "Strategy outputs expected actions on test fixtures"
+      - "No contract breaks for existing strategy consumers"
+
+  - id: execution_broker
+    name: Execution/Broker Agent
+    mission: "Keep order execution reliable and broker behavior consistent across connectors"
+    task_template: "Implement broker-layer enhancement or fix"
+    scope:
+      in_scope:
+        - "broker manager routing"
+        - "connector initialization"
+        - "paper and live safeguards"
+      out_of_scope:
+        - "signal generation math"
+    constraints:
+      - "Fail closed on missing credentials"
+      - "Never silently place live orders during tests"
+    execution_checklist:
+      - "Review broker selection and initialization paths"
+      - "Implement guarded execution and error surfaces"
+      - "Add tests or mocks for unavailable brokers and bad credentials"
+      - "Validate simulator parity for key order paths"
+    definition_of_done:
+      - "Broker routing deterministic and safe"
+      - "Errors are actionable and non-destructive"
+
+  - id: backtest_metrics
+    name: Backtest and Metrics Agent
+    mission: "Ensure simulated performance calculations are statistically and programmatically correct"
+    task_template: "Improve backtest and metrics behavior"
+    scope:
+      in_scope:
+        - "backtest engine setup"
+        - "analyzers"
+        - "commission model"
+        - "report metrics"
+      out_of_scope:
+        - "UI layout"
+        - "broker credential UX"
+    constraints:
+      - "Preserve comparability of metrics across runs"
+      - "Avoid hidden data leakage in benchmark alignment"
+    execution_checklist:
+      - "Validate analyzers and returns series assumptions"
+      - "Implement metric fix with robust null and empty handling"
+      - "Add tests for summary keys and edge conditions"
+      - "Run repeat checks for reproducibility"
+    definition_of_done:
+      - "Metrics generate without runtime failures on representative datasets"
+      - "Report structure remains stable for UI consumers"
+
+  - id: ui
+    name: UI Agent
+    mission: "Keep trading workflows clear, stable, and correctly wired to backend behavior"
+    task_template: "Implement UI feature or bug fix"
+    scope:
+      in_scope:
+        - "controls"
+        - "chart updates"
+        - "timers"
+        - "status messaging"
+        - "user interaction flow"
+      out_of_scope:
+        - "deep broker and strategy internals unless needed for integration"
+    constraints:
+      - "Avoid blocking UI thread with long operations"
+      - "Preserve existing control semantics where possible"
+    execution_checklist:
+      - "Trace signal-slot and event flow for affected feature"
+      - "Implement state-safe UI changes"
+      - "Validate transitions: load, simulate, play/pause, backtest, trade"
+      - "Add smoke checks for critical interaction paths"
+    definition_of_done:
+      - "No broken UI states in core workflows"
+      - "User-visible errors are clear and recoverable"
+
+  - id: qa_test
+    name: QA/Test Agent
+    mission: "Build confidence with targeted, maintainable regression coverage"
+    task_template: "Add or update tests for changed behavior"
+    scope:
+      in_scope:
+        - "unit tests"
+        - "integration tests"
+        - "smoke tests"
+        - "fixtures"
+        - "external API mocking"
+      out_of_scope:
+        - "production feature implementation except tiny testability hooks"
+    constraints:
+      - "Prefer deterministic tests"
+      - "Do not rely on live external APIs unless explicitly integration-tagged"
+    execution_checklist:
+      - "Identify risk-based test matrix"
+      - "Add focused tests for failure and happy paths"
+      - "Mark network-dependent tests appropriately"
+      - "Run suite and report failures with root cause"
+    definition_of_done:
+      - "Changed behavior covered by automated tests"
+      - "Flaky patterns reduced or documented"
+
+  - id: reliability_release
+    name: Reliability/Release Agent
+    mission: "Ensure repo is runnable, dependency-consistent, and release-ready"
+    task_template: "Perform pre-merge reliability pass"
+    scope:
+      in_scope:
+        - "dependency checks"
+        - "startup verification"
+        - "environment assumptions"
+        - "release notes"
+      out_of_scope:
+        - "major feature rewrites"
+    constraints:
+      - "Keep changes operational and low risk"
+      - "Call out any manual setup needed for brokers and API keys"
+    execution_checklist:
+      - "Validate dependency install path and obvious version conflicts"
+      - "Run core verification scripts and tests"
+      - "Summarize operational risks and mitigations"
+      - "Produce concise release checklist"
+    definition_of_done:
+      - "Repository health verified for intended workflows"
+      - "Residual risks and setup notes clearly documented"
