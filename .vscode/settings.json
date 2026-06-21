@@ -1,0 +1,10 @@
+{
+    "chat.mcp.serverSampling": {
+        "Algorithmic_Trading_Complete_withGUI/.vscode/mcp.json: duckduckgo-search": {
+            "allowedModels": [
+                "copilot/auto",
+                "copilotcli/claude-haiku-4.5"
+            ]
+        }
+    }
+}

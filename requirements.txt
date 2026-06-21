@@ -1,6 +1,7 @@
 # UI
 PyQt5
 PyQtWebEngine
+streamlit
 
 # Data and ML
 pandas
@@ -21,6 +22,7 @@ yfinance
 backtrader
 python-binance
 ccxt
+alpaca-py
 alpaca-trade-api
 ib-insync
 ta

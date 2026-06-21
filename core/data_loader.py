@@ -6,10 +6,11 @@ import websocket
 import json
 import threading
 import time
+import os
 from datetime import datetime, timedelta
 from queue import Queue
 import requests
-from core.news_scraper import scrape_and_analyze_finviz_news
+from core.news_pipeline import get_default_news_pipeline
 from core.logger import logger
 
 class DataLoader:
@@ -54,6 +55,7 @@ class DataLoader:
         self.ws_connected = False
         self.ws = None
         self._callback = None
+        self.news_pipeline = get_default_news_pipeline()
 
     def load_data(self, symbol, source="Historical", live=False, days=365, interval='1d'):
         """
@@ -78,34 +80,35 @@ class DataLoader:
         else:
             df = self._get_historical_data(symbol, days, interval)
 
-        # News sentiment integration
-        logger.info(f"Fetching news sentiment for {symbol}...")
+        # News and event feature integration
+        logger.info(f"Fetching news and event features for {symbol}...")
         try:
-            news_df = scrape_and_analyze_finviz_news(symbol)
+            news_df = self.news_pipeline.fetch_news_dataframe(symbol)
             if not news_df.empty:
-                news_df['datetime'] = pd.to_datetime(news_df['datetime'])
-                news_df['datetime'] = news_df['datetime'].dt.tz_localize('UTC')
-                news_df.set_index('datetime', inplace=True)
-
-                if df.index.tz is None:
-                    df.index = df.index.tz_localize('UTC')
-                else:
-                    df.index = df.index.tz_convert('UTC')
-
-                df = pd.merge_asof(df.sort_index(), news_df[['positive', 'negative', 'neutral']],
-                                  left_index=True, right_index=True, direction='backward')
-                df[['positive', 'negative', 'neutral']] = df[['positive', 'negative', 'neutral']].ffill().fillna(0)
-                logger.info("News sentiment data merged successfully.")
+                df = self.news_pipeline.merge_features_into_prices(df, news_df, interval=interval)
+                logger.info("News sentiment and event features merged successfully.")
             else:
-                df['positive'] = 0
-                df['negative'] = 0
-                df['neutral'] = 0
-                logger.info("No news sentiment data found.")
+                feature_columns = [
+                    'positive', 'negative', 'neutral', 'sentiment_confidence', 'sentiment_balance',
+                    'sentiment_magnitude', 'impact_score', 'source_reliability', 'news_count',
+                    'headline_count', 'source_count', 'news_flow_ratio', 'event_earnings',
+                    'event_guidance', 'event_mna', 'event_analyst', 'event_macro', 'event_regulatory',
+                    'event_product', 'event_litigation', 'event_dividend', 'event_general'
+                ]
+                for column in feature_columns:
+                    if column not in df.columns:
+                        df[column] = 0
+                logger.info("No news and event data found.")
         except Exception as e:
-            logger.error(f"Error fetching news sentiment: {e}")
-            df['positive'] = 0
-            df['negative'] = 0
-            df['neutral'] = 0
+            logger.error(f"Error fetching news and event data: {e}")
+            for column in [
+                'positive', 'negative', 'neutral', 'sentiment_confidence', 'sentiment_balance',
+                'sentiment_magnitude', 'impact_score', 'source_reliability', 'news_count',
+                'headline_count', 'source_count', 'news_flow_ratio', 'event_earnings',
+                'event_guidance', 'event_mna', 'event_analyst', 'event_macro', 'event_regulatory',
+                'event_product', 'event_litigation', 'event_dividend', 'event_general'
+            ]:
+                df[column] = 0
 
         return df
 
@@ -213,31 +216,103 @@ class DataLoader:
 
     def _get_yahoo_historical(self, symbol, days, interval):
         """Get historical data from Yahoo Finance"""
-        if interval in ['1m', '5m', '15m', '30m']:
-            # Yahoo might support some minute data effectively only for recent 7 or 60 days depending on interval
-            logger.warning(f"Yahoo Finance support for {interval} is limited/unreliable.")
+        # Normalize interval aliases
+        if interval == '1h':
+            interval = '60m'
 
-        valid_intervals = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo']
+        # Minute-level intervals where Yahoo restricts historical range
+        minute_intervals = {'1m', '2m', '5m', '15m', '30m', '60m'}
+
+        # Cap days for intraday/minute intervals (Yahoo limits intraday history)
+        capped_days = days
+        if interval in minute_intervals:
+            max_intraday_days = int(os.getenv('YAHOO_INTRADAY_MAX_DAYS', '7'))
+            if days > max_intraday_days:
+                logger.warning(
+                    "Requested %sd of intraday %s data; capping to %sd because Yahoo Finance limits intraday history",
+                    days,
+                    interval,
+                    max_intraday_days,
+                )
+                capped_days = max_intraday_days
+
+        valid_intervals = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1d', '5d', '1wk', '1mo', '3mo']
         if interval not in valid_intervals:
-             # Map some common formats if necessary
-            if interval == '1h': interval = '60m'
-            else: interval = '1d'
+            interval = '1d'
 
-        logger.info(f"Downloading Yahoo Finance data: {symbol}, period={days}d, interval={interval}")
-        df = yf.download(symbol, period=f"{days}d", interval=interval, progress=False)
-        
+        logger.info(f"Downloading Yahoo Finance data: {symbol}, period={capped_days}d, interval={interval}")
+        df = yf.download(symbol, period=f"{capped_days}d", interval=interval, progress=False)
+
+        # Drop the extra level when Yahoo returns a MultiIndex (Adj Close level)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.droplevel(1)
+
+        # If download returned no rows, return an empty OHLCV-shaped DataFrame
+        if df.empty:
+            empty = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume'])
+            empty.index.name = 'Datetime'
+            logger.info(f"Yahoo Finance returned empty DataFrame for {symbol}")
+            return empty
+
+        # If the index is already a DatetimeIndex, normalize/coerce to datetime64[ns]
+        if isinstance(df.index, pd.DatetimeIndex) or pd.api.types.is_datetime64_any_dtype(df.index):
+            try:
+                df.index = pd.to_datetime(df.index)
+            except Exception:
+                df.index = pd.to_datetime(df.index.astype(str), errors='coerce')
+
+            df.index.name = 'Datetime'
+            logger.info(f"Yahoo Finance historical data loaded: {len(df)} candles for {symbol} (index is DatetimeIndex)")
+            return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+
+        # Otherwise, reset index and attempt to locate a datetime-like column
         df = df.reset_index()
-        
-        # Yahoo Finance column names vary slightly often ('Date' vs 'Datetime')
-        if 'Date' in df.columns:
-            df['Datetime'] = pd.to_datetime(df['Date'])
-        elif 'Datetime' in df.columns:
-            df['Datetime'] = pd.to_datetime(df['Datetime'])
-            
+
+        datetime_col = None
+
+        # Prefer columns with explicit datetime dtype
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col].dtype):
+                datetime_col = col
+                break
+
+        # Next, look for likely name matches
+        if datetime_col is None:
+            for col in df.columns:
+                if 'date' in str(col).lower() or 'time' in str(col).lower():
+                    datetime_col = col
+                    break
+
+        # Try parsing the first column as a last resort
+        if datetime_col is None and len(df.columns) > 0:
+            first_col = df.columns[0]
+            parsed = pd.to_datetime(df[first_col], errors='coerce')
+            if not parsed.isna().all():
+                datetime_col = first_col
+
+        if datetime_col is None:
+            raise KeyError(
+                f"Could not determine a datetime column in Yahoo download for {symbol}. "
+                f"Columns: {list(df.columns)}. Provide a column named like 'Date'/'Datetime' or ensure the first column is parseable as datetime."
+            )
+
+        # Coerce to datetime and drop NA datetimes
+        df['Datetime'] = pd.to_datetime(df[datetime_col], errors='coerce')
+        before = len(df)
+        df = df.dropna(subset=['Datetime'])
+        dropped = before - len(df)
+        if dropped:
+            logger.info(f"Dropped {dropped} rows with non-parseable Datetime for {symbol}")
+
+        if df.empty:
+            empty = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume'])
+            empty.index.name = 'Datetime'
+            logger.info(f"All rows dropped after parsing Datetime for {symbol}; returning empty DataFrame")
+            return empty
+
         df.set_index('Datetime', inplace=True)
-        logger.info(f"Yahoo Finance historical data loaded: {len(df)} candles for {symbol}")
+        df.index.name = 'Datetime'
+        logger.info(f"Yahoo Finance historical data loaded: {len(df)} candles for {symbol} (datetime column: {datetime_col})")
         return df[['Open', 'High', 'Low', 'Close', 'Volume']]
 
     def _get_recent_data(self, symbol, days, interval='1d'):

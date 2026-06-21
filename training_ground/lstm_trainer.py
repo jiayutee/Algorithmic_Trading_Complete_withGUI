@@ -18,7 +18,7 @@ def create_sequences(data, sequence_length):
 
 def train_lstm_model(ticker='AAPL', sequence_length=60, epochs=50, batch_size=32):
     # Load data
-    df = pd.read_csv('/Users/jiayutee/Dev/Projects/Algorithmic_Trading_Complete_withGUI/training_ground/train_data.csv', parse_dates=['date'])
+    df = pd.read_csv('data/train_data.csv', parse_dates=['date'])
     df = df[df['tic'] == ticker].copy()
     df.set_index('date', inplace=True)
     df.sort_index(inplace=True)
@@ -64,8 +64,8 @@ def train_lstm_model(ticker='AAPL', sequence_length=60, epochs=50, batch_size=32
                         callbacks=[early_stopping],
                         verbose=1)
 
-    # Save model and scaler
-    model_dir = '/Users/jiayutee/Dev/Projects/Algorithmic_Trading_Complete_withGUI/trained_models'
+    # Save model and scaler (relative to repository)
+    model_dir = os.path.join(os.getcwd(), 'trained_models')
     os.makedirs(model_dir, exist_ok=True)
     model.save(os.path.join(model_dir, f'lstm_model_{ticker}.h5'))
     joblib.dump(scaler, os.path.join(model_dir, f'scaler_{ticker}.pkl'))

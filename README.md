@@ -54,6 +54,36 @@ Realtime Stream - WebSocket streaming
 
 FinRL-Yahoo - Enhanced financial datasets
 
+🗞 News & Sentiment
+Multi-source news ingestion with NewsAPI, GDELT, EventRegistry, and RSS feeds
+
+Headline sentiment scoring with FinBERT when available and a deterministic fallback when offline
+
+Canonical news/event features merged into price data for strategy use
+
+Event classification for earnings, guidance, M&A, analyst actions, macro, regulatory, product, litigation, and dividend headlines
+
+### Configure the news sources
+Store your secret keys in `.env` for local development, or add them as Codespaces secrets. `app.py` calls `load_dotenv()`, so the values are loaded before `config/settings.py` reads them with `os.getenv()`.
+
+Set these environment variables before running the app:
+
+```bash
+export NEWSAPI_API_KEY="your_newsapi_key"
+export EVENTREGISTRY_API_KEY="your_eventregistry_key"   # optional
+export RSS_FEEDS="https://example.com/feed.xml,https://example.org/rss"
+export NEWS_SENTIMENT_MODEL="ProsusAI/finbert"          # optional
+```
+
+`NEWSAPI_API_KEY` is required for NewsAPI, `EVENTREGISTRY_API_KEY` is optional, and `RSS_FEEDS` can contain one or more public feed URLs separated by commas.
+
+### Free MCPs already available in `.vscode/mcp.json`
+- `duckduckgo-search` for discovery and lightweight search.
+- `firecrawl/firecrawl-mcp-server` for extraction and structured scraping.
+- `io.github.tavily-ai/tavily-mcp` for search and page retrieval.
+
+Those MCPs are useful when you want to discover article URLs, scrape article pages, or enrich event coverage before feeding it into the local pipeline.
+
 🎮 Simulation & Backtesting
 Historical Simulation - Walk-forward analysis
 
