@@ -11,7 +11,7 @@ from finrl.config import INDICATORS, TRAINED_MODEL_DIR, RESULTS_DIR
 check_and_make_directories([TRAINED_MODEL_DIR])
 
 #Read data
-train = pd.read_csv('train_data.csv')
+train = pd.read_csv('data/train_data.csv')
 
 # If you are not using the data generated from part 1 of this tutorial, make sure
 # it has the columns and index in the form that could be make into the environment.

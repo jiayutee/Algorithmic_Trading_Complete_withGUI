@@ -62,5 +62,5 @@ print(processed_full_train.head())
 print(f"Training data length: {len(processed_full_train)}")
 print(f"Trading data length: {len(processed_full_trade)}")
 
-processed_full_train.to_csv('train_data.csv', index=False)
-processed_full_trade.to_csv('trade_data.csv', index=False)
+processed_full_train.to_csv('data/train_data.csv', index=False)
+processed_full_trade.to_csv('data/trade_data.csv', index=False)

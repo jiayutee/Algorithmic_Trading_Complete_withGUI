@@ -381,9 +381,9 @@ def main():
     plt.show()
 
     # Save key outputs
-    pd.Series(asset_values, index=test_df.index[:len(asset_values)]).to_csv("ddpg_asset_values_test.csv")
+    pd.Series(asset_values, index=test_df.index[:len(asset_values)]).to_csv("artifacts/ddpg_asset_values_test.csv")
     if len(per_trade_pnl) > 0:
-        pd.Series(per_trade_pnl).to_csv("ddpg_per_trade_pnl_test.csv")
+        pd.Series(per_trade_pnl).to_csv("artifacts/ddpg_per_trade_pnl_test.csv")
     print("Saved outputs to CSV.")
 
 
