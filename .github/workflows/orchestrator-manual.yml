@@ -8,7 +8,7 @@ on:
         required: true
         default: "task"
         type: choice
-        options: [morning, midday, evening, task]
+        options: [morning, progress, evening, task]
       prompt:
         description: "What should the orchestrator do? (used when run_type=task)"
         required: false
@@ -55,8 +55,8 @@ jobs:
 
           if [ "$TYPE" = "morning" ]; then
             echo "text=RUN_TYPE=morning. Manual trigger of 6am morning brief for Day ${DAY_N}/30. Follow the Morning Brief procedure in your agent definition." >> "$GITHUB_OUTPUT"
-          elif [ "$TYPE" = "midday" ]; then
-            echo "text=RUN_TYPE=midday. Manual trigger of 12pm midday pulse for Day ${DAY_N}/30. Follow the Midday Pulse procedure." >> "$GITHUB_OUTPUT"
+          elif [ "$TYPE" = "progress" ]; then
+            echo "text=RUN_TYPE=progress. Manual progress update for Day ${DAY_N}/30. Check Sprint Board, triage blockers, send Telegram progress message." >> "$GITHUB_OUTPUT"
           elif [ "$TYPE" = "evening" ]; then
             echo "text=RUN_TYPE=evening. Manual trigger of 8pm EOD debrief for Day ${DAY_N}/30. Follow the Evening Debrief procedure." >> "$GITHUB_OUTPUT"
           else
@@ -67,7 +67,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: "51218456"
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
           NEWSAPI_API_KEY: ${{ secrets.NEWSAPI_API_KEY }}
           OPENBB_NEWS_PROVIDER: "yfinance"

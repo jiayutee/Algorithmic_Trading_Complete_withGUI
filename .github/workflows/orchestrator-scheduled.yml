@@ -1,14 +1,24 @@
 name: Orchestrator – Scheduled
 
-# SGT = UTC+8
-# 6am  SGT = 22:00 UTC (previous day)
+# All times SGT (UTC+8). Morning: 22:00 UTC prev-day. Others: same UTC day.
+# 6am  SGT = 22:00 UTC (Sun–Thu → Mon–Fri SGT)
+# 8am  SGT = 00:00 UTC
+# 10am SGT = 02:00 UTC
 # 12pm SGT = 04:00 UTC
+# 2pm  SGT = 06:00 UTC
+# 4pm  SGT = 08:00 UTC
+# 6pm  SGT = 10:00 UTC
 # 8pm  SGT = 12:00 UTC
 on:
   schedule:
-    - cron: "0 22 * * 0-4"   # 6am SGT Mon–Fri (morning brief)
-    - cron: "0 4  * * 1-5"   # 12pm SGT Mon–Fri (midday pulse)
-    - cron: "0 12 * * 1-5"   # 8pm SGT Mon–Fri (EOD debrief)
+    - cron: "0 22 * * 0-4"   # 6am  SGT Mon–Fri — morning brief
+    - cron: "0 0  * * 1-5"   # 8am  SGT Mon–Fri — progress update
+    - cron: "0 2  * * 1-5"   # 10am SGT Mon–Fri — progress update
+    - cron: "0 4  * * 1-5"   # 12pm SGT Mon–Fri — progress update
+    - cron: "0 6  * * 1-5"   # 2pm  SGT Mon–Fri — progress update
+    - cron: "0 8  * * 1-5"   # 4pm  SGT Mon–Fri — progress update
+    - cron: "0 10 * * 1-5"   # 6pm  SGT Mon–Fri — progress update
+    - cron: "0 12 * * 1-5"   # 8pm  SGT Mon–Fri — EOD debrief
   workflow_dispatch:
     inputs:
       run_type:
@@ -16,7 +26,7 @@ on:
         required: true
         default: "morning"
         type: choice
-        options: [morning, midday, evening, task]
+        options: [morning, progress, evening, task]
       task_prompt:
         description: "Custom task prompt (only used when run_type=task)"
         required: false
@@ -57,13 +67,11 @@ jobs:
             echo "type=${{ github.event.inputs.run_type }}" >> "$GITHUB_OUTPUT"
           else
             HOUR=$(date -u +%H)
-            if [ "$HOUR" = "22" ] || [ "$HOUR" = "23" ]; then
-              echo "type=morning" >> "$GITHUB_OUTPUT"
-            elif [ "$HOUR" = "04" ] || [ "$HOUR" = "05" ]; then
-              echo "type=midday" >> "$GITHUB_OUTPUT"
-            else
-              echo "type=evening" >> "$GITHUB_OUTPUT"
-            fi
+            case "$HOUR" in
+              22|23) echo "type=morning"   >> "$GITHUB_OUTPUT" ;;  # 6am SGT
+              12)    echo "type=evening"   >> "$GITHUB_OUTPUT" ;;  # 8pm SGT
+              *)     echo "type=progress"  >> "$GITHUB_OUTPUT" ;;  # every other 2h slot
+            esac
           fi
 
       - name: Build prompt
@@ -74,12 +82,14 @@ jobs:
           DAYS=$(python3 -c "from datetime import date; print((date(2026,7,28)-date.today()).days)" 2>/dev/null || echo "?")
           DAY_N=$(python3 -c "from datetime import date; print(max(1, 30-(date(2026,7,28)-date.today()).days+1))" 2>/dev/null || echo "?")
 
+          SGT_HOUR=$(python3 -c "from datetime import datetime, timezone, timedelta; print((datetime.now(timezone.utc)+timedelta(hours=8)).strftime('%I:%M%p'))" 2>/dev/null || echo "?")
+
           if [ "$TYPE" = "morning" ]; then
-            PROMPT="RUN_TYPE=morning. This is the 6am SGT morning brief for Day ${DAY_N}/30 of the AlgoTrader launch sprint (${DAYS} days to launch on 2026-07-28). Follow the Morning Brief procedure in your agent definition exactly: read yesterday's carry-forwards from Notion, plan today's agenda, assign tasks to specialist agents, create today's Daily Log row, add Sprint Board tasks, send the Telegram morning brief, then spawn the specialist agents."
-          elif [ "$TYPE" = "midday" ]; then
-            PROMPT="RUN_TYPE=midday. This is the 12pm SGT midday pulse for Day ${DAY_N}/30. Follow the Midday Pulse procedure: check Sprint Board progress, update the Daily Log Midday Update field, triage any blocked tasks, send the Telegram midday update."
+            PROMPT="RUN_TYPE=morning. 6am SGT morning brief for Day ${DAY_N}/30 (${DAYS} days to launch). Follow the Morning Brief procedure: read yesterday's Notion carry-forwards, plan today's agenda, assign tasks to specialist agents, create today's Daily Log row, add Sprint Board tasks, send Telegram morning brief, then spawn specialist agents."
+          elif [ "$TYPE" = "progress" ]; then
+            PROMPT="RUN_TYPE=progress. ${SGT_HOUR} SGT progress update for Day ${DAY_N}/30. Check the Sprint Board for task statuses (Done/In Progress/Blocked). Triage any newly blocked tasks. Send a concise Telegram progress message in this format: '⏱ AlgoTrader ${SGT_HOUR} update | Day ${DAY_N}/30\n✅ Done: N | 🔄 In progress: N | 🔴 Blocked: N\n<one sentence on biggest risk or win>'. Update Notion Daily Log only if there is something new to report."
           elif [ "$TYPE" = "evening" ]; then
-            PROMPT="RUN_TYPE=evening. This is the 8pm SGT EOD debrief for Day ${DAY_N}/30. Follow the Evening Debrief procedure: collect agent outcomes, update Issue Tracker for any blockers, update today's Daily Log (Done Today, Blockers, Carry Forward, Commits, Status→Done), update the Launch Roadmap checklist percentages, update Agent Status Board, send the Telegram EOD debrief."
+            PROMPT="RUN_TYPE=evening. 8pm SGT EOD debrief for Day ${DAY_N}/30. Follow the Evening Debrief procedure: collect agent outcomes from Sprint Board, update Issue Tracker for blockers, update today's Daily Log (Done Today, Blockers, Carry Forward, Commits, Status→Done), update Launch Roadmap checklist percentages, update Agent Status Board, send Telegram EOD debrief."
           elif [ -n "$CUSTOM" ]; then
             PROMPT="RUN_TYPE=task. $CUSTOM"
           else
@@ -91,7 +101,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: "51218456"
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
           NEWSAPI_API_KEY: ${{ secrets.NEWSAPI_API_KEY }}
           OPENBB_NEWS_PROVIDER: "yfinance"
