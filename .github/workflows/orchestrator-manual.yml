@@ -1,16 +1,22 @@
-name: Orchestrator – Manual Trigger
+name: Orchestrator – Manual
 
 on:
   workflow_dispatch:
     inputs:
-      prompt:
-        description: "What should the orchestrator do? (plain English)"
+      run_type:
+        description: "Cycle type"
         required: true
-        default: "Review the current state of the project and produce a status report."
-      max_turns:
-        description: "Max agent turns (default 50, increase for complex tasks)"
+        default: "task"
+        type: choice
+        options: [morning, midday, evening, task]
+      prompt:
+        description: "What should the orchestrator do? (used when run_type=task)"
         required: false
-        default: "50"
+        default: "Review current project state and produce a status report."
+      max_turns:
+        description: "Max agent turns (default 80)"
+        required: false
+        default: "80"
 
 permissions:
   contents: write
@@ -19,7 +25,7 @@ permissions:
 
 jobs:
   orchestrate:
-    name: Orchestrator (manual)
+    name: Orchestrator (manual — ${{ github.event.inputs.run_type }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -40,29 +46,48 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt --quiet || true
 
+      - name: Build prompt
+        id: prompt
+        run: |
+          TYPE="${{ github.event.inputs.run_type }}"
+          DAYS=$(python3 -c "from datetime import date; print((date(2026,7,28)-date.today()).days)" 2>/dev/null || echo "?")
+          DAY_N=$(python3 -c "from datetime import date; print(max(1, 30-(date(2026,7,28)-date.today()).days+1))" 2>/dev/null || echo "?")
+
+          if [ "$TYPE" = "morning" ]; then
+            echo "text=RUN_TYPE=morning. Manual trigger of 6am morning brief for Day ${DAY_N}/30. Follow the Morning Brief procedure in your agent definition." >> "$GITHUB_OUTPUT"
+          elif [ "$TYPE" = "midday" ]; then
+            echo "text=RUN_TYPE=midday. Manual trigger of 12pm midday pulse for Day ${DAY_N}/30. Follow the Midday Pulse procedure." >> "$GITHUB_OUTPUT"
+          elif [ "$TYPE" = "evening" ]; then
+            echo "text=RUN_TYPE=evening. Manual trigger of 8pm EOD debrief for Day ${DAY_N}/30. Follow the Evening Debrief procedure." >> "$GITHUB_OUTPUT"
+          else
+            echo "text=RUN_TYPE=task. ${{ github.event.inputs.prompt }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run Orchestrator
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
           NEWSAPI_API_KEY: ${{ secrets.NEWSAPI_API_KEY }}
           OPENBB_NEWS_PROVIDER: "yfinance"
           OPENBB_EQUITY_PROVIDER: "yfinance"
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
         run: |
           claude \
             --agent orchestrator \
             --non-interactive \
             --output-format json \
             --max-turns "${{ github.event.inputs.max_turns }}" \
-            -p "${{ github.event.inputs.prompt }}" \
+            -p "${{ steps.prompt.outputs.text }}" \
             2>&1 | tee orchestrator-output.json
 
       - name: Post summary
         if: always()
         run: |
-          echo "## Orchestrator — Manual Run" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Prompt:** ${{ github.event.inputs.prompt }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Orchestrator Manual — ${{ github.event.inputs.run_type }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Prompt:** ${{ steps.prompt.outputs.text }}" >> "$GITHUB_STEP_SUMMARY"
           if [ -f orchestrator-output.json ]; then
             python3 -c "
           import json
@@ -77,8 +102,8 @@ jobs:
                       print(content[:6000])
                       break
           except Exception as e:
-              print(f'Could not parse output: {e}')
-          " >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || cat orchestrator-output.json | tail -80 >> "$GITHUB_STEP_SUMMARY"
+              print(f'Parse error: {e}')
+          " >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || tail -80 orchestrator-output.json >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload artifact

@@ -1,16 +1,24 @@
-name: Orchestrator – Scheduled Run
+name: Orchestrator – Scheduled
 
+# SGT = UTC+8
+# 6am  SGT = 22:00 UTC (previous day)
+# 12pm SGT = 04:00 UTC
+# 8pm  SGT = 12:00 UTC
 on:
   schedule:
-    # Runs every day at 08:00 UTC (4am ET / 9am SGT).
-    # Adjust the cron expression to match your preferred schedule:
-    #   "0 8 * * 1-5"  → weekdays only at 08:00 UTC
-    #   "0 */6 * * *"  → every 6 hours
-    - cron: "0 8 * * 1-5"
+    - cron: "0 22 * * 0-4"   # 6am SGT Mon–Fri (morning brief)
+    - cron: "0 4  * * 1-5"   # 12pm SGT Mon–Fri (midday pulse)
+    - cron: "0 12 * * 1-5"   # 8pm SGT Mon–Fri (EOD debrief)
   workflow_dispatch:
     inputs:
-      prompt:
-        description: "Override prompt sent to orchestrator (leave blank for default)"
+      run_type:
+        description: "Which cycle to run"
+        required: true
+        default: "morning"
+        type: choice
+        options: [morning, midday, evening, task]
+      task_prompt:
+        description: "Custom task prompt (only used when run_type=task)"
         required: false
         default: ""
 
@@ -21,9 +29,9 @@ permissions:
 
 jobs:
   orchestrate:
-    name: Run Orchestrator Agent
+    name: Orchestrator (${{ github.event.inputs.run_type || 'scheduled' }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -42,44 +50,71 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt --quiet || true
 
-      - name: Build orchestrator prompt
-        id: prompt
+      - name: Determine run type from schedule
+        id: run_type
         run: |
-          OVERRIDE="${{ github.event.inputs.prompt }}"
-          if [ -n "$OVERRIDE" ]; then
-            echo "text=$OVERRIDE" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ github.event.inputs.run_type }}" ]; then
+            echo "type=${{ github.event.inputs.run_type }}" >> "$GITHUB_OUTPUT"
           else
-            PROMPT="Perform the daily orchestration run for the Algorithmic Trading project. Review recent git log (last 24 hours), identify any failing tests or open issues, check that all agents (data-pipeline, strategy, execution-broker, backtest-metrics, ui, qa-test, reliability-release) are in a healthy state, flag anything that needs human review, and produce a concise status report. Only ask for human input if something is genuinely unclear or blocked."
-            echo "text=$PROMPT" >> "$GITHUB_OUTPUT"
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" = "22" ] || [ "$HOUR" = "23" ]; then
+              echo "type=morning" >> "$GITHUB_OUTPUT"
+            elif [ "$HOUR" = "04" ] || [ "$HOUR" = "05" ]; then
+              echo "type=midday" >> "$GITHUB_OUTPUT"
+            else
+              echo "type=evening" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
-      - name: Run Orchestrator via Claude Code
+      - name: Build prompt
+        id: prompt
+        run: |
+          TYPE="${{ steps.run_type.outputs.type }}"
+          CUSTOM="${{ github.event.inputs.task_prompt }}"
+          DAYS=$(python3 -c "from datetime import date; print((date(2026,7,28)-date.today()).days)" 2>/dev/null || echo "?")
+          DAY_N=$(python3 -c "from datetime import date; print(max(1, 30-(date(2026,7,28)-date.today()).days+1))" 2>/dev/null || echo "?")
+
+          if [ "$TYPE" = "morning" ]; then
+            PROMPT="RUN_TYPE=morning. This is the 6am SGT morning brief for Day ${DAY_N}/30 of the AlgoTrader launch sprint (${DAYS} days to launch on 2026-07-28). Follow the Morning Brief procedure in your agent definition exactly: read yesterday's carry-forwards from Notion, plan today's agenda, assign tasks to specialist agents, create today's Daily Log row, add Sprint Board tasks, send the Telegram morning brief, then spawn the specialist agents."
+          elif [ "$TYPE" = "midday" ]; then
+            PROMPT="RUN_TYPE=midday. This is the 12pm SGT midday pulse for Day ${DAY_N}/30. Follow the Midday Pulse procedure: check Sprint Board progress, update the Daily Log Midday Update field, triage any blocked tasks, send the Telegram midday update."
+          elif [ "$TYPE" = "evening" ]; then
+            PROMPT="RUN_TYPE=evening. This is the 8pm SGT EOD debrief for Day ${DAY_N}/30. Follow the Evening Debrief procedure: collect agent outcomes, update Issue Tracker for any blockers, update today's Daily Log (Done Today, Blockers, Carry Forward, Commits, Status→Done), update the Launch Roadmap checklist percentages, update Agent Status Board, send the Telegram EOD debrief."
+          elif [ -n "$CUSTOM" ]; then
+            PROMPT="RUN_TYPE=task. $CUSTOM"
+          else
+            PROMPT="RUN_TYPE=task. Review the current project state, check for any open issues or failing tests, and produce a status report."
+          fi
+          echo "text=$PROMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Run Orchestrator
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
           NEWSAPI_API_KEY: ${{ secrets.NEWSAPI_API_KEY }}
           OPENBB_NEWS_PROVIDER: "yfinance"
           OPENBB_EQUITY_PROVIDER: "yfinance"
-          # Let the orchestrator create PRs/issues if needed
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
         run: |
           claude \
             --agent orchestrator \
             --non-interactive \
             --output-format json \
-            --max-turns 50 \
+            --max-turns 80 \
             -p "${{ steps.prompt.outputs.text }}" \
             2>&1 | tee orchestrator-output.json
 
-      - name: Post summary to job summary
+      - name: Post GitHub Actions summary
         if: always()
         run: |
-          echo "## Orchestrator Run — $(date -u '+%Y-%m-%d %H:%M UTC')" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
+          TYPE="${{ steps.run_type.outputs.type }}"
+          echo "## Orchestrator — ${TYPE} run — $(date -u '+%Y-%m-%d %H:%M UTC')" >> "$GITHUB_STEP_SUMMARY"
           if [ -f orchestrator-output.json ]; then
-            # Extract the last assistant message as the summary
             python3 -c "
-          import json, sys
+          import json
           try:
               data = json.load(open('orchestrator-output.json'))
               msgs = data.get('messages', [])
@@ -88,19 +123,17 @@ jobs:
                       content = m.get('content', '')
                       if isinstance(content, list):
                           content = ' '.join(b.get('text','') for b in content if b.get('type')=='text')
-                      print(content[:4000])
+                      print(content[:6000])
                       break
           except Exception as e:
-              print(f'Could not parse output: {e}')
-          " >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || cat orchestrator-output.json | tail -50 >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No output file found." >> "$GITHUB_STEP_SUMMARY"
+              print(f'Parse error: {e}')
+          " >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || tail -80 orchestrator-output.json >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Upload orchestrator output artifact
+      - name: Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: orchestrator-output-${{ github.run_id }}
+          name: orchestrator-${{ steps.run_type.outputs.type }}-${{ github.run_id }}
           path: orchestrator-output.json
-          retention-days: 14
+          retention-days: 30
