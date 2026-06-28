@@ -195,10 +195,11 @@ def test_rss_source_parses_items(monkeypatch):
         def raise_for_status(self):
             return None
 
-    def fake_get(*args, **kwargs):
+    def fake_request(self, method, url, **kwargs):
         return Response()
 
-    monkeypatch.setattr("requests.Session.get", fake_get)
+    # RssSource calls session.request() via request_with_retries, not session.get()
+    monkeypatch.setattr("requests.Session.request", fake_request)
     source = RssSource(feed_urls=["https://example.com/rss"])
     items = source.fetch("bitcoin", limit=10)
     assert len(items) == 1

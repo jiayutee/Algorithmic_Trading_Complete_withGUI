@@ -172,11 +172,20 @@ class NewsApiSource(BaseNewsSource):
 class GDELTSource(BaseNewsSource):
     name = "gdelt"
     reliability = 0.75
+    # GDELT enforces 1 request per 5 seconds across the API
+    _MIN_INTERVAL = 6.0
+    _last_call: float = 0.0
 
     def __init__(self, session: requests.Session | None = None):
         self.session = session or requests.Session()
 
     def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+        import time as _time
+        elapsed = _time.monotonic() - GDELTSource._last_call
+        if elapsed < self._MIN_INTERVAL:
+            _time.sleep(self._MIN_INTERVAL - elapsed)
+        GDELTSource._last_call = _time.monotonic()
+
         params = {
             "query": normalize_query(query),
             "mode": "ArtList",
@@ -187,6 +196,9 @@ class GDELTSource(BaseNewsSource):
         try:
             response = request_with_retries(self.session, "get", "https://api.gdeltproject.org/api/v2/doc/doc", params=params, timeout=20)
             if response is None:
+                return []
+            if response.status_code == 429:
+                logger.warning("GDELT rate-limited (429); skipping this cycle")
                 return []
             payload = response.json()
         except Exception as exc:
@@ -427,24 +439,34 @@ def fuzzy_title_match(left: str, right: str) -> float:
 
 
 class DuckDuckGoSource(BaseNewsSource):
-    """Lightweight DuckDuckGo HTML search adapter.
+    """DuckDuckGo HTML search adapter.
 
-    Uses the HTML endpoint to fetch organic search results and returns
-    NewsItem objects with the extracted headline, snippet and link.
+    Uses POST to https://html.duckduckgo.com/html/ with a browser User-Agent.
+    GET requests to DDG are blocked with a CAPTCHA page; POST is not.
     """
     name = "duckduckgo"
     reliability = 0.65
 
+    _USER_AGENT = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+
     def __init__(self, session: requests.Session | None = None):
         self.session = session or requests.Session()
+        self.session.headers.update({"User-Agent": self._USER_AGENT})
 
     def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
         q = normalize_query(query)
-        url = "https://html.duckduckgo.com/html/"
-        params = {"q": q}
         items: list[NewsItem] = []
         try:
-            resp = request_with_retries(self.session, "get", url, params=params, timeout=15)
+            resp = request_with_retries(
+                self.session, "post",
+                "https://html.duckduckgo.com/html/",
+                data={"q": q},
+                timeout=15,
+            )
             if resp is None:
                 return []
             html = resp.text
@@ -453,19 +475,23 @@ class DuckDuckGoSource(BaseNewsSource):
             return []
 
         soup = BeautifulSoup(html, "html.parser")
-        results = soup.find_all("div", class_=re.compile(r"result|result__body"))
-        for r in results:
-            if len(items) >= limit:
-                break
-            a = r.find("a", href=True)
-            if not a:
-                continue
-            href = a.get("href") or ""
-            title = (a.get_text() or "").strip()
-            snippet_tag = r.find("a") or r.find("div", class_=re.compile(r"snippet|result__snippet"))
-            snippet = (snippet_tag.get_text() or "").strip() if snippet_tag is not None else ""
-            items.append(
-                NewsItem(
+
+        # Primary: <a class="result__a"> inside <div class="result">
+        result_links = soup.select("a.result__a")
+        if result_links:
+            for a in result_links[:limit]:
+                title = (a.get_text(separator=" ") or "").strip()
+                href = a.get("href") or ""
+                # snippet is a sibling element with class result__snippet
+                parent = a.find_parent("div", class_="result")
+                snippet = ""
+                if parent:
+                    snip_el = parent.find(class_="result__snippet")
+                    if snip_el:
+                        snippet = snip_el.get_text(separator=" ").strip()
+                if not title or not href:
+                    continue
+                items.append(NewsItem(
                     datetime_utc=coerce_datetime(pd.Timestamp.utcnow()),
                     source="duckduckgo",
                     headline=title,
@@ -475,9 +501,96 @@ class DuckDuckGoSource(BaseNewsSource):
                     language="en",
                     metadata={"source_api": "duckduckgo"},
                     source_reliability=self.reliability,
-                )
-            )
+                ))
+        else:
+            # Fallback: any div.result with an anchor
+            for r in soup.find_all("div", class_=re.compile(r"\bresult\b"))[:limit]:
+                a = r.find("a", href=True)
+                if not a:
+                    continue
+                title = (a.get_text(separator=" ") or "").strip()
+                href = a.get("href") or ""
+                if not title or not href:
+                    continue
+                items.append(NewsItem(
+                    datetime_utc=coerce_datetime(pd.Timestamp.utcnow()),
+                    source="duckduckgo",
+                    headline=title,
+                    url=canonicalize_url(href),
+                    summary="",
+                    content="",
+                    language="en",
+                    metadata={"source_api": "duckduckgo"},
+                    source_reliability=self.reliability,
+                ))
 
+        if not items:
+            logger.warning("DuckDuckGo returned 0 results for '%s' (HTML structure may have changed)", query)
+        return items
+
+
+class OpenBBNewsSource(BaseNewsSource):
+    """News source backed by OpenBB's obb.news.company() endpoint.
+
+    Requires: pip install openbb openbb-yfinance
+    No API key needed for the yfinance provider (default).
+    Paid providers (Benzinga, Biztoc) can be unlocked by setting
+    OPENBB_NEWS_PROVIDER in .env (e.g. "benzinga") and supplying
+    the provider's API key via the OpenBB credentials system.
+
+    # BACKUP NOTE: original news sources (Brave, DDG, GDELT, RSS) remain
+    # active — this source is additive, not a replacement.
+    """
+    name = "openbb_news"
+    reliability = 0.85
+
+    def __init__(self, provider: str = "yfinance"):
+        self.provider = provider
+
+    def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
+        # query is typically "AAPL" or "Apple AAPL earnings"
+        # Extract the ticker symbol (first word, strip non-alphanumeric)
+        ticker = query.split()[0].upper()
+        try:
+            from openbb import obb
+            result = obb.news.company(ticker, limit=limit, provider=self.provider)
+            raw = result.results if hasattr(result, "results") else []
+        except Exception as e:
+            logger.warning("OpenBB news fetch failed for %s: %s", ticker, e)
+            return []
+
+        items: list[NewsItem] = []
+        for article in raw:
+            try:
+                # OpenBB normalises fields across providers
+                pub_date = getattr(article, "date", None) or getattr(article, "published_utc", None)
+                if pub_date and hasattr(pub_date, "replace"):
+                    dt = pub_date if pub_date.tzinfo else pub_date.replace(tzinfo=timezone.utc)
+                else:
+                    dt = datetime.now(timezone.utc)
+
+                headline = str(getattr(article, "title", "") or "").strip()
+                url = str(getattr(article, "url", "") or "").strip()
+                summary = str(getattr(article, "text", "") or getattr(article, "summary", "") or "").strip()
+                source = str(getattr(article, "source", self.provider) or self.provider)
+
+                if not headline or not url:
+                    continue
+
+                items.append(NewsItem(
+                    datetime_utc=dt,
+                    source=f"openbb:{source}",
+                    headline=headline,
+                    url=url,
+                    summary=summary[:500],
+                    content="",
+                    source_reliability=self.reliability,
+                ))
+            except Exception as e:
+                logger.debug("OpenBB news item parse error: %s", e)
+                continue
+
+        logger.info("OpenBB news: %d articles for %s (provider=%s)", len(items), ticker, self.provider)
         return items
 
 

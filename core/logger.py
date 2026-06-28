@@ -41,3 +41,8 @@ def setup_logger(name="AlgoTrading", log_file="trading_system.log", level=loggin
 
 # Global logger instance
 logger = setup_logger()
+
+
+def get_logger(name: str) -> logging.Logger:
+    """Return a child logger under the root AlgoTrading logger."""
+    return logging.getLogger(f"AlgoTrading.{name}")

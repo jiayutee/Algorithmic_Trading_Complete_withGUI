@@ -1,7 +1,7 @@
 ---
 name: Web Research Agent
 description: Use when you need current information from the web, latest docs, market news, product updates, or Google-style research.
-tools: [read, search, web]
+tools: [Read, Bash, WebSearch, WebFetch]
 user-invocable: true
 argument-hint: Describe the topic, desired freshness, and any source preferences.
 ---

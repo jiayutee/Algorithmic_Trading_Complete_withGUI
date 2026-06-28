@@ -1,7 +1,7 @@
 ---
 name: Strategy Agent
 description: Use when implementing or modifying trading strategy classes, signal logic, strategy registration, and strategy interface contracts.
-tools: [read, search, edit, execute]
+tools: [Read, Bash, Edit, Write]
 user-invocable: true
 argument-hint: Describe target strategy, expected signals, and contract constraints.
 ---

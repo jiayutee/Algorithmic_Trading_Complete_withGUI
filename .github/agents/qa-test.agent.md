@@ -1,7 +1,7 @@
 ---
 name: QA Test Agent
 description: Use when creating or updating deterministic unit, integration, and smoke tests, reducing flakiness, and enforcing regression coverage.
-tools: [read, search, edit, execute]
+tools: [Read, Bash, Edit, Write]
 user-invocable: true
 argument-hint: Describe changed behavior and required regression coverage.
 ---

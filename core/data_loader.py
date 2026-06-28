@@ -1,4 +1,3 @@
-# from finrl.meta.preprocessor.yahoodownloader import YahooDownloader
 import yfinance as yf
 import pandas as pd
 import ccxt
@@ -134,8 +133,14 @@ class DataLoader:
                     # Final fallback to Yahoo Finance for crypto-USD pairs
                     return self._get_yahoo_crypto_historical(symbol, days, interval)
         else:
-            # Stocks - use Yahoo Finance
-            return self._get_yahoo_historical(symbol, days, interval)
+            # Stocks — try OpenBB first (unified provider interface), fall back to yfinance
+            # BACKUP NOTE: original _get_yahoo_historical call is preserved below as fallback.
+            try:
+                return self._get_openbb_historical(symbol, days, interval)
+            except Exception as e:
+                logger.warning("OpenBB data fetch failed (%s), falling back to Yahoo Finance: %s", symbol, e)
+                # BACKUP (original): return self._get_yahoo_historical(symbol, days, interval)
+                return self._get_yahoo_historical(symbol, days, interval)
 
     def _get_binance_historical(self, symbol, days, interval):
         """Get historical data from Binance using CCXT"""
@@ -213,6 +218,62 @@ class DataLoader:
         }
         yahoo_symbol = symbol_map.get(symbol, symbol)
         return self._get_yahoo_historical(yahoo_symbol, days, interval)
+
+    def _get_openbb_historical(self, symbol: str, days: int, interval: str = "1d") -> pd.DataFrame:
+        """Fetch OHLCV data via OpenBB Platform (provider: yfinance by default).
+
+        OpenBB normalises column names and handles provider switching transparently.
+        Set OPENBB_EQUITY_PROVIDER in .env to switch provider (e.g. "polygon", "fmp").
+
+        BACKUP NOTE: _get_yahoo_historical is still used as fallback if this fails.
+        """
+        from openbb import obb
+
+        provider = os.getenv("OPENBB_EQUITY_PROVIDER", "yfinance").strip()
+
+        # Map internal interval aliases to OpenBB/yfinance format
+        interval_map = {
+            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "60m": "60m", "1d": "1d", "1wk": "1W",
+        }
+        obb_interval = interval_map.get(interval, "1d")
+
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+
+        logger.info("OpenBB: fetching %s %s data for %s (provider=%s)", interval, symbol, days, provider)
+
+        result = obb.equity.price.historical(
+            symbol,
+            start_date=start_date.strftime("%Y-%m-%d"),
+            end_date=end_date.strftime("%Y-%m-%d"),
+            interval=obb_interval,
+            provider=provider,
+        )
+
+        df = result.to_df()
+        if df.empty:
+            raise ValueError(f"OpenBB returned empty DataFrame for {symbol}")
+
+        # Normalise column names to match the rest of the app (Title Case OHLCV)
+        col_map = {
+            "open": "Open", "high": "High", "low": "Low",
+            "close": "Close", "volume": "Volume",
+            "adj_close": "Adj Close",
+        }
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+        # Ensure index is DatetimeIndex
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+
+        required = {"Open", "High", "Low", "Close", "Volume"}
+        missing_cols = required - set(df.columns)
+        if missing_cols:
+            raise ValueError(f"OpenBB response missing columns: {missing_cols}")
+
+        logger.info("OpenBB data loaded: %d candles for %s", len(df), symbol)
+        return df
 
     def _get_yahoo_historical(self, symbol, days, interval):
         """Get historical data from Yahoo Finance"""

@@ -1,0 +1,90 @@
+name: Orchestrator – Manual Trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "What should the orchestrator do? (plain English)"
+        required: true
+        default: "Review the current state of the project and produce a status report."
+      max_turns:
+        description: "Max agent turns (default 50, increase for complex tasks)"
+        required: false
+        default: "50"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  orchestrate:
+    name: Orchestrator (manual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt --quiet || true
+
+      - name: Run Orchestrator
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          NEWSAPI_API_KEY: ${{ secrets.NEWSAPI_API_KEY }}
+          OPENBB_NEWS_PROVIDER: "yfinance"
+          OPENBB_EQUITY_PROVIDER: "yfinance"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          claude \
+            --agent orchestrator \
+            --non-interactive \
+            --output-format json \
+            --max-turns "${{ github.event.inputs.max_turns }}" \
+            -p "${{ github.event.inputs.prompt }}" \
+            2>&1 | tee orchestrator-output.json
+
+      - name: Post summary
+        if: always()
+        run: |
+          echo "## Orchestrator — Manual Run" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Prompt:** ${{ github.event.inputs.prompt }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f orchestrator-output.json ]; then
+            python3 -c "
+          import json
+          try:
+              data = json.load(open('orchestrator-output.json'))
+              msgs = data.get('messages', [])
+              for m in reversed(msgs):
+                  if m.get('role') == 'assistant':
+                      content = m.get('content', '')
+                      if isinstance(content, list):
+                          content = ' '.join(b.get('text','') for b in content if b.get('type')=='text')
+                      print(content[:6000])
+                      break
+          except Exception as e:
+              print(f'Could not parse output: {e}')
+          " >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || cat orchestrator-output.json | tail -80 >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchestrator-manual-${{ github.run_id }}
+          path: orchestrator-output.json
+          retention-days: 30

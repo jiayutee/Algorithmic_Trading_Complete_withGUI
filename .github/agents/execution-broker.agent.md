@@ -1,7 +1,7 @@
 ---
 name: Execution Broker Agent
 description: Use when implementing broker routing, connector initialization, order execution safeguards, fee-alignment behavior, and simulator versus live parity.
-tools: [read, search, edit, execute]
+tools: [Read, Bash, Edit, Write]
 user-invocable: true
 argument-hint: Describe broker path, environment assumptions, and observed execution issue.
 ---

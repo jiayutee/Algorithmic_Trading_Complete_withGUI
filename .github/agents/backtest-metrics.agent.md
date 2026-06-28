@@ -1,7 +1,7 @@
 ---
 name: Backtest and Metrics Agent
 description: Use when improving backtest correctness, analyzers, commission models, alpha or beta robustness, and performance report stability.
-tools: [read, search, edit, execute]
+tools: [Read, Bash, Edit, Write]
 user-invocable: true
 argument-hint: Describe the metric issue, benchmark context, and expected reporting behavior.
 ---

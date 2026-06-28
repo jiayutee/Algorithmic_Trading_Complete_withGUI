@@ -6,6 +6,9 @@ import random
 import threading
 import numpy as np
 from collections import defaultdict
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class OrderStatus(Enum):
@@ -93,8 +96,8 @@ class SimulatedBroker:
                         pos.last_price = self.market_data[symbol]
                         pos.pnl = pos.qty * (pos.last_price - pos.avg_price)
 
-            # Update portfolio value
-            self._update_portfolio_value()
+                # Update portfolio value inside the lock so reads see a consistent state
+                self._update_portfolio_value()
             time.sleep(1)  # Update prices every second
 
     def _update_portfolio_value(self):
@@ -151,7 +154,7 @@ class SimulatedBroker:
             # Use execution_price if provided, otherwise get from market data
             if execution_price is not None:
                 current_price = execution_price
-                print(f"🔍 Using execution price: ${execution_price:.2f}")
+                logger.debug("Using execution price: $%.2f", execution_price)
             else:
                 current_price = self._get_market_price(symbol)
 
@@ -206,12 +209,7 @@ class SimulatedBroker:
 
     def _fill_order(self, order: Order, fill_price: float):
         """Execute an order fill"""
-        # USE EXECUTION PRICE IF PROVIDED, otherwise use fill_price
-        print(f"🔍 FILL ORDER DETAILED DEBUG:")
-        print(f"   Before fill - Balance: ${self.balance:.2f}")
-        print(f"   Before fill - Positions: {self.positions}")
-        
-        # USE EXECUTION PRICE IF PROVIDED, otherwise use fill_price
+        logger.debug("Filling order — balance before: $%.2f, positions: %s", self.balance, list(self.positions.keys()))
         if order.execution_price is not None:
             actual_fill_price = order.execution_price
         else:
@@ -232,21 +230,19 @@ class SimulatedBroker:
         if order.side == OrderSide.BUY:
             executable_qty = min(order.qty, max_affordable_qty)
             if executable_qty <= 0:
-                print(f"   ❌ INSUFFICIENT FUNDS: Cannot afford any {order.symbol} (incl. fees)")
+                logger.warning("Insufficient funds to buy %s (incl. fees)", order.symbol)
                 order.status = OrderStatus.REJECTED
                 return
-            # If we can't execute full quantity, adjust the order
             if executable_qty < order.qty:
-                print(f"   ⚠️ Adjusting quantity: {order.qty} -> {executable_qty:.6f} (max affordable incl. fees)")
+                logger.debug("Adjusting buy qty %.6f -> %.6f (max affordable)", order.qty, executable_qty)
                 order.qty = executable_qty
         else:
-            # For sells: check if we have the position
             executable_qty = order.qty
             if order.symbol in self.positions:
                 current_position = self.positions[order.symbol].qty
                 executable_qty = min(order.qty, abs(current_position))
                 if executable_qty < order.qty:
-                    print(f"   ⚠️ Adjusting sell quantity: {order.qty} -> {executable_qty:.6f} (position size)")
+                    logger.debug("Adjusting sell qty %.6f -> %.6f (position size)", order.qty, executable_qty)
                     order.qty = executable_qty
 
         # Calculate required capital and actual fee
@@ -259,65 +255,54 @@ class SimulatedBroker:
             # For sells, fee is deducted from proceeds
             total_cost = -(required_capital - actual_fee)
 
-        print(f"   Order: {order.side.value} {executable_qty:.6f} {order.symbol} @ ${actual_fill_price:.2f}")
-        print(f"   Fee: ${actual_fee:.2f} ({fee_rate*100:.4f}%)")
-        print(f"   Total Cost/Proceeds: ${abs(total_cost):.2f}")
+        logger.debug("Order: %s %.6f %s @ $%.2f | fee $%.2f | total $%.2f",
+                     order.side.value, executable_qty, order.symbol,
+                     actual_fill_price, actual_fee, abs(total_cost))
 
         # Check if we have enough buying power (for buys)
         if order.side == OrderSide.BUY and total_cost > self.balance:
-            print(f"   ❌ INSUFFICIENT FUNDS: Need ${total_cost:.2f}, Have ${self.balance:.2f}")
+            logger.warning("Insufficient funds: need $%.2f, have $%.2f", total_cost, self.balance)
             order.status = OrderStatus.REJECTED
             return
 
         # Update position
         if order.symbol in self.positions:
             position = self.positions[order.symbol]
-            print(f"   Existing position: {position.qty:.6f} @ ${position.avg_price:.2f}")
+            logger.debug("Existing position: %.6f @ $%.2f", position.qty, position.avg_price)
             
             if (position.qty > 0 and order.side == OrderSide.BUY) or \
                 (position.qty < 0 and order.side == OrderSide.SELL):
-                # Adding to position - calculate new average price
                 total_qty = position.qty + (executable_qty if order.side == OrderSide.BUY else -executable_qty)
                 old_value = position.avg_price * abs(position.qty)
                 new_value = actual_fill_price * executable_qty
                 position.avg_price = (old_value + new_value) / abs(total_qty)
                 position.qty = total_qty
-                print(f"   Adding to position -> New: {position.qty:.6f} @ ${position.avg_price:.2f}")
+                logger.debug("Added to position -> %.6f @ $%.2f", position.qty, position.avg_price)
             else:
-                # Reducing or reversing position
                 old_qty = position.qty
                 position.qty += (executable_qty if order.side == OrderSide.BUY else -executable_qty)
-                print(f"   Changing position: {old_qty:.6f} -> {position.qty:.6f}")
-                
-                # Remove position if zero
-                if abs(position.qty) < 0.000001:  # Floating point tolerance
+                logger.debug("Changed position: %.6f -> %.6f", old_qty, position.qty)
+                if abs(position.qty) < 0.000001:
                     del self.positions[order.symbol]
-                    print(f"   🗑️ Position closed and removed")
+                    logger.debug("Position closed for %s", order.symbol)
         else:
-            # New position
             position_qty = executable_qty if order.side == OrderSide.BUY else -executable_qty
             self.positions[order.symbol] = Position(
                 symbol=order.symbol,
                 qty=position_qty,
                 avg_price=actual_fill_price,
-                leverage=1.0
+                leverage=1.0,
             )
-            print(f"   New position: {position_qty:.6f} @ ${actual_fill_price:.2f}")
+            logger.debug("New position: %.6f @ $%.2f", position_qty, actual_fill_price)
 
-        # Update balance
         old_balance = self.balance
         self.balance -= total_cost
-        print(f"   Balance: ${old_balance:.2f} -> ${self.balance:.2f}")
+        logger.debug("Balance: $%.2f -> $%.2f", old_balance, self.balance)
 
-        # Update order status
         order.status = OrderStatus.FILLED
         order.filled_qty = executable_qty
         order.filled_avg_price = actual_fill_price
         order.updated_at = time.time()
-        
-        print(f"   After fill - Balance: ${self.balance:.2f}")
-        print(f"   After fill - Positions: {self.positions}")
-        print("🔍" + "="*50)
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an open order"""

@@ -1,7 +1,7 @@
 ---
 name: Data Pipeline Agent
 description: Use when implementing or fixing market or news data loading, schema consistency, realtime streaming, timezone normalization, and missing-data behavior.
-tools: [read, search, edit, execute]
+tools: [Read, Bash, Edit, Write]
 user-invocable: true
 argument-hint: Describe the data source, symbol types, interval, and reliability issue.
 ---

@@ -20,6 +20,9 @@ from typing import Any, Dict, List, Optional
 
 from core.news_sources import BraveSearchSource
 from core.runtime.base import RuntimeContext
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Small, local helper to read .vscode/mcp.json if present
 MCP_CONFIG_PATH = os.path.join(os.getcwd(), ".vscode", "mcp.json")
@@ -252,7 +255,8 @@ def get_portfolio() -> Dict[str, Any]:
 
         bm = BrokerManager()
         return {"ok": True, "portfolio": bm.get_portfolio()}
-    except Exception:
+    except Exception as e:
+        logger.warning("get_portfolio failed: %s", e)
         return {"ok": False, "error": "broker_manager unavailable"}
 
 
@@ -265,15 +269,16 @@ def get_latest_price(symbol: str) -> Dict[str, Any]:
             resp = call_tool("price.get", {"symbol": symbol}, timeout=3.0)
             if resp.get("ok"):
                 return {"ok": True, "symbol": symbol, "price": resp.get("result")}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("MCP price.get failed for %s: %s", symbol, e)
     try:
         from core.data_loader import DataLoader
 
         dl = DataLoader()
         price = dl.get_latest_price(symbol)
         return {"ok": True, "symbol": symbol, "price": price}
-    except Exception:
+    except Exception as e:
+        logger.warning("get_latest_price(%s) failed: %s", symbol, e)
         return {"ok": False, "error": "data_loader unavailable"}
 
 
@@ -287,8 +292,8 @@ def fetch_recent_news(limit: int = 10) -> Dict[str, Any]:
             brave_items = brave_source.fetch(query, limit=limit)
             if brave_items:
                 return {"ok": True, "news": brave_items, "source": "brave", "query": query}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Brave news fetch failed: %s", e)
 
     # Prefer MCP-powered web search if available
     m = get_mcp_client()
@@ -297,15 +302,16 @@ def fetch_recent_news(limit: int = 10) -> Dict[str, Any]:
             resp = call_tool("search", {"query": query, "max_results": limit}, timeout=5.0)
             if resp.get("ok"):
                 return {"ok": True, "news": resp.get("result"), "source": "mcp_ddg", "query": query}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("MCP search failed: %s", e)
     try:
         from core.news_pipeline import NewsPipeline
 
-        np = NewsPipeline()
-        items = np.fetch_recent(limit=limit)
+        pipeline = NewsPipeline.from_env()
+        items = pipeline.fetch_news_items(query, limit=limit)
         return {"ok": True, "news": items, "source": "pipeline", "query": query}
-    except Exception:
+    except Exception as e:
+        logger.warning("fetch_recent_news failed: %s", e)
         return {"ok": False, "error": "news_pipeline unavailable"}
 
 
@@ -329,7 +335,8 @@ def store_news(items: List[Dict[str, Any]], writer: Optional[Any] = None) -> Dic
             inserted = ns.insert_many(items)
             return {"ok": True, "inserted": inserted}
         return {"ok": False, "error": "news_store_missing_insert_method"}
-    except Exception:
+    except Exception as e:
+        logger.warning("store_news failed: %s", e)
         return {"ok": False, "error": "news_store unavailable"}
 
 

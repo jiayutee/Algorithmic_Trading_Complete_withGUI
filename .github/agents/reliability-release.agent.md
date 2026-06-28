@@ -1,7 +1,7 @@
 ---
 name: Reliability Release Agent
 description: Use when performing dependency hygiene, environment checks, startup health checks, and release-readiness summaries before merge.
-tools: [read, search, edit, execute, todo]
+tools: [Read, Bash, Edit, Write]
 user-invocable: true
 argument-hint: Describe release scope, environment target, and required verification depth.
 ---

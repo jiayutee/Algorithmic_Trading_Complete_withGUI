@@ -21,6 +21,7 @@ from core.news_sources import (
     fuzzy_title_match,
     DuckDuckGoSource,
     McpDuckDuckGoSource,
+    OpenBBNewsSource,
 )
 from core.sentiment import SentimentAnalyzer
 from core.news_store import NewsStore
@@ -198,38 +199,55 @@ class NewsPipeline:
     def from_env(cls) -> "NewsPipeline":
         sources: list[BaseNewsSource] = []
 
-        # Optionally enable the MCP-managed DuckDuckGo source as the first source.
-        if os.getenv("USE_MCP_DDG", "1") == "1":
-            try:
-                sources.append(McpDuckDuckGoSource())
-            except Exception:
-                # If for some reason the class isn't available, log and continue.
-                logger.info("MCP DuckDuckGo source requested but unavailable; skipping.")
-
+        # Brave Search (best quality, needs API key)
         brave_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip() or os.getenv("BRAVE_API_KEY", "").strip()
         if brave_key:
             sources.append(BraveSearchSource(api_key=brave_key))
+            logger.info("News source: Brave Search enabled")
 
-        # Prefer DuckDuckGo HTML search first for broader coverage/enrichment
-        sources.append(DuckDuckGoSource())
-
+        # NewsAPI (needs API key from newsapi.org)
         newsapi_key = os.getenv("NEWSAPI_API_KEY", "").strip()
         if newsapi_key:
             sources.append(NewsApiSource(api_key=newsapi_key))
+            logger.info("News source: NewsAPI enabled")
 
-        sources.append(GDELTSource())
-
-        eventregistry_key = os.getenv("EVENTREGISTRY_API_KEY", "").strip()
-        if eventregistry_key:
-            sources.append(EventRegistrySource(api_key=eventregistry_key))
-
-        rss_feeds_env = os.getenv("RSS_FEEDS", "").strip()
+        # RSS feeds (comma or newline separated URLs in RSS_FEEDS env var)
+        rss_feeds_env = (
+            os.getenv("RSS_FEEDS", "").strip()
+            or os.getenv("RSS_FEED", "").strip()  # legacy single-feed key
+        )
         rss_feeds = [feed.strip() for feed in re.split(r"[\n,]", rss_feeds_env) if feed.strip()]
         if rss_feeds:
             sources.append(RssSource(feed_urls=rss_feeds))
+            logger.info("News source: RSS enabled (%d feed(s))", len(rss_feeds))
 
-        # Add DuckDuckGo HTML search as a fallback / enrichment source
+        # DuckDuckGo HTML scrape (no key needed, always added as fallback)
         sources.append(DuckDuckGoSource())
+        logger.info("News source: DuckDuckGo HTML enabled")
+
+        # OpenBB news (no key needed for yfinance provider; set OPENBB_NEWS_PROVIDER
+        # in .env for paid providers like "benzinga" or "biztoc")
+        # BACKUP NOTE: original sources above remain active — OpenBB is additive.
+        openbb_provider = os.getenv("OPENBB_NEWS_PROVIDER", "yfinance").strip()
+        try:
+            from openbb import obb  # noqa: F401 — just check it's importable
+            sources.append(OpenBBNewsSource(provider=openbb_provider))
+            logger.info("News source: OpenBB enabled (provider=%s)", openbb_provider)
+        except ImportError:
+            logger.warning("OpenBB not installed — skipping (pip install openbb openbb-yfinance)")
+
+        # GDELT (no key needed, rate-limited to 1 req/6s)
+        sources.append(GDELTSource())
+        logger.info("News source: GDELT enabled")
+
+        # EventRegistry (optional paid API)
+        eventregistry_key = os.getenv("EVENTREGISTRY_API_KEY", "").strip()
+        if eventregistry_key:
+            sources.append(EventRegistrySource(api_key=eventregistry_key))
+            logger.info("News source: EventRegistry enabled")
+
+        if not sources:
+            logger.warning("No news sources configured — set BRAVE_SEARCH_API_KEY or NEWSAPI_API_KEY in .env")
 
         return cls(sources=sources)
 

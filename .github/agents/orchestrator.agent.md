@@ -1,7 +1,7 @@
 ---
 name: Orchestrator Agent
 description: Use when you need task triage, routing, sequencing, merge-conflict prevention, and final integration signoff for repository changes.
-tools: [read/terminalSelection, read/terminalLastCommand, read/getTaskOutput, read/getNotebookSummary, read/problems, read/readFile, read/viewImage, read/readNotebookCellOutput, agent/runSubagent, search/codebase, search/fileSearch, search/listDirectory, search/textSearch, search/usages, duckduckgo-search/search, todo]
+tools: [Read, Bash, Edit, Write, Agent, WebSearch, WebFetch]
 agents:
   - Data Pipeline Agent
   - Strategy Agent

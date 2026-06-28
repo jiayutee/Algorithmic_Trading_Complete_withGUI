@@ -1,7 +1,7 @@
 ---
 name: UI Agent
 description: Use when implementing or fixing desktop UX flows, state transitions, chart behavior, timers, and user-safe status or error messaging.
-tools: [read, search, edit, execute]
+tools: [Read, Bash, Edit, Write]
 user-invocable: true
 argument-hint: Describe the user flow, expected UI state transitions, and backend linkage.
 ---

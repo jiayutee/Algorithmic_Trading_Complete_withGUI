@@ -1,35 +1,29 @@
-#Unified live/historical data
-import websockets
-import asyncio
-import json
-import numpy as np
-import pandas as pd
-# import ta
-import configparser
-from time import sleep
 from binance.exceptions import BinanceAPIException
 from binance.client import Client
 
 class BinanceConnector:
     def __init__(self, api_key, secret_key, paper=True):
-        self.client = Client(api_key, secret_key, testnet=paper)
+        try:
+            self.client = Client(api_key, secret_key, testnet=paper)
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialise Binance client: {e}") from e
 
     def submit_order(self, symbol, qty, side, order_type='MARKET', futures=True):
+        order_side = "BUY" if side.lower() in ('long', 'buy') else "SELL"
         if futures:
-            order = self.client.futures_create_order(
+            return self.client.futures_create_order(
                 symbol=symbol,
-                qty=qty,
-                side=OrderSide.BUY if side.lower() == 'long' else OrderSide.SELL,
+                quantity=qty,
+                side=order_side,
                 type=order_type
             )
         else:
-            order = self.client.create_order(
+            return self.client.create_order(
                 symbol=symbol,
-                qty=qty,
-                side=OrderSide.BUY if side.lower() == 'long' else OrderSide.SELL,
+                quantity=qty,
+                side=order_side,
                 type=order_type
             )
-        return self.client.submit_order(order)
 
     def get_position(self, symbol, futures=True):
         if futures:
