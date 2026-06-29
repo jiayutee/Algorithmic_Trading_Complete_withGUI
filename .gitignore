@@ -27,3 +27,4 @@ trained_models/
 
 # UI/Charts
 live_price_chart.html
+logs/
