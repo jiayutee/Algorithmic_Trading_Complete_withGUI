@@ -82,8 +82,9 @@ def run_orchestrator(user_message: str) -> str:
         "500 words — the user is reading on a phone."
     )
     try:
+        claude_bin = os.environ.get("CLAUDE_BIN", "/Users/jiayutee/.local/bin/claude")
         result = subprocess.run(
-            ["claude", "--agent", "orchestrator", "--non-interactive",
+            [claude_bin, "--agent", "orchestrator", "--non-interactive",
              "--max-turns", "30", "-p", prompt],
             capture_output=True, text=True,
             timeout=CLAUDE_TIMEOUT,

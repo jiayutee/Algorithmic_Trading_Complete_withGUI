@@ -94,7 +94,8 @@ except: print('?')
 
     LOG_FILE="$LOG_DIR/orchestrator-$(date +%Y%m%d-%H%M)-${RUN_TYPE}.log"
 
-    cd "$PROJECT_DIR" && claude \
+    CLAUDE_BIN="${CLAUDE_BIN:-/Users/jiayutee/.local/bin/claude}"
+    cd "$PROJECT_DIR" && "$CLAUDE_BIN" \
         --agent orchestrator \
         --non-interactive \
         --max-turns 80 \
