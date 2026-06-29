@@ -98,6 +98,7 @@ except: print('?')
     cd "$PROJECT_DIR" && "$CLAUDE_BIN" \
         --agent orchestrator \
         --print \
+        --allowedTools "Bash,Read,Edit,Write,Agent,WebSearch,WebFetch" \
         --max-turns 80 \
         -p "$PROMPT" \
         >> "$LOG_FILE" 2>&1

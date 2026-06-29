@@ -85,6 +85,7 @@ def run_orchestrator(user_message: str) -> str:
         claude_bin = os.environ.get("CLAUDE_BIN", "/Users/jiayutee/.local/bin/claude")
         result = subprocess.run(
             [claude_bin, "--agent", "orchestrator", "--print",
+             "--allowedTools", "Bash,Read,Edit,Write,Agent,WebSearch,WebFetch",
              "--max-turns", "30", "-p", prompt],
             capture_output=True, text=True,
             timeout=CLAUDE_TIMEOUT,
