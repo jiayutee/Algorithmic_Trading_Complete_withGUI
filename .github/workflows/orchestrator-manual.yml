@@ -77,7 +77,7 @@ jobs:
         run: |
           claude \
             --agent orchestrator \
-            --non-interactive \
+            --print \
             --output-format json \
             --max-turns "${{ github.event.inputs.max_turns }}" \
             -p "${{ steps.prompt.outputs.text }}" \

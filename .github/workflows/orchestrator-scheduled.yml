@@ -119,7 +119,7 @@ jobs:
         run: |
           claude \
             --agent orchestrator \
-            --non-interactive \
+            --print \
             --output-format json \
             --max-turns 80 \
             -p "${{ steps.prompt.outputs.text }}" \

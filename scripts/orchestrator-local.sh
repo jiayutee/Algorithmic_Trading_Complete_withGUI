@@ -97,7 +97,7 @@ except: print('?')
     CLAUDE_BIN="${CLAUDE_BIN:-/Users/jiayutee/.local/bin/claude}"
     cd "$PROJECT_DIR" && "$CLAUDE_BIN" \
         --agent orchestrator \
-        --non-interactive \
+        --print \
         --max-turns 80 \
         -p "$PROMPT" \
         >> "$LOG_FILE" 2>&1
