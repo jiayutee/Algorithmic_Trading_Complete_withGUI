@@ -96,7 +96,7 @@ except: print('?')
 
     CLAUDE_BIN="${CLAUDE_BIN:-/Users/jiayutee/.local/bin/claude}"
     cd "$PROJECT_DIR" && "$CLAUDE_BIN" \
-        --agent orchestrator \
+        --append-system-prompt-file "$PROJECT_DIR/.github/agents/orchestrator.agent.md" \
         --print \
         --allowedTools "Bash,Read,Edit,Write,Agent,WebSearch,WebFetch" \
         --max-turns 80 \
