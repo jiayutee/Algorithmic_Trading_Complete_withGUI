@@ -1,55 +1,47 @@
 import pytest
 import pandas as pd
+import time
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 from core.data_loader import DataLoader
-from brokers.binance_connector import BinanceConnector
 
-# Mocking BinanceConnector for isolated testing
-class MockBinanceConnector:
-    def get_historical_klines(self, symbol, interval, start_str, end_str=None):
-        # Simulate data for testing
-        if interval == '1m':
-            freq = 'T'
-        elif interval == '5m':
-            freq = '5T'
-        elif interval == '15m':
-            freq = '15T'
-        elif interval == '1h':
-            freq = 'H'
-        elif interval == '1d':
-            freq = 'D'
-        else:
-            raise ValueError("Unsupported interval for mock data")
 
-        start_date = datetime.strptime(start_str, '%Y-%m-%d')
-        end_date = datetime.now() if end_str is None else datetime.strptime(end_str, '%Y-%m-%d')
+def _make_ccxt_ohlcv(days: int, interval: str) -> list:
+    """Return synthetic CCXT-format ohlcv: [[timestamp_ms, o, h, l, c, v], ...]"""
+    freq_map = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400}
+    step_s = freq_map.get(interval, 60)
+    end_ts = int(time.time()) * 1000
+    start_ts = end_ts - days * 86400 * 1000
+    rows = []
+    ts = start_ts
+    i = 0
+    while ts <= end_ts:
+        rows.append([ts, 100 + i, 105 + i, 95 + i, 102 + i, 1000 + i])
+        ts += step_s * 1000
+        i += 1
+    return rows
 
-        date_range = pd.date_range(start=start_date, end=end_date, freq=freq)
-        df = pd.DataFrame({
-            'Open': [100 + i for i in range(len(date_range))],
-            'High': [105 + i for i in range(len(date_range))],
-            'Low': [95 + i for i in range(len(date_range))],
-            'Close': [102 + i for i in range(len(date_range))],
-            'Volume': [1000 + i for i in range(len(date_range))]
-        }, index=date_range)
-        df.index.name = 'Datetime'
-        return df
 
 @pytest.fixture
-def data_loader():
-    # Initialize DataLoader with dummy keys for testing purposes
-    # In a real scenario, you might mock the external API calls
-    return DataLoader(live_api_key="test_key", live_secret_key="test_secret",
-                      kucoin_key="test_kucoin_key", kucoin_secret="test_kucoin_secret",
-                      binance_key="test_binance_key", binance_secret="test_binance_secret")
+def data_loader(monkeypatch):
+    loader = DataLoader(live_api_key="test_key", live_secret_key="test_secret",
+                        kucoin_key="test_kucoin_key", kucoin_secret="test_kucoin_secret",
+                        binance_key="test_binance_key", binance_secret="test_binance_secret")
 
-@pytest.fixture(autouse=True)
-def mock_binance_connector(monkeypatch):
-    # This fixture will replace the actual BinanceConnector with our mock version
-    def mock_init(self, api_key, secret_key, paper=True):
-        self.client = None # No actual client needed for mock
-    monkeypatch.setattr(BinanceConnector, '__init__', mock_init)
-    monkeypatch.setattr(BinanceConnector, 'get_historical_klines', MockBinanceConnector().get_historical_klines)
+    # Patch the public ccxt.binance exchange used by _get_binance_historical
+    mock_exchange = MagicMock()
+    mock_exchange.milliseconds.return_value = int(time.time() * 1000)
+    mock_exchange.rateLimit = 0
+
+    def _fake_fetch_ohlcv(symbol, timeframe="1d", since=None, limit=1000):
+        days = max(1, (int(time.time() * 1000) - (since or 0)) // (86400 * 1000))
+        rows = _make_ccxt_ohlcv(days, timeframe)
+        return rows[:limit]
+
+    mock_exchange.fetch_ohlcv.side_effect = _fake_fetch_ohlcv
+    mock_exchange.fetch_ticker.return_value = {"last": 50000.0}
+    loader.binance_public = mock_exchange
+    return loader
 
 
 def test_get_historical_data_yahoo_1m(data_loader):
@@ -82,19 +74,19 @@ def test_get_historical_data_yahoo_15m(data_loader):
         pytest.skip(f"Skipping Yahoo 15m data test due to yfinance limitation: {e}")
 
 def test_get_binance_data_1m(data_loader):
-    df = data_loader._get_binance_data("BTCUSDT", days=1, interval="1m")
+    df = data_loader._get_binance_historical("BTCUSDT", days=1, interval="1m")
     assert not df.empty
     assert "Datetime" == df.index.name
     assert all(col in df.columns for col in ['Open', 'High', 'Low', 'Close', 'Volume'])
 
 def test_get_binance_data_5m(data_loader):
-    df = data_loader._get_binance_data("BTCUSDT", days=5, interval="5m")
+    df = data_loader._get_binance_historical("BTCUSDT", days=5, interval="5m")
     assert not df.empty
     assert "Datetime" == df.index.name
     assert all(col in df.columns for col in ['Open', 'High', 'Low', 'Close', 'Volume'])
 
 def test_get_binance_data_15m(data_loader):
-    df = data_loader._get_binance_data("BTCUSDT", days=15, interval="15m")
+    df = data_loader._get_binance_historical("BTCUSDT", days=15, interval="15m")
     assert not df.empty
     assert "Datetime" == df.index.name
     assert all(col in df.columns for col in ['Open', 'High', 'Low', 'Close', 'Volume'])
