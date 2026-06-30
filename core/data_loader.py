@@ -519,6 +519,69 @@ class DataLoader:
             'thread_alive': self.ws_thread.is_alive() if self.ws_thread else False
         }
 
+    def get_latest_price(self, symbol: str) -> float:
+        """Return the most recent price for *symbol* as a float.
+
+        Resolution order:
+        1. Live websocket queue — if a stream is active and has order-book data
+           for this symbol, derive the mid-price from the best bid/ask.
+        2. Recent OHLCV via load_data() (last 2 days, 1-minute candles) —
+           returns the last close price without triggering news merging.
+        3. Binance CCXT spot ticker — direct fetch_ticker call on the public
+           connector (no API keys required).
+
+        Raises ValueError if all three sources fail.
+        """
+        # 1. Check live WebSocket queue for this symbol
+        if self.ws_connected and self.active_symbol and self.active_symbol.upper() == symbol.upper():
+            updates = self.get_realtime_updates()
+            for update in reversed(updates):
+                bids = update.get('bids', [])
+                asks = update.get('asks', [])
+                if bids and asks:
+                    try:
+                        best_bid = float(bids[0][0])
+                        best_ask = float(asks[0][0])
+                        if best_bid > 0 and best_ask > 0:
+                            mid_price = (best_bid + best_ask) / 2.0
+                            logger.debug(f"get_latest_price({symbol}): websocket mid-price = {mid_price}")
+                            return mid_price
+                    except (IndexError, ValueError, TypeError):
+                        pass
+
+        # 2. Fetch recent OHLCV and return last close (bypass news pipeline)
+        try:
+            is_crypto = "USDT" in symbol.upper()
+            if is_crypto:
+                df = self._get_binance_historical(symbol, days=2, interval='1m')
+            else:
+                try:
+                    df = self._get_openbb_historical(symbol, days=2, interval='1m')
+                except Exception:
+                    df = self._get_yahoo_historical(symbol, days=2, interval='1m')
+
+            if df is not None and not df.empty:
+                close_col = 'Close' if 'Close' in df.columns else 'close'
+                price = float(df[close_col].iloc[-1])
+                logger.debug(f"get_latest_price({symbol}): OHLCV last close = {price}")
+                return price
+        except Exception as e:
+            logger.debug(f"get_latest_price({symbol}): OHLCV fetch failed: {e}")
+
+        # 3. Binance CCXT spot ticker (no keys needed)
+        try:
+            ccxt_symbol = symbol if '/' in symbol else symbol.replace('USDT', '/USDT')
+            ticker = self.binance_public.fetch_ticker(ccxt_symbol)
+            price = ticker.get('last') or ticker.get('close')
+            if price is not None:
+                price = float(price)
+                logger.debug(f"get_latest_price({symbol}): Binance ticker = {price}")
+                return price
+        except Exception as e:
+            logger.debug(f"get_latest_price({symbol}): Binance ticker failed: {e}")
+
+        raise ValueError(f"get_latest_price({symbol}): all price sources failed")
+
     def test_binance_connection(self):
         """Test if Binance API is reachable"""
         try:

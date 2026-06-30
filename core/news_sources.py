@@ -72,6 +72,10 @@ def request_with_retries(session: requests.Session, method: str, url: str, **kwa
     """Make an HTTP request with exponential backoff retries.
 
     Returns a `requests.Response` on success or `None` on final failure.
+    On HTTP 429 (Too Many Requests), uses an aggressive backoff:
+        min(2^attempt * 0.5 + random(0, 0.5), 30) seconds
+    On other errors, uses the standard factor-based backoff.
+
     Environment variables:
     - NEWS_FETCH_MAX_RETRIES (default 3)
     - NEWS_FETCH_BACKOFF_FACTOR (default 0.5)
@@ -90,8 +94,26 @@ def request_with_retries(session: requests.Session, method: str, url: str, **kwa
         attempt += 1
         try:
             resp = session.request(method, url, **kwargs)
+            if resp.status_code == 429:
+                if attempt >= max_retries:
+                    logger.warning("HTTP %s %s rate-limited (429) after %s attempts; giving up", method.upper(), url, attempt)
+                    return None
+                # Aggressive backoff for 429: min(2^attempt * 0.5 + jitter, 30)
+                sleep_time = min(2 ** attempt * 0.5 + random.uniform(0, 0.5), 30)
+                logger.warning("HTTP 429 from %s (attempt %s/%s); backing off %.1fs", url, attempt, max_retries, sleep_time)
+                time.sleep(sleep_time)
+                continue
             resp.raise_for_status()
             return resp
+        except requests.exceptions.HTTPError:
+            # raise_for_status() fired for non-429 HTTP errors
+            if attempt >= max_retries:
+                logger.warning("HTTP %s %s failed after %s attempts", method.upper(), url, attempt)
+                return None
+            sleep_time = backoff_factor * (2 ** (attempt - 1))
+            jitter = random.uniform(0, backoff_factor)
+            time.sleep(sleep_time + jitter)
+            continue
         except Exception as exc:
             if attempt >= max_retries:
                 logger.warning("HTTP %s %s failed after %s attempts: %s", method.upper(), url, attempt, exc)
@@ -191,14 +213,12 @@ class GDELTSource(BaseNewsSource):
             "mode": "ArtList",
             "format": "json",
             "sort": "HybridRel",
-            "maxrecords": min(limit, 250),
+            # Cap at 25 to reduce load on the GDELT API and lower 429 risk
+            "maxrecords": min(limit, 25),
         }
         try:
             response = request_with_retries(self.session, "get", "https://api.gdeltproject.org/api/v2/doc/doc", params=params, timeout=20)
             if response is None:
-                return []
-            if response.status_code == 429:
-                logger.warning("GDELT rate-limited (429); skipping this cycle")
                 return []
             payload = response.json()
         except Exception as exc:
@@ -385,9 +405,16 @@ class RssSource(BaseNewsSource):
         text_lower = text.lower()
         return any(term in text_lower for term in query_terms if term)
 
+    # Base delay (seconds) applied before every Yahoo RSS request to avoid
+    # aggressive rate-limiting. Yahoo Finance RSS enforces strict per-IP limits.
+    _YAHOO_BASE_DELAY = 2.0
+
     def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
         items: list[NewsItem] = []
         for feed_url in self.feed_urls:
+            # Apply a mandatory base delay before hitting Yahoo RSS endpoints
+            if "yahoo.com" in feed_url.lower():
+                time.sleep(self._YAHOO_BASE_DELAY)
             try:
                 response = request_with_retries(self.session, "get", feed_url, timeout=20)
                 if response is None:
