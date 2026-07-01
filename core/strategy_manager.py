@@ -7,8 +7,12 @@ except ImportError:
     FinRLStrategy = None
     logger.warning("FinRL module not found. FinRL Strategy will be unavailable.")
 
-from strategies.TD3_strategy import TD3Strategy
-from stable_baselines3 import TD3
+try:
+    from strategies.TD3_strategy import TD3Strategy
+except ImportError:
+    TD3Strategy = None
+    logger.warning("TD3Strategy not available (stable_baselines3 not installed).")
+
 import os
 from core.backtester import Backtester
 import backtrader as bt
@@ -34,12 +38,14 @@ class StrategyManager:
             "EMA Crossover": EMACrossoverStrategy,
             "Stochastic": StochasticStrategy,
             "LSTM Predictor": LSTMPredictor,
-            "TD3 Strategy": TD3Strategy
         }
-        
+
+        if TD3Strategy is not None:
+            self.strategies["TD3 Strategy"] = TD3Strategy
+
         if FinRLStrategy:
             self.strategies["FinRL Strategy"] = FinRLStrategy
-            
+
         self.backtester = Backtester()
 
     def get_available_strategies(self):
