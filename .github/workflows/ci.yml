@@ -1,0 +1,55 @@
+name: CI – pytest
+
+# Run on every push to main and on all pull requests targeting main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run pytest (non-GUI)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python ──────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # ── 3. Install dependencies ────────────────────────────────────────────
+      # Heavy GUI packages (PyQt5, PyQtWebEngine) and optional broker SDKs
+      # often fail on Linux CI — fall back to the core scientific stack if the
+      # full install is not possible.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt --quiet 2>/dev/null \
+            || pip install \
+                yfinance pandas numpy scikit-learn \
+                ta pandas-ta backtrader \
+                requests python-dotenv \
+                newsapi-python beautifulsoup4 \
+                matplotlib plotly scipy statsmodels \
+                joblib pytest
+
+      # ── 4. Run tests ────────────────────────────────────────────────────────
+      # GUI tests (test_gui.py) require a real Qt display and PyQtChart, which
+      # are not available in the headless Ubuntu runner.  They are excluded here
+      # with --ignore.  All other test files are collected and run.
+      #
+      # API keys are NOT required: tests mock external calls.  If secrets are
+      # added to the repository later they can be passed via ${{ secrets.X }}.
+      - name: Run pytest (excluding GUI tests)
+        run: |
+          python -m pytest \
+            --ignore=test_gui.py \
+            --tb=short \
+            -q
