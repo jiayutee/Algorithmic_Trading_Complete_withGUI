@@ -1,7 +1,19 @@
 import logging
 
-from brokers.alpaca_connector import AlpacaConnector
-from brokers.binance_connector import BinanceConnector
+try:
+    from brokers.alpaca_connector import AlpacaConnector
+    _ALPACA_AVAILABLE = True
+except ImportError:
+    AlpacaConnector = None
+    _ALPACA_AVAILABLE = False
+
+try:
+    from brokers.binance_connector import BinanceConnector
+    _BINANCE_AVAILABLE = True
+except ImportError:
+    BinanceConnector = None
+    _BINANCE_AVAILABLE = False
+
 from brokers.simulatedbroker import SimulatedBroker
 
 logger = logging.getLogger(__name__)
@@ -12,26 +24,35 @@ class BrokerManager:
                  binance_key=None, binance_secret=None, binance_testnet_key=None, binance_testnet_secret=None):
         self.brokers = {
             "Simulator": SimulatedBroker(),
-            "Alpaca": AlpacaConnector(alpaca_key, alpaca_secret) if alpaca_key and alpaca_secret else None,
         }
+
+        # Alpaca connector (requires alpaca-trade-api / alpaca-py package)
+        try:
+            if _ALPACA_AVAILABLE and alpaca_key and alpaca_secret:
+                self.brokers["Alpaca"] = AlpacaConnector(alpaca_key, alpaca_secret)
+            else:
+                self.brokers["Alpaca"] = None
+        except Exception as e:
+            logger.warning("Failed to connect to Alpaca: %s", e)
+            self.brokers["Alpaca"] = None
 
         # Initialize Binance with error handling
         try:
-            if binance_key and binance_secret:
+            if _BINANCE_AVAILABLE and binance_key and binance_secret:
                 self.brokers["Binance"] = BinanceConnector(binance_key, binance_secret, paper=False)
             else:
                 self.brokers["Binance"] = None
         except Exception as e:
-            print(f"⚠️ Failed to connect to Binance: {e}")
+            logger.warning("Failed to connect to Binance: %s", e)
             self.brokers["Binance"] = None
 
         try:
-            if binance_testnet_key and binance_testnet_secret:
+            if _BINANCE_AVAILABLE and binance_testnet_key and binance_testnet_secret:
                 self.brokers["Binance_testnet"] = BinanceConnector(binance_testnet_key, binance_testnet_secret, paper=True)
             else:
                 self.brokers["Binance_testnet"] = None
         except Exception as e:
-            print(f"⚠️ Failed to connect to Binance Testnet: {e}")
+            logger.warning("Failed to connect to Binance Testnet: %s", e)
             self.brokers["Binance_testnet"] = None
 
     def get_broker(self, name):
