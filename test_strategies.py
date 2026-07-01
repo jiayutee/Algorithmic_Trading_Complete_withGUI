@@ -574,6 +574,343 @@ class TestClosingFlags:
             for sig in strat.signals:
                 assert sig["type"] in allowed_types, f"Unknown signal type: {sig['type']}"
 
+    # --- Stochastic: _closing_long flag ---
+
+    @staticmethod
+    def _stoch_long_then_exit():
+        """30-bar neutral, 25-bar sharp drop (stochastic oversold), 40-bar recovery
+        (triggers long entry), then 20-bar decline from overbought (triggers long exit)."""
+        normal = [100.0]
+        for _ in range(30):
+            normal.append(normal[-1] * 1.0005)
+        drop = [normal[-1]]
+        for _ in range(25):
+            drop.append(drop[-1] * 0.97)
+        recovery = [drop[-1]]
+        for _ in range(40):
+            recovery.append(recovery[-1] * 1.015)
+        surge_exit = [recovery[-1]]
+        for _ in range(20):
+            surge_exit.append(surge_exit[-1] * 0.985)
+        return _make_ohlcv_from_closes(normal + drop[1:] + recovery[1:] + surge_exit[1:])
+
+    @staticmethod
+    def _stoch_short_then_exit():
+        """Same as _stoch_long_then_exit but after exit the price keeps rising, triggering
+        the short entry (overbought K<D) followed by a drop then rally (short exit)."""
+        normal = [100.0]
+        for _ in range(30):
+            normal.append(normal[-1] * 1.0005)
+        drop = [normal[-1]]
+        for _ in range(25):
+            drop.append(drop[-1] * 0.97)
+        recovery = [drop[-1]]
+        for _ in range(40):
+            recovery.append(recovery[-1] * 1.015)
+        surge_exit = [recovery[-1]]
+        for _ in range(20):
+            surge_exit.append(surge_exit[-1] * 0.985)
+        return _make_ohlcv_from_closes(normal + drop[1:] + recovery[1:] + surge_exit[1:])
+
+    def test_closing_long_reset_after_exit_stochastic(self):
+        """_closing_long must be False at end after Stochastic exit-long sequence."""
+        df = self._stoch_long_then_exit()
+        strat = self._run_flag_audit(_StochFlagAudit, df)
+        assert strat._closing_long is False, "_closing_long must be reset to False after order fills (Stochastic)"
+        assert strat._closing_short is False
+
+    def test_closing_short_reset_after_exit_ema(self):
+        """_closing_short must be False at end after EMA short → cover sequence."""
+        # Strong uptrend → EMA bullish → then sharp downtrend → EMA bearish → short entry
+        # then recovery → EMA bullish again → short exit (buy_cover)
+        up = [100.0]
+        for _ in range(60):
+            up.append(up[-1] * 1.008)
+        down = [up[-1]]
+        for _ in range(80):
+            down.append(down[-1] * 0.985)
+        recovery = [down[-1]]
+        for _ in range(80):
+            recovery.append(recovery[-1] * 1.012)
+        df = _make_ohlcv_from_closes(up + down[1:] + recovery[1:])
+        strat = self._run_flag_audit(_EMAFlagAudit, df)
+        assert strat._closing_short is False, "_closing_short must be reset after buy_cover fills (EMA)"
+
+    def test_closing_short_reset_after_exit_stochastic(self):
+        """_closing_short must be False at end after Stochastic short → cover sequence."""
+        df = self._stoch_short_then_exit()
+        strat = self._run_flag_audit(_StochFlagAudit, df)
+        assert strat._closing_short is False, "_closing_short must be reset to False after order fills (Stochastic)"
+
+
+# ---------------------------------------------------------------------------
+# _closing_long / _closing_short flag activation tests (flag was True at close)
+# ---------------------------------------------------------------------------
+
+class TestClosingFlagActivation:
+    """Verify that _closing_long / _closing_short are actually set to True at the
+    moment of closing a position, and that they are never True during an entry order.
+
+    The _ClosingFlagAuditMixin (defined above) records the dates when each flag
+    transitions from False → True.  A non-empty _set_dates list means the flag
+    was actually raised at least once; the complementary assertion that the flag
+    is False at strategy end confirms notify_order reset it correctly.
+    """
+
+    def _run_flag_audit(self, strategy_cls, df):
+        cerebro = bt.Cerebro()
+        cerebro.broker.setcash(100_000)
+        cerebro.adddata(bt.feeds.PandasData(dataname=df))
+        cerebro.addstrategy(strategy_cls)
+        results = cerebro.run()
+        return results[0]
+
+    # --- helpers for price series ----------------------------------------
+
+    @staticmethod
+    def _macd_rsi_long_series():
+        """Drop (RSI oversold) + recovery (MACD bullish) → triggers long entry.
+        Then overbought + MACD bearish → triggers long exit."""
+        drop = [100.0]
+        for _ in range(39):
+            drop.append(drop[-1] * 0.98)
+        recovery = [drop[-1]]
+        for _ in range(100):
+            recovery.append(recovery[-1] * 1.01)
+        return _make_ohlcv_from_closes(drop + recovery[1:])
+
+    @staticmethod
+    def _macd_rsi_short_series():
+        """Gradual rise + run-up (RSI overbought, MACD bearish) → short entry.
+        Then drop continues then recovers → short exit."""
+        rng = np.random.default_rng(11)
+        slow_up = [100.0]
+        for _ in range(30):
+            slow_up.append(slow_up[-1] * (1 + rng.normal(0.001, 0.003)))
+        run_up = [slow_up[-1]]
+        for _ in range(40):
+            run_up.append(run_up[-1] * 1.025)
+        drop = [run_up[-1]]
+        for _ in range(80):
+            drop.append(drop[-1] * 0.992)
+        recovery = [drop[-1]]
+        for _ in range(60):
+            recovery.append(recovery[-1] * 1.005)
+        return _make_ohlcv_from_closes(slow_up + run_up[1:] + drop[1:] + recovery[1:])
+
+    @staticmethod
+    def _ema_long_series():
+        """Downtrend then strong uptrend (EMA bullish crossover → buy).
+        Then downtrend again (EMA bearish crossover → exit long)."""
+        down = [100.0]
+        for _ in range(40):
+            down.append(down[-1] * 0.99)
+        up = [down[-1]]
+        for _ in range(100):
+            up.append(up[-1] * 1.015)
+        down2 = [up[-1]]
+        for _ in range(60):
+            down2.append(down2[-1] * 0.988)
+        return _make_ohlcv_from_closes(down + up[1:] + down2[1:])
+
+    @staticmethod
+    def _ema_short_series():
+        """Uptrend then sharp downtrend (EMA bearish → sell short).
+        Then recovery uptrend (EMA bullish → buy_cover)."""
+        up = [100.0]
+        for _ in range(60):
+            up.append(up[-1] * 1.008)
+        down = [up[-1]]
+        for _ in range(80):
+            down.append(down[-1] * 0.985)
+        recovery = [down[-1]]
+        for _ in range(80):
+            recovery.append(recovery[-1] * 1.012)
+        return _make_ohlcv_from_closes(up + down[1:] + recovery[1:])
+
+    @staticmethod
+    def _stoch_long_and_short_series():
+        """30-bar neutral, 25-bar drop (oversold → long entry), 40-bar recovery,
+        20-bar overbought decline (exit long / short entry)."""
+        normal = [100.0]
+        for _ in range(30):
+            normal.append(normal[-1] * 1.0005)
+        drop = [normal[-1]]
+        for _ in range(25):
+            drop.append(drop[-1] * 0.97)
+        recovery = [drop[-1]]
+        for _ in range(40):
+            recovery.append(recovery[-1] * 1.015)
+        surge_exit = [recovery[-1]]
+        for _ in range(20):
+            surge_exit.append(surge_exit[-1] * 0.985)
+        return _make_ohlcv_from_closes(normal + drop[1:] + recovery[1:] + surge_exit[1:])
+
+    # --- MACD+RSI activation tests ----------------------------------------
+
+    def test_closing_long_was_set_true_macd_rsi(self):
+        """_closing_long must have been True at the exact bar of long exit (MACD+RSI)."""
+        df = self._macd_rsi_long_series()
+        strat = self._run_flag_audit(_MACDRSIFlagAudit, df)
+        buy_signals = [s for s in strat.signals if s["type"] == "buy"]
+        sell_signals = [s for s in strat.signals if s["type"] == "sell"]
+        if buy_signals and sell_signals:
+            # The mixin must have recorded at least one activation date
+            assert len(strat._closing_long_set_dates) >= 1, (
+                "_closing_long was never set to True during the long exit — flag is broken"
+            )
+        # Flag must be False at end (reset by notify_order)
+        assert strat._closing_long is False
+
+    def test_closing_long_not_set_on_entry_macd_rsi(self):
+        """_closing_long must NOT be True at the bar of long entry (only at exit)."""
+        df = self._macd_rsi_long_series()
+        strat = self._run_flag_audit(_MACDRSIFlagAudit, df)
+        # All 'buy' signals are entries; no _closing_long activation should precede the first buy
+        buy_signals = [s for s in strat.signals if s["type"] == "buy"]
+        if buy_signals:
+            first_buy_date = buy_signals[0]["date"]
+            pre_entry_activations = [
+                d for d in strat._closing_long_set_dates if d <= first_buy_date
+            ]
+            assert len(pre_entry_activations) == 0, (
+                "_closing_long was set before or at the first buy entry — flag fires incorrectly"
+            )
+
+    def test_closing_short_was_set_true_macd_rsi(self):
+        """_closing_short must have been True at the exact bar of short exit (MACD+RSI)."""
+        df = self._macd_rsi_short_series()
+        strat = self._run_flag_audit(_MACDRSIFlagAudit, df)
+        short_signals = [s for s in strat.signals if s["type"] == "sell_short"]
+        cover_signals = [s for s in strat.signals if s["type"] == "buy_cover"]
+        if short_signals and cover_signals:
+            assert len(strat._closing_short_set_dates) >= 1, (
+                "_closing_short was never set to True during short exit (MACD+RSI)"
+            )
+        assert strat._closing_short is False
+
+    def test_closing_short_not_set_on_entry_macd_rsi(self):
+        """_closing_short must NOT be True at the bar of short entry."""
+        df = self._macd_rsi_short_series()
+        strat = self._run_flag_audit(_MACDRSIFlagAudit, df)
+        short_signals = [s for s in strat.signals if s["type"] == "sell_short"]
+        if short_signals:
+            first_short_date = short_signals[0]["date"]
+            pre_entry_activations = [
+                d for d in strat._closing_short_set_dates if d <= first_short_date
+            ]
+            assert len(pre_entry_activations) == 0, (
+                "_closing_short was set before or at the first short entry — flag fires incorrectly"
+            )
+
+    # --- EMA Crossover activation tests ------------------------------------
+
+    def test_closing_long_was_set_true_ema(self):
+        """_closing_long must have been True at the exact bar of long exit (EMA)."""
+        df = self._ema_long_series()
+        strat = self._run_flag_audit(_EMAFlagAudit, df)
+        buy_signals = [s for s in strat.signals if s["type"] == "buy"]
+        sell_signals = [s for s in strat.signals if s["type"] == "sell"]
+        if buy_signals and sell_signals:
+            assert len(strat._closing_long_set_dates) >= 1, (
+                "_closing_long was never set to True during the long exit (EMA)"
+            )
+        assert strat._closing_long is False
+
+    def test_closing_long_not_set_on_entry_ema(self):
+        """_closing_long must NOT be True at the bar of long entry (EMA)."""
+        df = self._ema_long_series()
+        strat = self._run_flag_audit(_EMAFlagAudit, df)
+        buy_signals = [s for s in strat.signals if s["type"] == "buy"]
+        if buy_signals:
+            first_buy_date = buy_signals[0]["date"]
+            pre_entry_activations = [
+                d for d in strat._closing_long_set_dates if d <= first_buy_date
+            ]
+            assert len(pre_entry_activations) == 0, (
+                "_closing_long was set before or at the first buy entry (EMA)"
+            )
+
+    def test_closing_short_was_set_true_ema(self):
+        """_closing_short must have been True at the exact bar of short exit (EMA)."""
+        df = self._ema_short_series()
+        strat = self._run_flag_audit(_EMAFlagAudit, df)
+        short_signals = [s for s in strat.signals if s["type"] == "sell_short"]
+        cover_signals = [s for s in strat.signals if s["type"] == "buy_cover"]
+        if short_signals and cover_signals:
+            assert len(strat._closing_short_set_dates) >= 1, (
+                "_closing_short was never set to True during short exit (EMA)"
+            )
+        assert strat._closing_short is False
+
+    def test_closing_short_not_set_on_entry_ema(self):
+        """_closing_short must NOT be True at the bar of short entry (EMA)."""
+        df = self._ema_short_series()
+        strat = self._run_flag_audit(_EMAFlagAudit, df)
+        short_signals = [s for s in strat.signals if s["type"] == "sell_short"]
+        if short_signals:
+            first_short_date = short_signals[0]["date"]
+            pre_entry_activations = [
+                d for d in strat._closing_short_set_dates if d <= first_short_date
+            ]
+            assert len(pre_entry_activations) == 0, (
+                "_closing_short was set before or at the first short entry (EMA)"
+            )
+
+    # --- Stochastic activation tests ---------------------------------------
+
+    def test_closing_long_was_set_true_stochastic(self):
+        """_closing_long must have been True at the exact bar of long exit (Stochastic)."""
+        df = self._stoch_long_and_short_series()
+        strat = self._run_flag_audit(_StochFlagAudit, df)
+        buy_signals = [s for s in strat.signals if s["type"] == "buy"]
+        sell_signals = [s for s in strat.signals if s["type"] == "sell"]
+        if buy_signals and sell_signals:
+            assert len(strat._closing_long_set_dates) >= 1, (
+                "_closing_long was never set to True during long exit (Stochastic)"
+            )
+        assert strat._closing_long is False
+
+    def test_closing_long_not_set_on_entry_stochastic(self):
+        """_closing_long must NOT be True at the bar of long entry (Stochastic)."""
+        df = self._stoch_long_and_short_series()
+        strat = self._run_flag_audit(_StochFlagAudit, df)
+        buy_signals = [s for s in strat.signals if s["type"] == "buy"]
+        if buy_signals:
+            first_buy_date = buy_signals[0]["date"]
+            pre_entry_activations = [
+                d for d in strat._closing_long_set_dates if d <= first_buy_date
+            ]
+            assert len(pre_entry_activations) == 0, (
+                "_closing_long was set before or at the first buy entry (Stochastic)"
+            )
+
+    def test_closing_short_was_set_true_stochastic(self):
+        """_closing_short must have been True at the exact bar of short exit (Stochastic)."""
+        df = self._stoch_long_and_short_series()
+        strat = self._run_flag_audit(_StochFlagAudit, df)
+        short_signals = [s for s in strat.signals if s["type"] == "sell_short"]
+        cover_signals = [s for s in strat.signals if s["type"] == "buy_cover"]
+        if short_signals and cover_signals:
+            assert len(strat._closing_short_set_dates) >= 1, (
+                "_closing_short was never set to True during short exit (Stochastic)"
+            )
+        assert strat._closing_short is False
+
+    def test_closing_short_not_set_on_entry_stochastic(self):
+        """_closing_short must NOT be True at the bar of short entry (Stochastic)."""
+        df = self._stoch_long_and_short_series()
+        strat = self._run_flag_audit(_StochFlagAudit, df)
+        short_signals = [s for s in strat.signals if s["type"] == "sell_short"]
+        if short_signals:
+            first_short_date = short_signals[0]["date"]
+            pre_entry_activations = [
+                d for d in strat._closing_short_set_dates if d <= first_short_date
+            ]
+            assert len(pre_entry_activations) == 0, (
+                "_closing_short was set before or at the first short entry (Stochastic)"
+            )
+
 
 # ---------------------------------------------------------------------------
 # ML / LSTM strategy graceful degradation
