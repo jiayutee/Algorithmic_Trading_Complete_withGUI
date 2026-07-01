@@ -314,26 +314,30 @@ class SimulatedBroker:
             return False
 
     def get_position(self, symbol: str) -> Optional[Position]:
-        """Get current position for a symbol"""
-        return self.positions.get(symbol)
+        """Get current position for a symbol (thread-safe)"""
+        with self._lock:
+            return self.positions.get(symbol)
 
     def get_orders(self, status: Optional[OrderStatus] = None) -> List[Order]:
-        """Get orders filtered by status"""
-        if status is None:
-            return list(self.orders.values())
-        return [o for o in self.orders.values() if o.status == status]
+        """Get orders filtered by status (thread-safe snapshot)"""
+        with self._lock:
+            if status is None:
+                return list(self.orders.values())
+            return [o for o in self.orders.values() if o.status == status]
 
     def get_account_info(self) -> dict:
-        """Get current account information"""
-        return {
-            "balance": self.balance,
-            "portfolio_value": self.portfolio_value,
-            "cash": self.balance,
-            "buying_power": self.balance * 2,  # Simple 2x leverage
-            "positions_value": self.portfolio_value - self.balance,
-            "initial_balance": self.initial_balance,
-            "pnl": self.portfolio_value - self.initial_balance
-        }
+        """Get current account information (thread-safe snapshot)"""
+        with self._lock:
+            self._update_portfolio_value()
+            return {
+                "balance": self.balance,
+                "portfolio_value": self.portfolio_value,
+                "cash": self.balance,
+                "buying_power": self.balance * 2,  # Simple 2x leverage
+                "positions_value": self.portfolio_value - self.balance,
+                "initial_balance": self.initial_balance,
+                "pnl": self.portfolio_value - self.initial_balance
+            }
 
     def close(self):
         """Clean up the broker"""
