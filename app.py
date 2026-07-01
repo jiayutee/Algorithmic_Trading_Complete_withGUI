@@ -1,14 +1,20 @@
 # app.py
 import sys
 import importlib
-from dotenv import load_dotenv
 
-# Load environment variables from .env file before other imports
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    # Load environment variables from .env file before other imports
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed; rely on environment variables set externally
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt
-from PyQt5.QtWebEngineWidgets import QWebEngineView  # must import before QApplication
+try:
+    from PyQt5.QtWebEngineWidgets import QWebEngineView  # must import before QApplication
+except ImportError:
+    QWebEngineView = None  # PyQtWebEngine not installed; chart view will be disabled
 from core.data_loader import DataLoader
 from core.strategy_manager import StrategyManager
 from core.broker_manager import BrokerManager

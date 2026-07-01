@@ -6,16 +6,37 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QFrame, QSizePolicy)
 from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt5.QtWebEngineWidgets import QWebEngineView
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from plotly.utils import PlotlyJSONEncoder
+try:
+    from PyQt5.QtWebEngineWidgets import QWebEngineView
+    _WEBENGINE_AVAILABLE = True
+except ImportError:
+    QWebEngineView = None
+    _WEBENGINE_AVAILABLE = False
+
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    from plotly.utils import PlotlyJSONEncoder
+    _PLOTLY_AVAILABLE = True
+except ImportError:
+    go = None
+    make_subplots = None
+    PlotlyJSONEncoder = None
+    _PLOTLY_AVAILABLE = False
+
 import json
 import pandas as pd
 import numpy as np
 from queue import Empty
 from datetime import datetime, timedelta
-from ui.statistics_window import StatisticsWindow
+
+try:
+    from ui.statistics_window import StatisticsWindow
+    _STATS_WINDOW_AVAILABLE = True
+except ImportError:
+    StatisticsWindow = None
+    _STATS_WINDOW_AVAILABLE = False
+
 from typing import Dict, List, Optional
 from core.news_scraper import scrape_and_analyze_finviz_news
 from core.logger import logger
@@ -120,24 +141,30 @@ class MainWindow(QMainWindow):
         content_splitter = QSplitter(Qt.Horizontal)
         content_splitter.addWidget(self._build_left_panel())
 
-        self.plotly_view = QWebEngineView()
-        empty_html = """
-            <html>
-            <head>
-                <meta charset="utf-8"/>
-                <style>
-                body {
-                    background-color: #0d1117;
-                    color: #e6edf3;
-                    margin: 0;
-                    padding: 0;
-                }
-                </style>
-            </head>
-            <body></body>
-            </html>
-            """
-        self.plotly_view.setHtml(empty_html)
+        if _WEBENGINE_AVAILABLE:
+            self.plotly_view = QWebEngineView()
+            empty_html = """
+                <html>
+                <head>
+                    <meta charset="utf-8"/>
+                    <style>
+                    body {
+                        background-color: #0d1117;
+                        color: #e6edf3;
+                        margin: 0;
+                        padding: 0;
+                    }
+                    </style>
+                </head>
+                <body></body>
+                </html>
+                """
+            self.plotly_view.setHtml(empty_html)
+        else:
+            from PyQt5.QtWidgets import QLabel
+            self.plotly_view = QLabel("Chart view unavailable (PyQtWebEngine not installed)")
+            self.plotly_view.setAlignment(Qt.AlignCenter)
+            self.plotly_view.setStyleSheet("color: #8b949e; font-size: 13px;")
         content_splitter.addWidget(self.plotly_view)
         content_splitter.addWidget(self._build_right_panel())
 
@@ -265,18 +292,26 @@ class MainWindow(QMainWindow):
         self.data_source_combo.setFixedWidth(120)
         layout.addWidget(self.data_source_combo)
 
-        # Strategy
+        # Strategy — populated dynamically from StrategyManager so the list
+        # always reflects what is actually available (respects missing deps).
         layout.addWidget(self._muted_label("Strategy"))
         self.strategy_combo = QComboBox()
-        self.strategy_combo.addItems([
-            "None",
-            "MACD/RSI",
-            "EMA Crossover",
-            "Stochastic",
-            "LSTM Predictor",
-            "FinRL Strategy",
-            "DDPG Strategy"
-        ])
+        strategy_items = ["None"]
+        if hasattr(self, 'strategy_manager') and self.strategy_manager is not None:
+            try:
+                strategy_items += self.strategy_manager.get_available_strategies()
+            except Exception:
+                # Fallback to known strategies if manager is unavailable
+                strategy_items += [
+                    "MACD/RSI", "EMA Crossover", "Stochastic",
+                    "LSTM Predictor", "TD3 Strategy"
+                ]
+        else:
+            strategy_items += [
+                "MACD/RSI", "EMA Crossover", "Stochastic",
+                "LSTM Predictor", "TD3 Strategy"
+            ]
+        self.strategy_combo.addItems(strategy_items)
         self.strategy_combo.setFixedWidth(130)
         layout.addWidget(self.strategy_combo)
 
@@ -1359,7 +1394,9 @@ class MainWindow(QMainWindow):
 
     def update_plotly_view(self):
         """Render Plotly figure directly into QWebEngineView (no disk I/O)."""
-        if hasattr(self, 'fig'):
+        if not _WEBENGINE_AVAILABLE or not _PLOTLY_AVAILABLE:
+            return
+        if hasattr(self, 'fig') and hasattr(self.plotly_view, 'setHtml'):
             html = self.fig.to_html(include_plotlyjs=True, full_html=True)
             self.plotly_view.setHtml(html)
 
@@ -1391,6 +1428,10 @@ class MainWindow(QMainWindow):
         """Run backtest and show the statistics window"""
         results = self._run_backtest_logic()
         if results is False:
+            return
+
+        if not _STATS_WINDOW_AVAILABLE:
+            self.statusBar().showMessage("Statistics window unavailable (matplotlib not installed)")
             return
 
         self.stats_window = StatisticsWindow(results)
