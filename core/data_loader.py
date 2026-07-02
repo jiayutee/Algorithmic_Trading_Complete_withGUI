@@ -267,6 +267,9 @@ class DataLoader:
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
 
+        # Normalise index name to "Datetime" to match the rest of the app
+        df.index.name = "Datetime"
+
         required = {"Open", "High", "Low", "Close", "Volume"}
         missing_cols = required - set(df.columns)
         if missing_cols:
