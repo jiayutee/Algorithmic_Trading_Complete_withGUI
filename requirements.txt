@@ -28,6 +28,9 @@ ib-insync
 ta
 pandas-ta
 PyPortfolioOpt
+# OpenBB Platform (unified data provider) — requires Python >=3.10
+openbb
+openbb-yfinance
 
 # Web and API
 requests
