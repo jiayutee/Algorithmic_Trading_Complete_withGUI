@@ -40,7 +40,7 @@ jobs:
             requests python-dotenv \
             newsapi-python beautifulsoup4 \
             matplotlib plotly scipy statsmodels \
-            joblib pytest ccxt
+            joblib pytest ccxt websocket-client
           # Optional packages — allowed to fail on CI
           pip install pandas-ta stable-baselines3 openbb openbb-yfinance || true
 
