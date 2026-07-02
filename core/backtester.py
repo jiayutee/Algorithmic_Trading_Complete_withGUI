@@ -216,7 +216,7 @@ class Backtester:
             else:
                 logger.info(f"Downloading benchmark data ({benchmark_ticker})...")
                 # Suppress yfinance progress
-                benchmark_data = yf.download(benchmark_ticker, start=start_date, end=end_date, progress=False)
+                benchmark_data = yf.download(benchmark_ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
                 if benchmark_data.empty:
                     logger.warning(f"Benchmark data for {benchmark_ticker} is empty.")
                     return 0, 0
