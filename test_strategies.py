@@ -939,6 +939,9 @@ class TestLSTMStrategyDegradation:
 
     def test_lstm_model_is_none_when_tensorflow_absent(self):
         """When TF is not importable (but model files exist), model must be None (no crash)."""
+        joblib = pytest.importorskip("joblib", reason="joblib not installed; skipping TF-absent test")
+        sklearn_prep = pytest.importorskip("sklearn.preprocessing", reason="sklearn not installed")
+        MinMaxScaler = sklearn_prep.MinMaxScaler
         import strategies.ml_strategies as ml_mod
         trained_dir = os.path.join(ml_mod.BASE_DIR, "trained_models")
         ticker = "TFTEST"
@@ -947,8 +950,6 @@ class TestLSTMStrategyDegradation:
         os.makedirs(trained_dir, exist_ok=True)
 
         try:
-            import joblib
-            from sklearn.preprocessing import MinMaxScaler
             with open(model_path, "w") as f:
                 f.write("placeholder")
             sc = MinMaxScaler()
