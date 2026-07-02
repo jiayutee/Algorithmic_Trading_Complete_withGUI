@@ -25,20 +25,24 @@ jobs:
           cache: pip
 
       # ── 3. Install dependencies ────────────────────────────────────────────
-      # Heavy GUI packages (PyQt5, PyQtWebEngine) and optional broker SDKs
-      # often fail on Linux CI — fall back to the core scientific stack if the
-      # full install is not possible.
+      # requirements.txt contains platform-specific and heavy packages
+      # (PyQt5, PyQtWebEngine, tensorflow, torch, finrl) that cannot be
+      # installed on a headless Ubuntu runner.  We install only the subset
+      # needed for non-GUI tests, then allow optional heavy packages to fail
+      # silently so the step always succeeds.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt --quiet 2>/dev/null \
-            || pip install \
-                yfinance pandas numpy scikit-learn \
-                ta pandas-ta backtrader \
-                requests python-dotenv \
-                newsapi-python beautifulsoup4 \
-                matplotlib plotly scipy statsmodels \
-                joblib pytest
+          # Core packages needed by all non-GUI tests
+          pip install \
+            yfinance pandas numpy scikit-learn \
+            ta backtrader \
+            requests python-dotenv \
+            newsapi-python beautifulsoup4 \
+            matplotlib plotly scipy statsmodels \
+            joblib pytest ccxt
+          # Optional packages — allowed to fail on CI
+          pip install pandas-ta stable-baselines3 openbb openbb-yfinance || true
 
       # ── 4. Run tests ────────────────────────────────────────────────────────
       # GUI tests (test_gui.py) require a real Qt display and PyQtChart, which
