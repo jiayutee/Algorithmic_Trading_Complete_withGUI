@@ -1,7 +1,17 @@
 import backtrader as bt
 from core.ta_engine import TAEngine
-from sklearn.preprocessing import MinMaxScaler
-import joblib
+try:
+    from sklearn.preprocessing import MinMaxScaler
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    MinMaxScaler = None
+    _SKLEARN_AVAILABLE = False
+try:
+    import joblib
+    _JOBLIB_AVAILABLE = True
+except ImportError:
+    joblib = None
+    _JOBLIB_AVAILABLE = False
 import numpy as np
 import os
 from core.logger import get_logger
@@ -27,6 +37,11 @@ class LSTMPredictor(bt.Strategy):
                 from tensorflow.keras.models import load_model  # lazy import — TF is optional
             except ImportError:
                 logger.warning("TensorFlow not installed; LSTM strategy will be disabled.")
+                self.model = None
+                self.scaler = None
+                return
+            if not _SKLEARN_AVAILABLE or not _JOBLIB_AVAILABLE:
+                logger.warning("sklearn/joblib not installed; LSTM strategy will be disabled.")
                 self.model = None
                 self.scaler = None
                 return
