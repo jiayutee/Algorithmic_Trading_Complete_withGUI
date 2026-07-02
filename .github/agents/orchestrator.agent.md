@@ -135,5 +135,92 @@ Send via: `curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/se
 - Sprint Board row updated to Done with Outcome filled in.
 - If a bug was fixed: Issue Tracker row updated (Day Resolved, Solution, Root Cause).
 
+# Notion API (use curl — MCP not available in background runs)
+
+Database IDs (use these directly in API calls):
+- Daily Log:    `00008c59-c054-4c67-97f8-9753a9a23163`
+- Sprint Board: `91e3aa02-65de-40fb-8cb4-d297683bd67e`
+- Issue Tracker:`e575e816-cab1-4d24-8f40-89b1d5ca8f27`
+
+Auth header: `Authorization: Bearer $NOTION_API_KEY` and `Notion-Version: 2022-06-28`
+
+## Query Daily Log (read yesterday's row)
+```bash
+curl -s -X POST "https://api.notion.com/v1/databases/00008c59-c054-4c67-97f8-9753a9a23163/query" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{"sorts":[{"property":"Date","direction":"descending"}],"page_size":2}' \
+  | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+for p in data.get('results',[]):
+    props=p.get('properties',{})
+    title=props.get('Day',{}).get('title',[{}])
+    name=title[0].get('plain_text','') if title else ''
+    cf=props.get('Carry Forward',{}).get('rich_text',[{}])
+    cf_text=cf[0].get('plain_text','') if cf else ''
+    bl=props.get('Blockers',{}).get('rich_text',[{}])
+    bl_text=bl[0].get('plain_text','') if bl else ''
+    print(f'Day: {name} | Carry Forward: {cf_text} | Blockers: {bl_text}')
+"
+```
+
+## Create Daily Log row (morning)
+```bash
+TODAY=$(python3 -c "from datetime import date; print(date.today())")
+DAY_N=$(python3 -c "from datetime import date; print(max(1,30-(date(2026,7,28)-date.today()).days+1))")
+DAYS=$(python3 -c "from datetime import date; print((date(2026,7,28)-date.today()).days)")
+curl -s -X POST "https://api.notion.com/v1/pages" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"parent\":{\"database_id\":\"00008c59-c054-4c67-97f8-9753a9a23163\"},
+    \"properties\":{
+      \"Day\":{\"title\":[{\"text\":{\"content\":\"Day ${DAY_N}/30\"}}]},
+      \"Date\":{\"date\":{\"start\":\"${TODAY}\"}},
+      \"Days to Launch\":{\"number\":${DAYS}},
+      \"Status\":{\"select\":{\"name\":\"In Progress\"}},
+      \"Morning Brief\":{\"rich_text\":[{\"text\":{\"content\":\"<MORNING_BRIEF_TEXT>\"}}]},
+      \"Agenda\":{\"rich_text\":[{\"text\":{\"content\":\"<AGENDA_TEXT>\"}}]}
+    }
+  }"
+```
+
+## Update Daily Log row (evening — need page_id from query above)
+```bash
+curl -s -X PATCH "https://api.notion.com/v1/pages/<PAGE_ID>" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"properties\":{
+      \"Done Today\":{\"rich_text\":[{\"text\":{\"content\":\"<DONE_TEXT>\"}}]},
+      \"Blockers\":{\"rich_text\":[{\"text\":{\"content\":\"<BLOCKERS_TEXT>\"}}]},
+      \"Carry Forward\":{\"rich_text\":[{\"text\":{\"content\":\"<CF_TEXT>\"}}]},
+      \"Commits\":{\"rich_text\":[{\"text\":{\"content\":\"<COMMITS_TEXT>\"}}]},
+      \"Status\":{\"select\":{\"name\":\"Done\"}}
+    }
+  }"
+```
+
+## Create Sprint Board task
+```bash
+curl -s -X POST "https://api.notion.com/v1/pages" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"parent\":{\"database_id\":\"91e3aa02-65de-40fb-8cb4-d297683bd67e\"},
+    \"properties\":{
+      \"Name\":{\"title\":[{\"text\":{\"content\":\"<TASK_NAME>\"}}]},
+      \"Status\":{\"select\":{\"name\":\"To Do\"}},
+      \"Assigned Agent\":{\"rich_text\":[{\"text\":{\"content\":\"<AGENT_NAME>\"}}]},
+      \"Acceptance Criteria\":{\"rich_text\":[{\"text\":{\"content\":\"<CRITERIA>\"}}]}
+    }
+  }"
+```
+
 # Day Counter
 Launch date: 2026-07-28. Compute: `python3 -c "from datetime import date; print((date(2026,7,28)-date.today()).days)"` to get Days to Launch. Sprint day = 30 - days_to_launch + 1.
