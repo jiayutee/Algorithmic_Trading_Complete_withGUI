@@ -282,23 +282,16 @@ def test_news_pipeline_returns_results_for_eth(monkeypatch):
     assert len(items) >= 1
 
 
-def test_openbb_equity_blocker_documented():
-    """Explicit blocker test: openbb package is NOT installed in this environment.
+def test_openbb_installed_and_yfinance_provider_available():
+    """Regression guard: openbb + openbb-yfinance are installed (Day 5 T2 requirement).
 
-    Impact:
-    - obb.equity.price.historical() is unavailable for AAPL, BTCUSDT, ETH.
-    - _get_historical_data() for stock symbols (AAPL) falls back to Yahoo Finance.
-    - Crypto symbols (BTCUSDT, ETHUSDT) are unaffected — they use Binance CCXT.
-    - obb.news.company() for news is unavailable (OpenBBNewsSource returns empty).
-
-    Resolution: pip install openbb openbb-yfinance (requires Python >=3.9, ~500MB).
-    No API key required for the default yfinance provider.
+    This test was previously a blocker sentinel that expected ImportError.
+    openbb was installed in commit 245bc68; the sentinel is now a positive assertion.
     """
-    try:
-        import openbb  # noqa: F401
-        pytest.skip("openbb IS installed — blocker resolved, remove this test")
-    except ImportError:
-        pass  # Expected: openbb not installed — blocker confirmed
+    import openbb  # noqa: F401 — must not raise ImportError
+    from openbb import obb  # noqa: F401 — top-level obb object must be importable
+    assert hasattr(obb, "equity"), "obb.equity namespace missing — openbb install incomplete"
+    assert hasattr(obb, "news"), "obb.news namespace missing — openbb install incomplete"
 
 
 # ---------------------------------------------------------------------------
