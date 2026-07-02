@@ -1078,16 +1078,19 @@ class MainWindow(QMainWindow):
             summary = results.get('summary', {})
             final_value = summary.get('Final Value', 0)
             total_pnl = summary.get('P&L', 0)
-            sharpe_ratio = summary.get('Sharpe Ratio', 0)
-            win_rate = summary.get('Win Rate', '0%')
-            total_trades = summary.get('Total Trades', 0)
+            sharpe_ratio = summary.get('Sharpe Ratio', results.get('sharpe', 0))
+            max_drawdown = summary.get('Max Drawdown (%)', results.get('max_drawdown', 0))
+            win_rate = summary.get('Win Rate', f"{results.get('win_rate', 0):.2f}%")
+            total_trades = summary.get('Number of Closed Trades', 0)
 
             sharpe_str = f"{sharpe_ratio:.2f}" if isinstance(sharpe_ratio, (int, float)) else "N/A"
+            dd_str = f"{max_drawdown:.2f}%" if isinstance(max_drawdown, (int, float)) else "N/A"
 
             msg = (f"Backtest complete | "
                 f"Final: ${final_value:,.2f} | "
                 f"P&L: ${total_pnl:+,.2f} | "
                 f"Sharpe: {sharpe_str} | "
+                f"MaxDD: {dd_str} | "
                 f"Win Rate: {win_rate} | "
                 f"Trades: {total_trades}")
 
