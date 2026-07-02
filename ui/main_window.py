@@ -459,6 +459,26 @@ class MainWindow(QMainWindow):
         pnl_group.setLayout(pnl_layout)
         layout.addWidget(pnl_group)
 
+        # Backtest Results group
+        results_group = QGroupBox("Backtest Results")
+        results_layout = QFormLayout()
+        results_layout.setSpacing(4)
+
+        self.bt_sharpe_label = QLabel("—")
+        self.bt_sharpe_label.setStyleSheet("color: #58a6ff;")
+        results_layout.addRow("Sharpe:", self.bt_sharpe_label)
+
+        self.bt_winrate_label = QLabel("—")
+        self.bt_winrate_label.setStyleSheet("color: #3fb950;")
+        results_layout.addRow("Win Rate:", self.bt_winrate_label)
+
+        self.bt_maxdd_label = QLabel("—")
+        self.bt_maxdd_label.setStyleSheet("color: #f85149;")
+        results_layout.addRow("Max DD:", self.bt_maxdd_label)
+
+        results_group.setLayout(results_layout)
+        layout.addWidget(results_group)
+
         # Positions group
         positions_group = QGroupBox("Positions")
         positions_layout = QVBoxLayout()
@@ -477,6 +497,7 @@ class MainWindow(QMainWindow):
         self.bottom_tabs.setMinimumHeight(220)
         self.bottom_tabs.setMaximumHeight(320)
 
+        self._setup_orders_tab()
         self._setup_news_tab()
         self._setup_agent_monitor_tab()
 
@@ -484,6 +505,108 @@ class MainWindow(QMainWindow):
             self._setup_missing_deps_tab()
 
         return self.bottom_tabs
+
+    # ------------------------------------------------------------------
+    # Orders tab
+    # ------------------------------------------------------------------
+
+    def _setup_orders_tab(self):
+        """Build the Orders tab showing all submitted orders for the session."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        # Toolbar row
+        toolbar = QHBoxLayout()
+        self._orders_status_label = QLabel("Orders: none yet")
+        self._orders_status_label.setStyleSheet("color: #8b949e; font-size: 11px;")
+        toolbar.addWidget(self._orders_status_label)
+        toolbar.addStretch()
+        clear_btn = QPushButton("Clear")
+        clear_btn.setFixedWidth(60)
+        clear_btn.clicked.connect(self._clear_orders_tab)
+        toolbar.addWidget(clear_btn)
+        layout.addLayout(toolbar)
+
+        # Table: Time | Symbol | Side | Type | Qty | Fill Price | Status
+        self._orders_table = QTableWidget(0, 7)
+        self._orders_table.setHorizontalHeaderLabels(
+            ["Time", "Symbol", "Side", "Type", "Qty", "Fill Price", "Status"]
+        )
+        self._orders_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self._orders_table.horizontalHeader().setStretchLastSection(True)
+        self._orders_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._orders_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._orders_table.setAlternatingRowColors(True)
+        self._orders_table.verticalHeader().setVisible(False)
+        layout.addWidget(self._orders_table)
+
+        self.bottom_tabs.addTab(tab, "Orders")
+
+    def _refresh_orders_tab(self):
+        """Repopulate the Orders table from current_broker.order_history."""
+        if not self.current_broker or not hasattr(self.current_broker, 'order_history'):
+            return
+
+        history = self.current_broker.order_history
+        self._orders_table.setRowCount(len(history))
+
+        _SIDE_COLORS = {
+            "buy":  ("#1a4731", "#3fb950"),
+            "sell": ("#3d1a1a", "#f85149"),
+        }
+        _STATUS_COLORS = {
+            "filled":   "#3fb950",
+            "pending":  "#f0883e",
+            "rejected": "#f85149",
+            "canceled": "#8b949e",
+        }
+
+        for row, order in enumerate(history):
+            ts = datetime.fromtimestamp(order.created_at).strftime("%H:%M:%S")
+            side_str = order.side.value if hasattr(order.side, 'value') else str(order.side)
+            type_str = order.order_type.value if hasattr(order.order_type, 'value') else str(order.order_type)
+            status_str = order.status.value if hasattr(order.status, 'value') else str(order.status)
+            fill_price = f"${order.filled_avg_price:,.4f}" if order.filled_avg_price else "—"
+
+            items = [
+                QTableWidgetItem(ts),
+                QTableWidgetItem(order.symbol),
+                QTableWidgetItem(side_str.upper()),
+                QTableWidgetItem(type_str.capitalize()),
+                QTableWidgetItem(f"{order.filled_qty:.4f}"),
+                QTableWidgetItem(fill_price),
+                QTableWidgetItem(status_str.capitalize()),
+            ]
+
+            # Colour the Side cell
+            bg_hex, fg_hex = _SIDE_COLORS.get(side_str.lower(), ("#1c2128", "#e6edf3"))
+            items[2].setBackground(QColor(bg_hex))
+            items[2].setForeground(QColor(fg_hex))
+
+            # Colour the Status cell
+            status_color = _STATUS_COLORS.get(status_str.lower(), "#e6edf3")
+            items[6].setForeground(QColor(status_color))
+
+            for col, item in enumerate(items):
+                item.setTextAlignment(Qt.AlignCenter)
+                self._orders_table.setItem(row, col, item)
+
+        count = len(history)
+        filled = sum(
+            1 for o in history
+            if (o.status.value if hasattr(o.status, 'value') else str(o.status)) == "filled"
+        )
+        self._orders_status_label.setText(f"Orders: {count} total, {filled} filled")
+
+        # Switch to Orders tab so the user sees the result immediately
+        self.bottom_tabs.setCurrentIndex(0)
+
+    def _clear_orders_tab(self):
+        """Clear the orders display (does NOT cancel broker orders)."""
+        self._orders_table.setRowCount(0)
+        self._orders_status_label.setText("Orders: cleared")
 
     # ------------------------------------------------------------------
     # News tab
@@ -1096,6 +1219,11 @@ class MainWindow(QMainWindow):
 
             self.statusBar().showMessage(msg)
 
+            # Update persistent results panel labels (right panel)
+            self.bt_sharpe_label.setText(sharpe_str)
+            self.bt_winrate_label.setText(win_rate if isinstance(win_rate, str) else f"{win_rate:.2f}%")
+            self.bt_maxdd_label.setText(dd_str)
+
             self.plot_signals(results.get('signals', []))
 
             if 'Final Value' in summary:
@@ -1114,8 +1242,10 @@ class MainWindow(QMainWindow):
             logger.error(traceback.format_exc())
 
     def plot_signals(self, signals):
-        buy_signals = [s for s in signals if s['type'] == 'buy']
-        sell_signals = [s for s in signals if s['type'] == 'sell']
+        # 'buy' = open long; 'buy_cover' = close short (both rendered as green up-triangles)
+        buy_signals = [s for s in signals if s.get('type') in ('buy', 'buy_cover')]
+        # 'sell' = close long; 'sell_short' = open short (both rendered as red down-triangles)
+        sell_signals = [s for s in signals if s.get('type') in ('sell', 'sell_short')]
         if buy_signals:
             self.fig.add_trace(go.Scatter(
                 x=[s['date'] for s in buy_signals],
@@ -1245,6 +1375,7 @@ class MainWindow(QMainWindow):
                 )
 
             self.refresh_account_info()
+            self._refresh_orders_tab()
 
         except Exception as e:
             self.statusBar().showMessage(f"Order error: {str(e)}")

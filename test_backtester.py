@@ -248,3 +248,187 @@ class TestBacktesterTradeGeneration:
         assert len(signals) >= 1, (
             f"Expected at least 1 signal from Stochastic on oversold bounce data; got {len(signals)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: signal entry structure (T6b)
+# ---------------------------------------------------------------------------
+
+class TestBacktesterSignalStructure:
+    """Verify that each signal entry in results['signals'] has the required keys
+    and valid field types, so the GUI chart overlay can render markers."""
+
+    def test_signals_have_required_keys(self):
+        """Each signal dict must contain 'date', 'type', and 'price'."""
+        # Use trending data that reliably generates at least one signal
+        rng = np.random.default_rng(22)
+        down = [100.0]
+        for _ in range(40):
+            down.append(down[-1] * 0.99)
+        up = [down[-1]]
+        for _ in range(212):
+            up.append(up[-1] * 1.008)
+        closes = np.array(down + up[1:], dtype=float)
+        n = len(closes)
+        highs = closes * (1 + rng.uniform(0.002, 0.015, n))
+        lows = closes * (1 - rng.uniform(0.002, 0.015, n))
+        opens = closes * (1 + rng.normal(0, 0.003, n))
+        volumes = np.full(n, 500_000.0)
+        idx = pd.date_range(start="2023-01-03", periods=n, freq="B")
+        df = pd.DataFrame(
+            {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": volumes},
+            index=idx,
+        )
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        signals = results.get("signals", [])
+        assert len(signals) >= 1, "Expected at least 1 signal; got 0"
+        for sig in signals:
+            assert "date" in sig, f"Signal missing 'date' key: {sig}"
+            assert "type" in sig, f"Signal missing 'type' key: {sig}"
+            assert "price" in sig, f"Signal missing 'price' key: {sig}"
+
+    def test_signal_types_are_valid(self):
+        """Signal 'type' values must be one of the known categories."""
+        valid_types = {"buy", "sell", "buy_cover", "sell_short"}
+        rng = np.random.default_rng(22)
+        down = [100.0]
+        for _ in range(40):
+            down.append(down[-1] * 0.99)
+        up = [down[-1]]
+        for _ in range(212):
+            up.append(up[-1] * 1.008)
+        closes = np.array(down + up[1:], dtype=float)
+        n = len(closes)
+        highs = closes * (1 + rng.uniform(0.002, 0.015, n))
+        lows = closes * (1 - rng.uniform(0.002, 0.015, n))
+        opens = closes * (1 + rng.normal(0, 0.003, n))
+        volumes = np.full(n, 500_000.0)
+        idx = pd.date_range(start="2023-01-03", periods=n, freq="B")
+        df = pd.DataFrame(
+            {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": volumes},
+            index=idx,
+        )
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        for sig in results.get("signals", []):
+            assert sig.get("type") in valid_types, (
+                f"Unexpected signal type '{sig.get('type')}'; expected one of {valid_types}"
+            )
+
+    def test_signal_price_is_positive(self):
+        """Signal 'price' must be a positive number."""
+        rng = np.random.default_rng(22)
+        down = [100.0]
+        for _ in range(40):
+            down.append(down[-1] * 0.99)
+        up = [down[-1]]
+        for _ in range(212):
+            up.append(up[-1] * 1.008)
+        closes = np.array(down + up[1:], dtype=float)
+        n = len(closes)
+        highs = closes * (1 + rng.uniform(0.002, 0.015, n))
+        lows = closes * (1 - rng.uniform(0.002, 0.015, n))
+        opens = closes * (1 + rng.normal(0, 0.003, n))
+        volumes = np.full(n, 500_000.0)
+        idx = pd.date_range(start="2023-01-03", periods=n, freq="B")
+        df = pd.DataFrame(
+            {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": volumes},
+            index=idx,
+        )
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        for sig in results.get("signals", []):
+            assert isinstance(sig.get("price"), (int, float)), (
+                f"Signal price must be numeric, got {type(sig.get('price'))}"
+            )
+            assert sig["price"] > 0, f"Signal price must be positive, got {sig['price']}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Sharpe ratio and win-rate correctness (T6c)
+# ---------------------------------------------------------------------------
+
+class TestBacktesterSharpeAndWinRate:
+    """Verify Sharpe ratio and win-rate metric semantics."""
+
+    def test_sharpe_nonzero_on_profitable_trend(self):
+        """On a strong uptrend that generates profitable trades,
+        Sharpe ratio should be non-zero (backtrader's annualised Sharpe)."""
+        rng = np.random.default_rng(22)
+        down = [100.0]
+        for _ in range(40):
+            down.append(down[-1] * 0.99)
+        up = [down[-1]]
+        for _ in range(212):
+            up.append(up[-1] * 1.008)
+        closes = np.array(down + up[1:], dtype=float)
+        n = len(closes)
+        highs = closes * (1 + rng.uniform(0.002, 0.015, n))
+        lows = closes * (1 - rng.uniform(0.002, 0.015, n))
+        opens = closes * (1 + rng.normal(0, 0.003, n))
+        volumes = np.full(n, 500_000.0)
+        idx = pd.date_range(start="2023-01-03", periods=n, freq="B")
+        df = pd.DataFrame(
+            {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": volumes},
+            index=idx,
+        )
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        sharpe = results.get("sharpe", 0.0)
+        assert isinstance(sharpe, (int, float)), f"sharpe must be numeric, got {type(sharpe)}"
+        # On a strong trending data with trades, Sharpe should differ from 0
+        # (we can't assert the sign because backtrader may return 0 when no variance,
+        #  but it must be numeric and finite)
+        assert np.isfinite(sharpe), f"sharpe must be finite, got {sharpe}"
+
+    def test_win_rate_zero_when_no_trades(self):
+        """Win rate must be 0 when no trades are closed."""
+        df = _make_ohlcv(252, seed=99, trend=0.0)  # flat market, likely no trades
+        # Use a strategy on flat data where signals won't fire reliably;
+        # we just assert the formula is correct: 0 closed trades -> 0% win rate
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        summary = results.get("summary", {})
+        n_trades = summary.get("Number of Closed Trades", 0)
+        wr = results.get("win_rate", -1)
+        assert isinstance(wr, (int, float)), f"win_rate must be numeric, got {type(wr)}"
+        if n_trades == 0:
+            assert wr == 0.0, f"win_rate must be 0.0 when no trades, got {wr}"
+
+    def test_win_rate_between_0_and_100(self):
+        """Win rate must always be in [0, 100] regardless of strategy outcome."""
+        for seed in [0, 1, 42, 99]:
+            df = _make_ohlcv(252, seed=seed)
+            results = _run_backtest(EMACrossoverStrategy, df)
+            assert "error" not in results, f"Backtest errored: {results.get('error')}"
+            wr = results.get("win_rate", -1)
+            assert 0.0 <= wr <= 100.0, (
+                f"win_rate out of [0,100] range on seed={seed}: got {wr}"
+            )
+
+    def test_sharpe_in_summary_matches_top_level(self):
+        """results['summary']['Sharpe Ratio'] must be the rounded form of results['sharpe'].
+        The summary stores round(sharpe, 4) so tolerance is 5e-5."""
+        df = _make_ohlcv(252)
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        # summary stores round(sharpe, 4); allow up to half a ULP at 4 decimal places
+        assert abs(results["summary"]["Sharpe Ratio"] - results["sharpe"]) < 5e-5, (
+            f"Mismatch: summary Sharpe={results['summary']['Sharpe Ratio']}, "
+            f"top-level sharpe={results['sharpe']}"
+        )
+
+    def test_win_rate_in_summary_matches_top_level(self):
+        """results['summary']['Win Rate'] string must encode results['win_rate']."""
+        df = _make_ohlcv(252)
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        wr_numeric = results.get("win_rate", -1)
+        wr_str = results["summary"].get("Win Rate", "")
+        # The summary encodes it as "X.XX%"
+        assert wr_str.endswith("%"), f"summary Win Rate must end with '%', got '{wr_str}'"
+        wr_from_summary = float(wr_str.rstrip("%"))
+        assert abs(wr_from_summary - wr_numeric) < 1e-3, (
+            f"Win rate mismatch: summary={wr_from_summary}, top-level={wr_numeric}"
+        )

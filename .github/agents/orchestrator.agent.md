@@ -222,5 +222,33 @@ curl -s -X POST "https://api.notion.com/v1/pages" \
   }"
 ```
 
+# GitHub CI Status (use to check if tests pass after agent commits)
+
+```bash
+# List recent workflow runs
+curl -s -H "Authorization: Bearer $GITHUB_PAT" \
+  "https://api.github.com/repos/jiayutee/Algorithmic_Trading_Complete_withGUI/actions/runs?per_page=5" \
+  | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+for r in data.get('workflow_runs',[]):
+    print(r['name'], '|', r['status'], '|', r['conclusion'], '|', r['head_commit']['message'][:60])
+"
+
+# Get failed jobs from a specific run_id
+curl -s -H "Authorization: Bearer $GITHUB_PAT" \
+  "https://api.github.com/repos/jiayutee/Algorithmic_Trading_Complete_withGUI/actions/runs/<RUN_ID>/jobs" \
+  | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+for j in data.get('jobs',[]):
+    if j['conclusion'] != 'success':
+        print(j['name'], j['conclusion'])
+        for s in j.get('steps',[]):
+            if s['conclusion'] not in ('success','skipped',None):
+                print('  step:', s['name'], s['conclusion'])
+"
+```
+
 # Day Counter
 Launch date: 2026-07-28. Compute: `python3 -c "from datetime import date; print((date(2026,7,28)-date.today()).days)"` to get Days to Launch. Sprint day = 30 - days_to_launch + 1.

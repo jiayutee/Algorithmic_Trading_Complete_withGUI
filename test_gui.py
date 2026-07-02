@@ -269,6 +269,227 @@ class TestStrategyManagerPopulation:
 
 
 # ---------------------------------------------------------------------------
+# Order entry wiring tests (D5-T6d)
+# ---------------------------------------------------------------------------
+
+def _make_window_with_sim_broker(qapp):
+    """Instantiate MainWindow wired to a real SimulatedBroker (no display)."""
+    from unittest.mock import MagicMock
+    from ui.main_window import MainWindow
+    from brokers.simulatedbroker import SimulatedBroker
+
+    broker = SimulatedBroker(initial_balance=100_000.0, market_fee=0.0, limit_fee=0.0)
+    # Seed a stable price so market orders fill deterministically
+    broker.market_data["BTCUSDT"] = 50_000.0
+    broker.market_data["AAPL"] = 150.0
+
+    broker_manager = MagicMock()
+    broker_manager.get_broker.return_value = broker
+
+    strategy_manager = MagicMock()
+    strategy_manager.get_available_strategies.return_value = ["MACD/RSI", "EMA Crossover"]
+
+    data_loader = MagicMock()
+
+    win = MainWindow(
+        data_loader=data_loader,
+        strategy_manager=strategy_manager,
+        broker_manager=broker_manager,
+        missing_deps=[],
+    )
+    # Wire in the broker directly so place_order doesn't need to call broker_manager
+    win.current_broker = broker
+    return win, broker
+
+
+class TestOrderEntryWiring:
+    """Buy/Sell buttons must submit orders to SimulatedBroker and update the UI."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, qapp):
+        self.win, self.broker = _make_window_with_sim_broker(qapp)
+        yield
+        self.broker.close()
+        self.win.destroy()
+
+    # --- Buy button ---
+
+    def test_buy_button_exists(self):
+        assert hasattr(self.win, 'buy_btn'), "buy_btn widget must exist"
+
+    def test_sell_button_exists(self):
+        assert hasattr(self.win, 'sell_btn'), "sell_btn widget must exist"
+
+    def test_buy_places_order_in_broker(self):
+        """Clicking BUY must add an order to broker.order_history."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+
+        before = len(self.broker.order_history)
+        self.win.place_order("buy")
+        assert len(self.broker.order_history) == before + 1
+
+    def test_sell_places_order_in_broker(self):
+        """Clicking SELL must add an order to broker.order_history."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+
+        # First buy to create a position, then sell
+        self.win.place_order("buy")
+        before = len(self.broker.order_history)
+        self.win.place_order("sell")
+        assert len(self.broker.order_history) == before + 1
+
+    def test_buy_order_is_filled(self):
+        """Market BUY order must be filled immediately by SimulatedBroker."""
+        from brokers.simulatedbroker import OrderStatus
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        last_order = self.broker.order_history[-1]
+        assert last_order.status == OrderStatus.FILLED
+
+    def test_buy_creates_position(self):
+        """After a BUY the broker must hold a position for the symbol."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        pos = self.broker.get_position("BTCUSDT")
+        assert pos is not None
+        assert pos.qty > 0
+
+    def test_buy_debits_balance(self):
+        """BUY order must reduce the broker cash balance."""
+        initial = self.broker.balance
+        self.win.symbol_combo.setCurrentText("AAPL")
+        self.win.order_qty_input.setText("1")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        assert self.broker.balance < initial
+
+    def test_sell_after_buy_closes_position(self):
+        """Selling the full position must remove it from the broker."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        self.win.place_order("sell")
+        assert self.broker.get_position("BTCUSDT") is None
+
+    # --- P&L / account display ---
+
+    def test_pnl_label_exists(self):
+        assert hasattr(self.win, 'pnl_label'), "pnl_label widget must exist"
+
+    def test_account_label_exists(self):
+        assert hasattr(self.win, 'account_label'), "account_label widget must exist"
+
+    def test_positions_text_exists(self):
+        assert hasattr(self.win, 'positions_text'), "positions_text widget must exist"
+
+    def test_buy_updates_positions_display(self):
+        """After BUY, positions_text must reflect the open position."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        content = self.win.positions_text.toPlainText()
+        assert "BTCUSDT" in content
+
+    def test_no_position_text_when_flat(self):
+        """Before any trade the positions display must show 'No active positions'."""
+        self.win.refresh_account_info()
+        content = self.win.positions_text.toPlainText()
+        assert "No active positions" in content
+
+    # --- Orders tab ---
+
+    def test_orders_tab_exists(self):
+        """The Orders tab must be present in the bottom tab widget."""
+        tab_titles = [
+            self.win.bottom_tabs.tabText(i)
+            for i in range(self.win.bottom_tabs.count())
+        ]
+        assert "Orders" in tab_titles, f"Orders tab missing; tabs: {tab_titles}"
+
+    def test_orders_table_populated_after_buy(self):
+        """After a BUY the orders table must have at least one row."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        assert self.win._orders_table.rowCount() >= 1
+
+    def test_orders_table_side_column_shows_buy(self):
+        """Side column (col 2) must read 'BUY' after a buy order."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        side_item = self.win._orders_table.item(0, 2)
+        assert side_item is not None
+        assert side_item.text() == "BUY"
+
+    def test_orders_table_symbol_column(self):
+        """Symbol column (col 1) must match the selected symbol."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        sym_item = self.win._orders_table.item(0, 1)
+        assert sym_item is not None
+        assert sym_item.text() == "BTCUSDT"
+
+    def test_orders_table_status_filled(self):
+        """Status column (col 6) must read 'Filled' for a market order."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        status_item = self.win._orders_table.item(0, 6)
+        assert status_item is not None
+        assert status_item.text() == "Filled"
+
+    def test_orders_status_label_updates(self):
+        """Status label above the orders table must report the order count."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        label = self.win._orders_status_label.text()
+        assert "1" in label  # at least "1 total"
+
+    def test_multiple_orders_all_shown(self):
+        """Two orders (buy + sell) must both appear in the orders table."""
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        self.win.place_order("buy")
+        self.win.place_order("sell")
+        assert self.win._orders_table.rowCount() >= 2
+
+    # --- Limit order ---
+
+    def test_limit_buy_pending_shown_in_table(self):
+        """A limit buy that can't fill immediately must appear as Pending in the table."""
+        from brokers.simulatedbroker import OrderStatus
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Limit")
+        self.win.limit_price_input.setText("1.00")   # far below market — won't fill
+        self.win.place_order("buy")
+        last_order = self.broker.order_history[-1]
+        assert last_order.status == OrderStatus.PENDING
+        status_item = self.win._orders_table.item(self.win._orders_table.rowCount() - 1, 6)
+        assert status_item is not None
+        assert status_item.text() == "Pending"
+
+
+# ---------------------------------------------------------------------------
 # Legacy entry point (run the demo window manually)
 # ---------------------------------------------------------------------------
 
