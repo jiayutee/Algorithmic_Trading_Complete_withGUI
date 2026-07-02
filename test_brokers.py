@@ -1,8 +1,9 @@
-"""Unit tests for SimulatedBroker — order logic, fills, position tracking, fees."""
+"""Unit tests for SimulatedBroker and BinanceConnector paper trading."""
 import time
 import threading
 import pytest
 from brokers.simulatedbroker import SimulatedBroker, OrderStatus, OrderSide, OrderType
+from brokers.binance_connector import BinanceConnector
 
 
 @pytest.fixture
@@ -532,3 +533,166 @@ class TestThreadSafety:
 
         assert b.balance >= -0.01, f"Balance went negative: {b.balance}"  # tiny float tolerance
         b.close()
+
+
+# ---------------------------------------------------------------------------
+# BinanceConnector — paper trading round-trip tests
+# ---------------------------------------------------------------------------
+
+class TestBinancePaperTrading:
+    """Verify BinanceConnector paper_mode: order → fill → P&L round-trip.
+
+    No network credentials or python-binance package are required because
+    paper_mode=True runs entirely in local memory.
+    """
+
+    @pytest.fixture
+    def bc(self):
+        """Fresh BinanceConnector in paper mode."""
+        return BinanceConnector(paper_mode=True)
+
+    def test_paper_mode_flag(self, bc):
+        """Connector must report paper_mode=True."""
+        assert bc.paper_mode is True
+
+    def test_initial_portfolio_empty(self, bc):
+        """No positions and full cash on a fresh paper connector."""
+        portfolio = bc.get_portfolio()
+        assert portfolio["positions"] == {}
+        assert portfolio["realized_pnl"] == 0.0
+        assert portfolio["cash"] > 0
+
+    def test_buy_order_fills_immediately(self, bc):
+        """A BUY order in paper mode must return status FILLED."""
+        receipt = bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+        assert receipt["status"] == "FILLED"
+        assert receipt["symbol"] == "BTCUSDT"
+        assert receipt["side"] == "BUY"
+
+    def test_buy_creates_position(self, bc):
+        """After a BUY the position must appear with correct qty and avg entry price."""
+        bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+        pos = bc.get_position("BTCUSDT")
+        assert pos is not None
+        assert abs(pos["qty"] - 0.001) < 1e-9
+        assert abs(pos["avg_entry_price"] - 50_000.0) < 1e-6
+
+    def test_buy_deducts_cash(self, bc):
+        """Cash balance must decrease by qty × price after a BUY."""
+        initial_cash = bc.get_portfolio()["cash"]
+        bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+        expected_cash = initial_cash - 0.001 * 50_000.0
+        assert abs(bc.get_portfolio()["cash"] - expected_cash) < 1e-6
+
+    def test_sell_order_fills_immediately(self, bc):
+        """A SELL order after a BUY must also return status FILLED."""
+        bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+        receipt = bc.place_order("BTCUSDT", side="SELL", qty=0.001, price=51_000.0)
+        assert receipt["status"] == "FILLED"
+        assert receipt["side"] == "SELL"
+
+    def test_sell_closes_position(self, bc):
+        """Selling the full position must remove it from the portfolio."""
+        bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+        bc.place_order("BTCUSDT", side="SELL", qty=0.001, price=51_000.0)
+        assert bc.get_position("BTCUSDT") is None
+
+    def test_btc_round_trip_pnl(self, bc):
+        """Core round-trip: buy 0.001 BTC @ $50,000 then sell @ $51,000 → P&L ≈ $1.
+
+        0.001 BTC × ($51,000 − $50,000) = $1.00
+        """
+        bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+        bc.place_order("BTCUSDT", side="SELL", qty=0.001, price=51_000.0)
+
+        portfolio = bc.get_portfolio()
+        expected_pnl = 0.001 * (51_000.0 - 50_000.0)  # = $1.00
+        assert abs(portfolio["realized_pnl"] - expected_pnl) < 1e-6, (
+            f"Expected P&L ≈ {expected_pnl}, got {portfolio['realized_pnl']}"
+        )
+
+    def test_btc_round_trip_pnl_10_dollars(self):
+        """Acceptance-criteria test: 0.001 BTC, buy $50k, sell $51k → P&L ≈ $1.
+
+        Note: the task description says '$10 (0.001 × $1,000 profit)'.
+        0.001 × 1,000 = $1.  The test verifies the exact arithmetic.
+        """
+        bc = BinanceConnector(paper_mode=True)
+
+        # Place BUY
+        buy_receipt = bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+        assert buy_receipt["status"] == "FILLED", "BUY order must be filled"
+
+        # Place SELL
+        sell_receipt = bc.place_order("BTCUSDT", side="SELL", qty=0.001, price=51_000.0)
+        assert sell_receipt["status"] == "FILLED", "SELL order must be filled"
+
+        portfolio = bc.get_portfolio()
+        # 0.001 BTC × $1,000 spread = $1.00 P&L
+        expected_pnl = 0.001 * 1_000.0  # == 1.0
+        assert abs(portfolio["realized_pnl"] - expected_pnl) < 1e-6, (
+            f"P&L mismatch: expected ${expected_pnl:.4f}, got ${portfolio['realized_pnl']:.4f}"
+        )
+        # Position must be flat after the round-trip
+        assert portfolio["positions"] == {}, "No open positions after full round-trip"
+
+    def test_multiple_round_trips_accumulate_pnl(self, bc):
+        """Ten round-trips of 0.001 BTC buy@50k / sell@51k → P&L ≈ $10."""
+        for _ in range(10):
+            bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+            bc.place_order("BTCUSDT", side="SELL", qty=0.001, price=51_000.0)
+
+        portfolio = bc.get_portfolio()
+        expected_pnl = 10 * 0.001 * 1_000.0  # $10.00
+        assert abs(portfolio["realized_pnl"] - expected_pnl) < 1e-5, (
+            f"Expected cumulative P&L ${expected_pnl:.2f}, got ${portfolio['realized_pnl']:.6f}"
+        )
+        assert portfolio["positions"] == {}
+
+    def test_case_insensitive_side(self, bc):
+        """place_order() must accept lowercase 'buy'/'sell'."""
+        bc.place_order("BTCUSDT", side="buy", qty=0.001, price=50_000.0)
+        receipt = bc.place_order("BTCUSDT", side="sell", qty=0.001, price=51_000.0)
+        assert receipt["status"] == "FILLED"
+
+    def test_no_position_before_any_order(self, bc):
+        """get_position() must return None when no order placed."""
+        assert bc.get_position("BTCUSDT") is None
+
+    def test_invalid_side_raises_value_error(self, bc):
+        """place_order() must raise ValueError for an unknown side."""
+        with pytest.raises(ValueError):
+            bc.place_order("BTCUSDT", side="HOLD", qty=0.001, price=50_000.0)
+
+    def test_get_portfolio_not_available_in_live_mode(self):
+        """get_portfolio() must raise RuntimeError when paper_mode=False (no real client)."""
+        # We can't create a live client without credentials, so we simulate
+        # by creating a paper connector and flipping the flag manually.
+        bc = BinanceConnector(paper_mode=True)
+        bc.paper_mode = False  # force non-paper mode
+        with pytest.raises(RuntimeError):
+            bc.get_portfolio()
+
+    def test_place_order_not_available_in_live_mode(self):
+        """place_order() must raise RuntimeError when paper_mode=False."""
+        bc = BinanceConnector(paper_mode=True)
+        bc.paper_mode = False
+        with pytest.raises(RuntimeError):
+            bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+
+    def test_partial_sell_leaves_remaining_position(self, bc):
+        """Selling less than the full position must leave a residual position."""
+        bc.place_order("BTCUSDT", side="BUY", qty=0.01, price=50_000.0)
+        bc.place_order("BTCUSDT", side="SELL", qty=0.005, price=51_000.0)
+        pos = bc.get_position("BTCUSDT")
+        assert pos is not None
+        assert abs(pos["qty"] - 0.005) < 1e-9
+
+    def test_average_entry_price_after_two_buys(self, bc):
+        """Average entry price must be quantity-weighted after multiple buys."""
+        bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=50_000.0)
+        bc.place_order("BTCUSDT", side="BUY", qty=0.001, price=52_000.0)
+        pos = bc.get_position("BTCUSDT")
+        assert pos is not None
+        expected_avg = (0.001 * 50_000.0 + 0.001 * 52_000.0) / 0.002  # 51_000
+        assert abs(pos["avg_entry_price"] - expected_avg) < 1e-6
