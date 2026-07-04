@@ -490,6 +490,147 @@ class TestOrderEntryWiring:
 
 
 # ---------------------------------------------------------------------------
+# Backtest chart marker tests (D5-T6b)
+#
+# Runs a REAL backtest (core.backtester.Backtester + a real strategy from
+# strategies.simple_strategies) against synthetic trending OHLCV data, then
+# feeds the resulting trade signal log into the actual MainWindow.plot_signals
+# method used by the app. Verifies the Plotly figure object contains marker
+# traces whose point counts, coordinates and symbols line up exactly with the
+# trades the strategy actually generated (not placeholder/fake points).
+# ---------------------------------------------------------------------------
+
+def _make_trending_ohlcv():
+    """Down-then-up synthetic OHLCV data known to trigger EMA crossover trades
+    (mirrors test_backtester.py::test_ema_crossover_generates_trades_on_trending_data)."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(22)
+    down = [100.0]
+    for _ in range(40):
+        down.append(down[-1] * 0.99)
+    up = [down[-1]]
+    for _ in range(212):
+        up.append(up[-1] * 1.008)
+    closes = np.array(down + up[1:], dtype=float)
+    n = len(closes)
+    highs = closes * (1 + rng.uniform(0.002, 0.015, n))
+    lows = closes * (1 - rng.uniform(0.002, 0.015, n))
+    opens = closes * (1 + rng.normal(0, 0.003, n))
+    volumes = np.full(n, 500_000.0)
+    idx = pd.date_range(start="2023-01-03", periods=n, freq="B")
+    return pd.DataFrame(
+        {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": volumes},
+        index=idx,
+    )
+
+
+class TestBacktestChartMarkers:
+    """Validate that plot_signals() overlays real buy/sell trade markers onto
+    the Plotly figure, matching the strategy's actual trade log."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, qapp):
+        from core.backtester import Backtester
+        from strategies.simple_strategies import EMACrossoverStrategy
+
+        self.df = _make_trending_ohlcv()
+
+        # Run a real backtest to get a real trade/signal log.
+        bt_engine = Backtester()
+        bt_engine.add_data(self.df.copy())
+        bt_engine.add_strategy(EMACrossoverStrategy)
+        self.results = bt_engine.run_backtest(cash=100_000, benchmark_ticker="SPY")
+        assert "error" not in self.results, f"Backtest errored: {self.results.get('error')}"
+        self.signals = self.results.get("signals", [])
+        assert len(self.signals) >= 1, "Expected at least one real trade signal to validate markers against"
+
+        # Build the headless MainWindow exactly as the app does, then draw the
+        # base candlestick chart from the same data used for the backtest.
+        self.win = _make_main_window(qapp)
+        self.win.df = self.df
+        self.win.plot_candles()
+        yield
+        self.win.destroy()
+
+    def test_fig_has_candlestick_base_trace(self):
+        trace_types = [t.type for t in self.win.fig.data]
+        assert "candlestick" in trace_types
+
+    def test_plot_signals_adds_marker_traces(self):
+        n_before = len(self.win.fig.data)
+        self.win.plot_signals(self.signals)
+        n_after = len(self.win.fig.data)
+        buy_count = sum(1 for s in self.signals if s.get("type") in ("buy", "buy_cover"))
+        sell_count = sum(1 for s in self.signals if s.get("type") in ("sell", "sell_short"))
+        expected_new_traces = (1 if buy_count else 0) + (1 if sell_count else 0)
+        assert expected_new_traces > 0, "Test fixture must produce at least one marker trace"
+        assert n_after - n_before == expected_new_traces
+
+    def test_buy_marker_count_matches_trade_log(self):
+        self.win.plot_signals(self.signals)
+        buy_signals = [s for s in self.signals if s.get("type") in ("buy", "buy_cover")]
+        buy_traces = [t for t in self.win.fig.data if getattr(t, "name", None) == "Buy Signal"]
+        if not buy_signals:
+            assert not buy_traces
+            return
+        assert len(buy_traces) == 1
+        assert len(buy_traces[0].x) == len(buy_signals)
+        assert len(buy_traces[0].y) == len(buy_signals)
+
+    def test_sell_marker_count_matches_trade_log(self):
+        self.win.plot_signals(self.signals)
+        sell_signals = [s for s in self.signals if s.get("type") in ("sell", "sell_short")]
+        sell_traces = [t for t in self.win.fig.data if getattr(t, "name", None) == "Sell Signal"]
+        if not sell_signals:
+            assert not sell_traces
+            return
+        assert len(sell_traces) == 1
+        assert len(sell_traces[0].x) == len(sell_signals)
+        assert len(sell_traces[0].y) == len(sell_signals)
+
+    def test_marker_prices_match_trade_log_exactly(self):
+        """Marker y-values must be the exact executed prices from the trade log,
+        proving these are real signals and not placeholder points."""
+        self.win.plot_signals(self.signals)
+        buy_signals = [s for s in self.signals if s.get("type") in ("buy", "buy_cover")]
+        sell_signals = [s for s in self.signals if s.get("type") in ("sell", "sell_short")]
+
+        for trace in self.win.fig.data:
+            if getattr(trace, "name", None) == "Buy Signal":
+                assert sorted(trace.y) == sorted(s["price"] for s in buy_signals)
+            elif getattr(trace, "name", None) == "Sell Signal":
+                assert sorted(trace.y) == sorted(s["price"] for s in sell_signals)
+
+    def test_marker_timestamps_within_data_range(self):
+        """Marker x-values must fall within the loaded data's date range and
+        match one of the actual signal dates emitted by the strategy."""
+        self.win.plot_signals(self.signals)
+        data_start, data_end = self.df.index[0], self.df.index[-1]
+        signal_dates = {s["date"] for s in self.signals}
+
+        for trace in self.win.fig.data:
+            if getattr(trace, "name", None) in ("Buy Signal", "Sell Signal"):
+                for x in trace.x:
+                    assert data_start <= x <= data_end, (
+                        f"Marker timestamp {x} outside loaded data range [{data_start}, {data_end}]"
+                    )
+                    assert x in signal_dates, f"Marker timestamp {x} does not match any real signal date"
+
+    def test_marker_symbols_and_colors(self):
+        """Buy markers must render as green up-triangles, sell markers as red down-triangles."""
+        self.win.plot_signals(self.signals)
+        for trace in self.win.fig.data:
+            if getattr(trace, "name", None) == "Buy Signal":
+                assert trace.marker.symbol == "triangle-up"
+                assert trace.marker.color == "green"
+            elif getattr(trace, "name", None) == "Sell Signal":
+                assert trace.marker.symbol == "triangle-down"
+                assert trace.marker.color == "red"
+
+
+# ---------------------------------------------------------------------------
 # Legacy entry point (run the demo window manually)
 # ---------------------------------------------------------------------------
 
