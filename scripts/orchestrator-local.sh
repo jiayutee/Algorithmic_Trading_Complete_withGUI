@@ -69,6 +69,11 @@ fi
 DAYS=$(python3 -c "from datetime import date; print((date(2026,7,28)-date.today()).days)" 2>/dev/null || echo "?")
 DAY_N=$(python3 -c "from datetime import date; print(max(1, 30-(date(2026,7,28)-date.today()).days+1))" 2>/dev/null || echo "?")
 
+# Timestamp (epoch) of the most recent slot that actually completed successfully.
+# Only this gets persisted to LAST_RUN_FILE — a failed slot must stay eligible
+# for retry on the next catch-up pass, so we never blindly advance past it.
+LAST_SUCCESS_EPOCH=""
+
 while IFS='|' read -r SLOT_TIME RUN_TYPE SLOT_HOUR; do
     LOCAL_TIME=$(python3 -c "
 from datetime import datetime
@@ -95,23 +100,68 @@ except: print('?')
     LOG_FILE="$LOG_DIR/orchestrator-$(date +%Y%m%d-%H%M)-${RUN_TYPE}.log"
 
     CLAUDE_BIN="${CLAUDE_BIN:-/Users/jiayutee/.local/bin/claude}"
-    cd "$PROJECT_DIR" && "$CLAUDE_BIN" \
-        --append-system-prompt-file "$PROJECT_DIR/.github/agents/orchestrator.agent.md" \
-        --print \
-        --allowedTools "Bash,Read,Edit,Write,Agent,WebSearch,WebFetch" \
-        --max-turns 80 \
-        -p "$PROMPT" \
-        >> "$LOG_FILE" 2>&1
 
-    echo "[$(date -u)] Finished: $SLOT_TIME ($RUN_TYPE)" | tee -a "$LOG_DIR/launchd.log"
+    SLOT_OK=false
+    for ATTEMPT in 1 2; do
+        if [ "$ATTEMPT" -eq 2 ]; then
+            echo "[$(date -u)] Retrying slot $SLOT_TIME ($RUN_TYPE) after failure..." | tee -a "$LOG_DIR/launchd.log"
+            sleep 10
+        fi
+
+        cd "$PROJECT_DIR" && "$CLAUDE_BIN" \
+            --append-system-prompt-file "$PROJECT_DIR/.github/agents/orchestrator.agent.md" \
+            --print \
+            --allowedTools "Bash,Read,Edit,Write,Agent,WebSearch,WebFetch" \
+            --max-turns 80 \
+            -p "$PROMPT" \
+            >> "$LOG_FILE" 2>&1
+        CLAUDE_EXIT=$?
+
+        if [ "$CLAUDE_EXIT" -eq 0 ] && ! grep -q "API Error" "$LOG_FILE"; then
+            SLOT_OK=true
+            break
+        fi
+    done
+
+    if [ "$SLOT_OK" = true ]; then
+        echo "[$(date -u)] Finished: $SLOT_TIME ($RUN_TYPE)" | tee -a "$LOG_DIR/launchd.log"
+
+        # Track this slot as the new high-water mark for LAST_RUN_FILE.
+        LAST_SUCCESS_EPOCH=$(python3 -c "
+from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo('Europe/Berlin')
+except Exception:
+    from datetime import timezone, timedelta
+    tz = timezone(timedelta(hours=2))
+dt = datetime.strptime('$SLOT_TIME', '%Y-%m-%d %H:%M').replace(tzinfo=tz)
+print(dt.timestamp())
+" 2>/dev/null)
+    else
+        echo "[$(date -u)] FAILED after retry: $SLOT_TIME ($RUN_TYPE) — will not mark as done" | tee -a "$LOG_DIR/launchd.log"
+
+        if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+                --data-urlencode "text=⚠️ AlgoTrader orchestrator: ${RUN_TYPE} run for ${SLOT_TIME} failed twice (API error) — will retry next wake." \
+                --data-urlencode "parse_mode=Markdown" > /dev/null
+        fi
+
+        # Stop processing further (later) slots this pass — leave LAST_RUN_FILE
+        # untouched so this slot (and anything after it) is retried next wake.
+        break
+    fi
 
     # Small gap between catch-up runs to avoid rate limits
     sleep 5
 
 done <<< "$MISSED"
 
-# ── Save last run timestamp ──────────────────────────────────────────────────
-python3 -c "import time; open('$LAST_RUN_FILE','w').write(str(time.time()))"
+# ── Save last run timestamp (only advances past slots that actually succeeded) ──
+if [ -n "$LAST_SUCCESS_EPOCH" ]; then
+    python3 -c "open('$LAST_RUN_FILE','w').write('$LAST_SUCCESS_EPOCH')"
+fi
 
 # Keep only last 30 log files
 ls -t "$LOG_DIR"/orchestrator-*.log 2>/dev/null | tail -n +31 | xargs rm -f
