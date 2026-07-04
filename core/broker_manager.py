@@ -14,6 +14,13 @@ except ImportError:
     BinanceConnector = None
     _BINANCE_AVAILABLE = False
 
+try:
+    from brokers.kucoin_connector import KuCoinConnector
+    _KUCOIN_AVAILABLE = True
+except ImportError:
+    KuCoinConnector = None
+    _KUCOIN_AVAILABLE = False
+
 from brokers.simulatedbroker import SimulatedBroker
 
 logger = logging.getLogger(__name__)
@@ -21,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 class BrokerManager:
     def __init__(self, alpaca_key=None, alpaca_secret=None,
-                 binance_key=None, binance_secret=None, binance_testnet_key=None, binance_testnet_secret=None):
+                 binance_key=None, binance_secret=None, binance_testnet_key=None, binance_testnet_secret=None,
+                 kucoin_key=None, kucoin_secret=None, kucoin_password=None):
         self.brokers = {
             "Simulator": SimulatedBroker(),
         }
@@ -54,6 +62,18 @@ class BrokerManager:
         except Exception as e:
             logger.warning("Failed to connect to Binance Testnet: %s", e)
             self.brokers["Binance_testnet"] = None
+
+        # Initialize KuCoin with error handling
+        try:
+            if _KUCOIN_AVAILABLE and kucoin_key and kucoin_secret:
+                self.brokers["KuCoin"] = KuCoinConnector(
+                    kucoin_key, kucoin_secret, kucoin_password or "", paper_mode=False
+                )
+            else:
+                self.brokers["KuCoin"] = None
+        except Exception as e:
+            logger.warning("Failed to connect to KuCoin: %s", e)
+            self.brokers["KuCoin"] = None
 
     def get_broker(self, name):
         broker = self.brokers.get(name)

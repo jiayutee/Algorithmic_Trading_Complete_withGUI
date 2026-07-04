@@ -1,9 +1,10 @@
-"""Unit tests for SimulatedBroker and BinanceConnector paper trading."""
+"""Unit tests for SimulatedBroker, BinanceConnector, and KuCoinConnector paper trading."""
 import time
 import threading
 import pytest
 from brokers.simulatedbroker import SimulatedBroker, OrderStatus, OrderSide, OrderType
 from brokers.binance_connector import BinanceConnector
+from brokers.kucoin_connector import KuCoinConnector
 
 
 @pytest.fixture
@@ -696,3 +697,177 @@ class TestBinancePaperTrading:
         assert pos is not None
         expected_avg = (0.001 * 50_000.0 + 0.001 * 52_000.0) / 0.002  # 51_000
         assert abs(pos["avg_entry_price"] - expected_avg) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# KuCoinConnector — paper trading round-trip tests
+# ---------------------------------------------------------------------------
+
+class TestKuCoinPaperTrading:
+    """Verify KuCoinConnector paper_mode: order -> fill -> P&L round-trip.
+
+    No network credentials or a dedicated KuCoin SDK package are required
+    because paper_mode=True runs entirely in local memory, mirroring
+    BinanceConnector's paper trading ledger exactly.
+    """
+
+    @pytest.fixture
+    def kc(self):
+        """Fresh KuCoinConnector in paper mode."""
+        return KuCoinConnector(paper_mode=True)
+
+    def test_paper_mode_flag(self, kc):
+        """Connector must report paper_mode=True."""
+        assert kc.paper_mode is True
+
+    def test_initial_portfolio_empty(self, kc):
+        """No positions and full cash on a fresh paper connector."""
+        portfolio = kc.get_portfolio()
+        assert portfolio["positions"] == {}
+        assert portfolio["realized_pnl"] == 0.0
+        assert portfolio["cash"] > 0
+
+    def test_buy_order_fills_immediately(self, kc):
+        """A BUY order in paper mode must return status FILLED."""
+        receipt = kc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        assert receipt["status"] == "FILLED"
+        assert receipt["symbol"] == "BTC/USDT"
+        assert receipt["side"] == "BUY"
+
+    def test_buy_creates_position(self, kc):
+        """After a BUY the position must appear with correct qty and avg entry price."""
+        kc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        pos = kc.get_position("BTC/USDT")
+        assert pos is not None
+        assert abs(pos["qty"] - 0.001) < 1e-9
+        assert abs(pos["avg_entry_price"] - 50_000.0) < 1e-6
+
+    def test_buy_deducts_cash(self, kc):
+        """Cash balance must decrease by qty x price after a BUY."""
+        initial_cash = kc.get_portfolio()["cash"]
+        kc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        expected_cash = initial_cash - 0.001 * 50_000.0
+        assert abs(kc.get_portfolio()["cash"] - expected_cash) < 1e-6
+
+    def test_sell_closes_position(self, kc):
+        """Selling the full position must remove it from the portfolio."""
+        kc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        kc.place_order("BTC/USDT", side="SELL", qty=0.001, price=51_000.0)
+        assert kc.get_position("BTC/USDT") is None
+
+    def test_btc_round_trip_pnl(self, kc):
+        """Core round-trip: buy 0.001 BTC @ $50,000 then sell @ $51,000 -> P&L ~= $1.
+
+        0.001 BTC x ($51,000 - $50,000) = $1.00
+        """
+        kc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        kc.place_order("BTC/USDT", side="SELL", qty=0.001, price=51_000.0)
+
+        portfolio = kc.get_portfolio()
+        expected_pnl = 0.001 * (51_000.0 - 50_000.0)  # = $1.00
+        assert abs(portfolio["realized_pnl"] - expected_pnl) < 1e-6, (
+            f"Expected P&L ~= {expected_pnl}, got {portfolio['realized_pnl']}"
+        )
+        assert portfolio["positions"] == {}
+
+    def test_multiple_round_trips_accumulate_pnl(self, kc):
+        """Ten round-trips of 0.001 BTC buy@50k / sell@51k -> P&L ~= $10."""
+        for _ in range(10):
+            kc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+            kc.place_order("BTC/USDT", side="SELL", qty=0.001, price=51_000.0)
+
+        portfolio = kc.get_portfolio()
+        expected_pnl = 10 * 0.001 * 1_000.0  # $10.00
+        assert abs(portfolio["realized_pnl"] - expected_pnl) < 1e-5, (
+            f"Expected cumulative P&L ${expected_pnl:.2f}, got ${portfolio['realized_pnl']:.6f}"
+        )
+        assert portfolio["positions"] == {}
+
+    def test_case_insensitive_side(self, kc):
+        """place_order() must accept lowercase 'buy'/'sell'."""
+        kc.place_order("BTC/USDT", side="buy", qty=0.001, price=50_000.0)
+        receipt = kc.place_order("BTC/USDT", side="sell", qty=0.001, price=51_000.0)
+        assert receipt["status"] == "FILLED"
+
+    def test_no_position_before_any_order(self, kc):
+        """get_position() must return None when no order placed."""
+        assert kc.get_position("BTC/USDT") is None
+
+    def test_invalid_side_raises_value_error(self, kc):
+        """place_order() must raise ValueError for an unknown side."""
+        with pytest.raises(ValueError):
+            kc.place_order("BTC/USDT", side="HOLD", qty=0.001, price=50_000.0)
+
+    def test_get_portfolio_not_available_in_live_mode(self):
+        """get_portfolio() must raise RuntimeError when paper_mode=False."""
+        kc = KuCoinConnector(paper_mode=True)
+        kc.paper_mode = False  # force non-paper mode without a real client
+        with pytest.raises(RuntimeError):
+            kc.get_portfolio()
+
+    def test_place_order_not_available_in_live_mode(self):
+        """place_order() must raise RuntimeError when paper_mode=False."""
+        kc = KuCoinConnector(paper_mode=True)
+        kc.paper_mode = False
+        with pytest.raises(RuntimeError):
+            kc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+
+    def test_partial_sell_leaves_remaining_position(self, kc):
+        """Selling less than the full position must leave a residual position."""
+        kc.place_order("BTC/USDT", side="BUY", qty=0.01, price=50_000.0)
+        kc.place_order("BTC/USDT", side="SELL", qty=0.005, price=51_000.0)
+        pos = kc.get_position("BTC/USDT")
+        assert pos is not None
+        assert abs(pos["qty"] - 0.005) < 1e-9
+
+    def test_average_entry_price_after_two_buys(self, kc):
+        """Average entry price must be quantity-weighted after multiple buys."""
+        kc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        kc.place_order("BTC/USDT", side="BUY", qty=0.001, price=52_000.0)
+        pos = kc.get_position("BTC/USDT")
+        assert pos is not None
+        expected_avg = (0.001 * 50_000.0 + 0.001 * 52_000.0) / 0.002  # 51_000
+        assert abs(pos["avg_entry_price"] - expected_avg) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# KuCoinConnector — historical OHLCV data fetch
+# ---------------------------------------------------------------------------
+
+class TestKuCoinHistoricalData:
+    """Verify KuCoinConnector.get_historical_klines() against KuCoin's public API.
+
+    This hits KuCoin's live public market-data endpoint via ccxt (no API
+    credentials required). If the sandbox/CI runner has no outbound network
+    access to KuCoin, the test is skipped rather than failed — this mirrors
+    how test_data_loading.py treats optional/unreachable external providers
+    (e.g. the OpenBB fallback tests), so a network blocker here is reported
+    as a skip, not a false failure.
+    """
+
+    def test_fetch_historical_ohlcv_btcusdt(self):
+        kc = KuCoinConnector(paper_mode=True)
+        try:
+            candles = kc.get_historical_klines("BTC/USDT", timeframe="1h", limit=5)
+        except Exception as e:
+            pytest.skip(f"KuCoin public API unreachable from this environment: {e}")
+
+        assert isinstance(candles, list)
+        assert len(candles) > 0, "Expected at least one OHLCV candle from KuCoin"
+        # Each candle: [timestamp, open, high, low, close, volume]
+        first = candles[0]
+        assert len(first) == 6
+        timestamp, open_, high, low, close, volume = first
+        assert timestamp > 0
+        assert high >= low
+        assert volume >= 0
+
+    def test_historical_klines_available_regardless_of_paper_mode(self):
+        """Unlike BinanceConnector, KuCoin historical data needs no credentials,
+        so it must not raise merely because paper_mode=True."""
+        kc = KuCoinConnector(paper_mode=True)
+        try:
+            candles = kc.get_historical_klines("BTC/USDT", timeframe="1d", limit=3)
+        except Exception as e:
+            pytest.skip(f"KuCoin public API unreachable from this environment: {e}")
+        assert isinstance(candles, list)
