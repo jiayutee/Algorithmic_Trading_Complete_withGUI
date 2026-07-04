@@ -206,6 +206,7 @@ curl -s -X PATCH "https://api.notion.com/v1/pages/<PAGE_ID>" \
 ```
 
 ## Create Sprint Board task
+The Sprint Board's actual schema (confirmed via `GET /v1/databases/91e3aa02-65de-40fb-8cb4-d297683bd67e`) differs from a generic template — title property is `Task` (not `Name`), `Status` is a Notion `status` type (not `select`), and `Assigned Agent` is a `select` (not `rich_text`) constrained to a fixed option list. Using the wrong shape causes a `validation_error` that silently drops the whole task-creation step. Use exactly this:
 ```bash
 curl -s -X POST "https://api.notion.com/v1/pages" \
   -H "Authorization: Bearer $NOTION_API_KEY" \
@@ -214,13 +215,17 @@ curl -s -X POST "https://api.notion.com/v1/pages" \
   -d "{
     \"parent\":{\"database_id\":\"91e3aa02-65de-40fb-8cb4-d297683bd67e\"},
     \"properties\":{
-      \"Name\":{\"title\":[{\"text\":{\"content\":\"<TASK_NAME>\"}}]},
-      \"Status\":{\"select\":{\"name\":\"To Do\"}},
-      \"Assigned Agent\":{\"rich_text\":[{\"text\":{\"content\":\"<AGENT_NAME>\"}}]},
+      \"Task\":{\"title\":[{\"text\":{\"content\":\"<TASK_NAME>\"}}]},
+      \"Status\":{\"status\":{\"name\":\"Not started\"}},
+      \"Day\":{\"number\":<DAY_N>},
+      \"Module\":{\"select\":{\"name\":\"<one of: data-pipeline, strategy, broker, ui, backtest, ml, infra, news>\"}},
+      \"Assigned Agent\":{\"select\":{\"name\":\"<one of: data-pipeline, strategy, execution-broker, ui, backtest-metrics, qa-test, reliability-release, orchestrator>\"}},
+      \"Priority (1-5)\":{\"number\":<1-5>},
       \"Acceptance Criteria\":{\"rich_text\":[{\"text\":{\"content\":\"<CRITERIA>\"}}]}
     }
   }"
 ```
+If a future schema change breaks this again, re-fetch the schema with `GET /v1/databases/91e3aa02-65de-40fb-8cb4-d297683bd67e` before assuming a credential problem — a `validation_error` response is a schema mismatch, not an auth failure.
 
 # GitHub CI Status (use to check if tests pass after agent commits)
 
