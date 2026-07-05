@@ -148,8 +148,21 @@ print(dt.timestamp())
                 --data-urlencode "parse_mode=Markdown" > /dev/null
         fi
 
-        # Stop processing further (later) slots this pass — leave LAST_RUN_FILE
-        # untouched so this slot (and anything after it) is retried next wake.
+        if [ "$RUN_TYPE" = "progress" ]; then
+            # A stuck low-stakes progress ping must never block the morning/evening
+            # slots bundled behind it in the same catch-up batch (this is exactly
+            # what silently ate the Day 7 evening debrief: a redundant progress
+            # slot failed twice, hit the old unconditional `break`, and the real
+            # evening slot right behind it never ran). Move on; this slot is
+            # abandoned once a later slot succeeds and advances LAST_RUN_FILE past it.
+            echo "[$(date -u)] Skipping failed progress slot, continuing to next slot in batch." | tee -a "$LOG_DIR/launchd.log"
+            sleep 5
+            continue
+        fi
+
+        # morning/evening are load-bearing — stop processing further (later)
+        # slots this pass and leave LAST_RUN_FILE untouched so this slot (and
+        # anything after it) is retried next wake.
         break
     fi
 
