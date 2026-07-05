@@ -60,6 +60,32 @@ The RUN_TYPE env var controls which cycle to execute:
 4. Update Launch Roadmap checklist percentages.
 5. Update Agent Status Board (last run time, status for each agent).
 6. Send Telegram EOD debrief (see format below).
+7. **Verify the Status → Done write actually landed (mandatory — see "Cycle-completion verification" below) before treating the debrief as complete.**
+
+# Start-of-cycle self-healing check (do this FIRST, every run, every RUN_TYPE)
+
+Before doing anything else, query the Daily Log for the most recent row (sorted by Date descending, page_size 1):
+1. If that row's `Date` is **not today** and its `Status` is still `"In Progress"` or `"Planning"` — a prior cycle (most likely yesterday's evening debrief) never completed. This is a missed-cycle recovery, not a normal run:
+   - Reconstruct what actually happened that day from evidence you can still get to: `git log --since="<that day> 00:00" --until="<that day+1> 00:00" --oneline`, the Sprint Board rows with that Day number, and any `logs/orchestrator-*.log` files from that date if present.
+   - PATCH that stale row now: fill in `Done Today` / `Blockers` / `Carry Forward` from the reconstructed evidence, set `Status` → `Done`, and note in `Blockers` that this was a backfill (e.g. "Backfilled by <today's date> morning run — EOD cycle for this day did not complete live.").
+   - Verify the backfill PATCH (see below), then send a Telegram alert: "⚠️ Recovered a stale Daily Log row for <Day N> — EOD debrief never ran live, backfilled from git/Sprint Board evidence."
+   - Only then proceed with today's normal RUN_TYPE procedure.
+2. If the row for today already exists and already has `Status = "Done"` — a debrief already ran successfully this cycle-slot; do not re-run it (avoids duplicate spam if the local wrapper script's catch-up logic re-invokes an already-completed slot — this has happened before, see "Known incident history").
+
+# Cycle-completion verification (mandatory after every Notion write that is supposed to end a cycle)
+
+A Notion `POST`/`PATCH` call returning is **not** proof the write took effect the way you intended, and a non-zero exit or thrown error from a tool call is not the only failure mode — a call can "succeed" at the HTTP level while writing the wrong shape (see Sprint Board schema note above) or a retry can silently double-write. After any write that is meant to finalize a cycle (creating today's Daily Log row in the morning, or setting `Status → Done` in the evening):
+1. Re-`GET` the page (`GET /v1/pages/<PAGE_ID>`) or re-query the database for that row.
+2. Parse the property you just wrote (e.g. `Status.select.name`) and confirm it equals what you intended.
+3. If it does not match, or the write call errored/timed-out/rate-limited: **do not silently end the turn.** Retry the write once. If it still doesn't verify, send a Telegram fallback alert immediately (before ending the run) of the form:
+   `⚠️ AlgoTrader orchestrator: <RUN_TYPE> cycle for Day <N> could not verify its Notion write (<field>) — <what you tried, what you got back>. Needs manual check.`
+   This alert must fire from *inside* the same agent turn that hit the failure — do not rely on the wrapper script to notice, since it only greps stdout for the literal string `"API Error"` and checks the process exit code; it has no idea whether the Notion write inside a "successful" run actually landed.
+
+# Known incident history (read before assuming a new failure is novel)
+
+- **Day 6 (2026-07-03), both morning slots:** `claude --print` died mid-run with "API Error: Connection closed mid-response." The runner script (`scripts/orchestrator-local.sh`) at the time had no retry, no alert, and unconditionally advanced its last-run marker — so the failed slot was silently treated as done and no Day 6 agenda was ever created. Fixed in commit `9f24bee` (retry-once, Telegram alert on repeat failure, don't advance the marker past a failed slot).
+- **Day 7 (2026-07-04), evening/EOD slot:** the `9f24bee` fix was already live and working (confirmed active from ~06:07 Berlin that morning). The EOD debrief still never ran. Root cause (confirmed from `logs/launchd.log`): the wrapper's missed-slot detector has a long-standing, still-unfixed habit of bundling a **redundant re-run of the previous slot** together with the new slot in the same batch (visible on both Day 6 and Day 7 — e.g. it reprocessed "18:00 progress" a second time at the 20:00 Berlin trigger). On Day 7 that redundant repeat of "18:00 progress" genuinely failed twice, and the new (correct-in-isolation) "stop the batch on a failed slot" behavior from `9f24bee` then `break`'d out of the loop before ever reaching the real "20:00 evening" slot bundled right after it. Net effect: the EOD debrief session never started at all — this was not a Notion/credential failure, it was the evening cycle never being invoked. This is why the self-healing check above exists: the agent itself must notice a stale prior-day row and recover, because a scheduler-level bug can make an entire run silently not happen, and no amount of in-session Notion-retry logic helps if the session itself never starts.
+- Follow-up for whoever next touches `scripts/orchestrator-local.sh`: the missed-slot detector needs to stop bundling a repeat of an already-completed slot ahead of the genuinely-new slot, and/or the evening/EOD slot specifically should never be allowed to be skipped as collateral damage from an earlier slot's `break`. Out of scope for this agent's `.md` runbook fix — flagging for Reliability Release / a human to patch the script directly.
 
 # Telegram Message Formats
 
@@ -204,6 +230,22 @@ curl -s -X PATCH "https://api.notion.com/v1/pages/<PAGE_ID>" \
     }
   }"
 ```
+
+## Verify the evening PATCH landed (mandatory — run immediately after the PATCH above)
+```bash
+curl -s -X GET "https://api.notion.com/v1/pages/<PAGE_ID>" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  | python3 -c "
+import json,sys
+p=json.load(sys.stdin)
+status=p.get('properties',{}).get('Status',{}).get('select',{})
+name=status.get('name') if status else None
+print('Status is now:', name)
+assert name == 'Done', f'VERIFICATION FAILED: expected Done, got {name!r}'
+"
+```
+If this raises `AssertionError` (or the `curl`/PATCH itself errored, timed out, or hit a rate limit), do **not** end the turn — retry the PATCH once, re-verify, and if it still fails, send the Telegram fallback alert described in "Cycle-completion verification" above before finishing. A verified `Status == "Done"` is the only acceptable definition of "the evening debrief completed."
 
 ## Create Sprint Board task
 The Sprint Board's actual schema (confirmed via `GET /v1/databases/91e3aa02-65de-40fb-8cb4-d297683bd67e`) differs from a generic template — title property is `Task` (not `Name`), `Status` is a Notion `status` type (not `select`), and `Assigned Agent` is a `select` (not `rich_text`) constrained to a fixed option list. Using the wrong shape causes a `validation_error` that silently drops the whole task-creation step. Use exactly this:
