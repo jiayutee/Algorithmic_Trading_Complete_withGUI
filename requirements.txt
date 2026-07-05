@@ -18,7 +18,7 @@ joblib
 # FinRL is often installed from github:
 # pip install git+https://github.com/AI4Finance-Foundation/FinRL.git
 finrl
-yfinance
+yfinance<0.2.60
 backtrader
 python-binance
 ccxt
@@ -28,7 +28,12 @@ ib-insync
 ta
 pandas-ta
 PyPortfolioOpt
-# OpenBB Platform (unified data provider) — requires Python >=3.10
+# OpenBB Platform (unified data provider) — requires Python >=3.9,<3.13
+# NOTE: yfinance is pinned <0.2.60 above — newer yfinance releases require a
+# curl_cffi session internally, but openbb-yfinance==1.4.2 still passes a
+# plain requests.Session, which raises YFDataException on every call.
+# Verified working combo: yfinance==0.2.55 + openbb-yfinance==1.4.2
+# (Day 5 T6f validation).
 openbb
 openbb-yfinance
 
