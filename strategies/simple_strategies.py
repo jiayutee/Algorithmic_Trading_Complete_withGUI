@@ -25,6 +25,9 @@ class MACD_RSI_Strategy(bt.Strategy):
         )
         self.signals = []
         self.order_count = 0
+        self.closed_trades = []       # populated in notify_trade(); consumed by
+                                       # core/backtester.py::_generate_report() for
+                                       # per-trade P&L / cumulative_pnl
         self._closing_long = False   # True when close() was called to exit a long
         self._closing_short = False  # True when close() was called to exit a short
 
@@ -103,6 +106,10 @@ class MACD_RSI_Strategy(bt.Strategy):
                     })
                     logger.debug("SHORT EXECUTED: %.6f @ %.2f", order.executed.size, order.executed.price)
 
+    def notify_trade(self, trade):
+        if trade.isclosed:
+            self.closed_trades.append(trade)
+
     def stop(self):
         logger.info("Strategy finished. Total orders: %d, Total signals: %d", self.order_count, len(self.signals))
 
@@ -119,13 +126,16 @@ class EMACrossoverStrategy(bt.Strategy):
         self.crossover = bt.indicators.CrossOver(self.ema_short, self.ema_long)
         self.signals = []
         self.order_count = 0
+        self.closed_trades = []       # populated in notify_trade(); consumed by
+                                       # core/backtester.py::_generate_report() for
+                                       # per-trade P&L / cumulative_pnl
         self._closing_long = False
         self._closing_short = False
 
     def next(self):
         # Calculate position size
         size = (self.broker.getcash() * self.params.risk_per_trade) / self.data.close[0]
-        
+
         if not self.position:  # No position
             # LONG signal: EMA crossover up
             if self.crossover > 0:
@@ -196,6 +206,10 @@ class EMACrossoverStrategy(bt.Strategy):
                     })
                     logger.debug("SHORT EXECUTED: %.6f @ %.2f", order.executed.size, order.executed.price)
 
+    def notify_trade(self, trade):
+        if trade.isclosed:
+            self.closed_trades.append(trade)
+
     def stop(self):
         logger.info("Strategy finished. Total orders: %d, Total signals: %d", self.order_count, len(self.signals))
 
@@ -218,13 +232,16 @@ class StochasticStrategy(bt.Strategy):
         self.k_cross_d = bt.indicators.CrossOver(self.k_line, self.d_line)
         self.signals = []
         self.order_count = 0
+        self.closed_trades = []       # populated in notify_trade(); consumed by
+                                       # core/backtester.py::_generate_report() for
+                                       # per-trade P&L / cumulative_pnl
         self._closing_long = False
         self._closing_short = False
 
     def next(self):
         # Calculate position size
         size = (self.broker.getcash() * self.params.risk_per_trade) / self.data.close[0]
-        
+
         if not self.position:  # No position
             # LONG signal: K crosses above D in oversold territory
             if (self.k_cross_d > 0 and 
@@ -302,6 +319,10 @@ class StochasticStrategy(bt.Strategy):
                         'qty': order.executed.size
                     })
                     logger.debug("SHORT EXECUTED: %.6f @ %.2f", order.executed.size, order.executed.price)
+
+    def notify_trade(self, trade):
+        if trade.isclosed:
+            self.closed_trades.append(trade)
 
     def stop(self):
         logger.info("Strategy finished. Total orders: %d, Total signals: %d", self.order_count, len(self.signals))

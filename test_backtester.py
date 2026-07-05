@@ -432,3 +432,183 @@ class TestBacktesterSharpeAndWinRate:
         assert abs(wr_from_summary - wr_numeric) < 1e-3, (
             f"Win rate mismatch: summary={wr_from_summary}, top-level={wr_numeric}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: cumulative_pnl and equity curve / Alpha-Beta (T7 regression)
+#
+# Two bugs fixed here:
+#   1. cumulative_pnl was always [] because none of the 3 core strategies ever
+#      populated `self.closed_trades` -- _generate_report() silently no-ops
+#      via `if hasattr(strategy, 'closed_trades')` when the attribute is
+#      missing, so pnl_per_trade (and thus cumulative_pnl) stayed empty for
+#      every single backtest regardless of how many trades closed.
+#   2. total_asset_value (equity curve) and Alpha/Beta were always empty/zero
+#      because _generate_report() read a 'portfolio_value' key from
+#      backtrader's PyFolio analyzer output that never exists (the analyzer
+#      only ever returns 'returns', 'positions', 'transactions', 'gross_lev').
+#      The resulting KeyError was swallowed by a bare `except Exception`,
+#      which silently reset `returns` to an empty Series every time -- so
+#      Alpha/Beta (computed from `returns`) were always (0, 0) too.
+# ---------------------------------------------------------------------------
+
+def _trending_df(down_days=40, up_days=150, down_days2=60, seed=22, start_price=100.0,
+                  down_factor=0.99, up_factor=1.008, down_factor2=0.985):
+    """Synthetic down-then-up-then-down (reversal) trend that reliably produces
+    closed round-trip trades for EMACrossoverStrategy / MACD_RSI_Strategy /
+    StochasticStrategy.
+
+    A plain down-then-up trend only ever crosses once: EMACrossoverStrategy
+    opens a long on the up-leg and then never exits, because a monotonic
+    exponential uptrend never makes the fast EMA cross back below the slow
+    EMA. MACD_RSI_Strategy and StochasticStrategy have exit conditions that
+    can fire on RSI/K-D behaviour mid-trend, so they happened to close trades
+    on the old fixture, but EMACrossoverStrategy needs an actual trend
+    reversal to flip its crossover indicator back and close the position.
+    Adding a final down-leg (reversal) after the uptrend guarantees the EMA
+    crossover flips negative again, closing the long for all 3 strategies.
+    """
+    rng = np.random.default_rng(seed)
+    down = [start_price]
+    for _ in range(down_days):
+        down.append(down[-1] * down_factor)
+    up = [down[-1]]
+    for _ in range(up_days):
+        up.append(up[-1] * up_factor)
+    down2 = [up[-1]]
+    for _ in range(down_days2):
+        down2.append(down2[-1] * down_factor2)
+    closes = np.array(down + up[1:] + down2[1:], dtype=float)
+    n = len(closes)
+    highs = closes * (1 + rng.uniform(0.002, 0.015, n))
+    lows = closes * (1 - rng.uniform(0.002, 0.015, n))
+    opens = closes * (1 + rng.normal(0, 0.003, n))
+    volumes = np.full(n, 500_000.0)
+    idx = pd.date_range(start="2023-01-03", periods=n, freq="B")
+    return pd.DataFrame(
+        {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": volumes},
+        index=idx,
+    )
+
+
+class TestBacktesterCumulativePnL:
+    """Regression tests for bug: 'Per-trade P&L (cumulative_pnl) always empty
+    for all 3 core strategies'."""
+
+    @pytest.mark.parametrize("strategy_cls", [
+        MACD_RSI_Strategy,
+        EMACrossoverStrategy,
+        StochasticStrategy,
+    ])
+    def test_closed_trades_produce_nonempty_pnl(self, strategy_cls):
+        """When a strategy closes at least one trade, cumulative_pnl and
+        profit_per_trade must be populated (not silently left as [])."""
+        df = _trending_df()
+        results = _run_backtest(strategy_cls, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        n_trades = results["summary"]["Number of Closed Trades"]
+        assert n_trades > 0, (
+            f"Test fixture should reliably close trades for {strategy_cls.__name__}; "
+            f"got 0 -- fixture needs adjusting, not a real assertion failure"
+        )
+        assert len(results["profit_per_trade"]) == n_trades, (
+            f"profit_per_trade should have one entry per closed trade for "
+            f"{strategy_cls.__name__}; if empty, the strategy stopped "
+            f"populating self.closed_trades in notify_trade()"
+        )
+        assert len(results["cumulative_pnl"]) == n_trades, (
+            f"cumulative_pnl should have one entry per closed trade for {strategy_cls.__name__}"
+        )
+
+    def test_cumulative_pnl_is_running_cumsum_of_profit_per_trade(self):
+        df = _trending_df()
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        profit_per_trade = results["profit_per_trade"]
+        assert len(profit_per_trade) > 0, "Fixture should produce at least 1 closed trade"
+        expected = np.cumsum(profit_per_trade).tolist()
+        assert results["cumulative_pnl"] == pytest.approx(expected)
+
+    def test_no_trades_means_empty_but_not_erroring_pnl(self):
+        """Sanity check: 0 closed trades should still yield [] (not crash),
+        distinguishing 'genuinely no trades' from the bug (always empty)."""
+        df = _make_ohlcv(252, seed=99, trend=0.0)
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        n_trades = results["summary"]["Number of Closed Trades"]
+        if n_trades == 0:
+            assert results["cumulative_pnl"] == []
+            assert results["profit_per_trade"] == []
+
+
+class TestBacktesterEquityCurveAndAlphaBeta:
+    """Regression tests for bug: 'Equity curve chart + Alpha/Beta always
+    empty/zero (backtrader pyfolio KeyError swallowed)'."""
+
+    def test_equity_curve_has_one_point_per_bar(self):
+        """total_asset_value must be reconstructed from PyFolio's 'returns'
+        key (there is no 'portfolio_value' key in backtrader's PyFolio
+        analyzer output) and should have one point per bar in the data."""
+        df = _make_ohlcv(252)
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        assert len(results["total_asset_value"]) == len(df), (
+            "Equity curve should have one point per bar; got "
+            f"{len(results['total_asset_value'])} for {len(df)} bars -- "
+            "regression guard for the swallowed pyfolio KeyError bug"
+        )
+        assert results["total_asset_value"][0] == pytest.approx(100_000, rel=1e-6)
+
+    def test_generate_report_reconstructs_equity_curve_without_portfolio_value_key(self):
+        """Directly regression-tests the root cause: simulate PyFolio's actual
+        get_analysis() shape (only 'returns', no 'portfolio_value') and
+        confirm _generate_report reconstructs the equity curve instead of
+        silently defaulting to an empty series."""
+        b = Backtester()
+        df = _make_ohlcv(60, seed=7)
+        b.df = df
+
+        # Pre-populate the benchmark cache so Alpha/Beta calculation doesn't
+        # hit the network for this synthetic, deterministic test.
+        start_date = df.index[0].strftime('%Y-%m-%d')
+        end_date = df.index[-1].strftime('%Y-%m-%d')
+        cache_key = f"SPY_{start_date}_{end_date}"
+        Backtester._benchmark_cache[cache_key] = pd.Series(
+            0.003, index=df.index[1:]
+        )
+
+        class _FakeAnalysis:
+            @staticmethod
+            def get_analysis():
+                # Mirrors backtrader's real bt.analyzers.PyFolio.get_analysis()
+                # shape: only 'returns' (+ 'positions'/'transactions'/'gross_lev'
+                # which _generate_report never reads) -- crucially, NO
+                # 'portfolio_value' key.
+                return {"returns": {d: 0.01 for d in df.index}}
+
+        class _EmptyAnalysis:
+            @staticmethod
+            def get_analysis():
+                return {}
+
+        class _FakeAnalyzers:
+            pyfolio = _FakeAnalysis()
+            trade_analyzer = _EmptyAnalysis()
+            drawdown = _EmptyAnalysis()
+            sharpe = _EmptyAnalysis()
+
+        class _FakeStrategy:
+            analyzers = _FakeAnalyzers()
+            signals = []
+
+        report = b._generate_report(_FakeStrategy(), benchmark_ticker="SPY", initial_cash=100_000)
+
+        assert len(report["total_asset_value"]) == len(df), (
+            "Equity curve must be reconstructed from the 'returns' key even "
+            "though 'portfolio_value' is absent from PyFolio's analysis dict"
+        )
+        # 1% compounding daily return over len(df) days must grow above the start
+        assert report["total_asset_value"][-1] > 100_000
+        assert report["summary"]["Alpha"] != 0 or report["summary"]["Beta"] != 0, (
+            "Alpha/Beta should be computed from non-empty returns, not silently 0"
+        )

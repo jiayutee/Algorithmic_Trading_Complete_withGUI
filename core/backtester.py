@@ -131,13 +131,29 @@ class Backtester:
 
     def _generate_report(self, strategy, benchmark_ticker, initial_cash=100000.0):
         """Generate performance report"""
-        # PyFolio returns
+        # PyFolio returns.
+        #
+        # NOTE: backtrader's PyFolio analyzer (bt.analyzers.PyFolio) only ever
+        # exposes 'returns', 'positions', 'transactions' and 'gross_lev' keys
+        # from get_analysis() -- there is no 'portfolio_value' key. Looking one
+        # up used to raise a KeyError that was silently swallowed by a bare
+        # `except Exception`, which meant the equity curve (total_asset_value)
+        # and Alpha/Beta were *always* empty/zero regardless of the data,
+        # since `returns` was set to an empty Series every single time.
+        #
+        # Fix: read the 'returns' key (which does exist) and reconstruct the
+        # equity curve ourselves by compounding those per-bar returns against
+        # the strategy's starting cash.
         try:
             pyfolio_analysis = strategy.analyzers.pyfolio.get_analysis()
             returns = pd.Series(pyfolio_analysis['returns'])
-            portfolio_values = pd.Series(pyfolio_analysis['portfolio_value'])
-        except Exception:
+        except (KeyError, AttributeError) as e:
+            logger.warning(f"PyFolio analyzer produced no usable 'returns' data: {e}")
             returns = pd.Series([], dtype=float)
+
+        if len(returns) > 0:
+            portfolio_values = initial_cash * (1.0 + returns).cumprod()
+        else:
             portfolio_values = pd.Series([], dtype=float)
 
         # Calculate Alpha/Beta using cached benchmark
@@ -166,11 +182,11 @@ class Backtester:
         if max_drawdown_pct is None:
             max_drawdown_pct = 0.0
 
-        # PnL per trade
+        # PnL per trade (net of commission, matching the final portfolio value)
         pnl_per_trade = []
         if total_closed_trades > 0:
             if hasattr(strategy, 'closed_trades'):
-                pnl_per_trade = [trade.pnl for trade in strategy.closed_trades]
+                pnl_per_trade = [trade.pnlcomm for trade in strategy.closed_trades]
 
         # Final portfolio value
         final_value = self.cerebro.broker.getvalue()
