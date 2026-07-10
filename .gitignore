@@ -9,8 +9,9 @@ __pycache__/
 .env
 .env.example
 
-# Claude Code local config
-.claude/
+# Claude Code local config (sessions/cache excluded; agents tracked)
+.claude/*
+!.claude/agents/
 
 # SQLite runtime data
 *.sqlite3

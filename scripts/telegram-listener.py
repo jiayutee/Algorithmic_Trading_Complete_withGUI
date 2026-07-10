@@ -76,23 +76,33 @@ def run_orchestrator(user_message: str) -> str:
     """Pass the user message to Claude orchestrator and return its response."""
     prompt = (
         f"Message from owner via Telegram: \"{user_message}\"\n\n"
-        "Respond helpfully and concisely. If it's a status question, check the "
-        "Sprint Board and Notion Daily Log. If it's an instruction, acknowledge "
-        "it, act on it, and confirm what you did. Keep your Telegram reply under "
-        "500 words — the user is reading on a phone."
+        "Classify this message:\n"
+        "- STATUS QUESTION (e.g. 'what's the status?', 'how is X going?', 'any blockers?'): "
+        "Read Notion Daily Log and Sprint Board via curl, reply concisely under 300 words.\n"
+        "- REAL WORK (e.g. 'fix X', 'implement Y', 'add Z', 'run backtest', any actionable instruction): "
+        "1) Immediately send a Telegram acknowledgement ('🔄 Working on it — will update you when done'). "
+        "2) Spawn the appropriate specialist subagent(s) using the Agent tool to do the actual work. "
+        "3) After the subagent completes, update the Notion Daily Log (Done Today field) via curl using NOTION_API_KEY. "
+        "4) Add/update a Sprint Board row for the task. "
+        "5) Send a Telegram completion message with outcome summary. "
+        "6) Keep your final Telegram reply under 400 words.\n\n"
+        "Always use the Notion REST API curl recipes in your instructions for Notion reads/writes. "
+        "Use NOTION_API_KEY from environment. Use TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID for Telegram."
     )
     try:
         claude_bin = os.environ.get("CLAUDE_BIN", "/Users/jiayutee/.local/bin/claude")
+        env = os.environ.copy()
         result = subprocess.run(
             [claude_bin,
              "--append-system-prompt-file",
              str(PROJECT_DIR / ".github/agents/orchestrator.agent.md"),
              "--print",
              "--allowedTools", "Bash,Read,Edit,Write,Agent,WebSearch,WebFetch",
-             "--max-turns", "30", "-p", prompt],
+             "--max-turns", "60", "-p", prompt],
             capture_output=True, text=True,
             timeout=CLAUDE_TIMEOUT,
             cwd=str(PROJECT_DIR),
+            env=env,
         )
         output = result.stdout.strip() or result.stderr.strip()
         # Extract last assistant text block if JSON output
