@@ -8,6 +8,9 @@ Verifies:
 - At least one of the 3 strategies generates at least 1 trade on trending data
 """
 
+import os
+import json
+import csv as csv_module
 import pytest
 import pandas as pd
 import numpy as np
@@ -16,7 +19,7 @@ from strategies.simple_strategies import (
     EMACrossoverStrategy,
     StochasticStrategy,
 )
-from core.backtester import Backtester
+from core.backtester import Backtester, export_report
 
 
 # ---------------------------------------------------------------------------
@@ -612,3 +615,189 @@ class TestBacktesterEquityCurveAndAlphaBeta:
         assert report["summary"]["Alpha"] != 0 or report["summary"]["Beta"] != 0, (
             "Alpha/Beta should be computed from non-empty returns, not silently 0"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: export_report() — CSV and JSON file export (roadmap: "Backtest results
+# exportable (CSV or JSON)")
+# ---------------------------------------------------------------------------
+
+class TestExportReport:
+    """Verify that export_report() correctly writes CSV and JSON output files
+    containing all required sections and columns.
+
+    Uses _trending_df() as the test fixture because it reliably produces at
+    least one closed trade (non-empty profit_per_trade / cumulative_pnl) and
+    a non-trivial equity curve, giving richer output to validate against.
+    """
+
+    # ------------------------------------------------------------------
+    # Shared fixture — run once per test method via a helper (not a
+    # pytest fixture) so the test class stays self-contained.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _results():
+        """Run EMACrossover on the reversal fixture and return the report dict."""
+        df = _trending_df()
+        return _run_backtest(EMACrossoverStrategy, df)
+
+    # ------------------------------------------------------------------
+    # JSON tests
+    # ------------------------------------------------------------------
+
+    def test_json_export_creates_file(self, tmp_path):
+        """export_report with format='json' must create a file on disk."""
+        results = self._results()
+        outpath = str(tmp_path / "report")
+        paths = export_report(results, outpath, format='json')
+        assert "json" in paths, "Return dict must have a 'json' key"
+        assert os.path.isfile(paths["json"]), (
+            f"JSON export file not found at {paths['json']}"
+        )
+
+    def test_json_extension_auto_added(self, tmp_path):
+        """If filepath has no extension, .json is appended automatically."""
+        results = self._results()
+        outpath = str(tmp_path / "myreport")
+        paths = export_report(results, outpath, format='json')
+        assert paths["json"].endswith(".json"), (
+            f"Expected .json extension auto-appended; got {paths['json']}"
+        )
+
+    def test_json_has_required_top_level_keys(self, tmp_path):
+        """The JSON file must contain all required top-level section keys."""
+        results = self._results()
+        outpath = str(tmp_path / "report.json")
+        paths = export_report(results, outpath, format='json')
+        with open(paths["json"], encoding='utf-8') as fh:
+            data = json.load(fh)
+        for key in ("summary", "equity_curve", "profit_per_trade", "cumulative_pnl", "signals"):
+            assert key in data, f"Missing top-level key '{key}' in JSON output"
+
+    def test_json_summary_has_metric_keys(self, tmp_path):
+        """The 'summary' section in JSON must include the required metric keys."""
+        results = self._results()
+        outpath = str(tmp_path / "report.json")
+        paths = export_report(results, outpath, format='json')
+        with open(paths["json"], encoding='utf-8') as fh:
+            data = json.load(fh)
+        summary = data["summary"]
+        for key in ("sharpe", "max_drawdown", "win_rate", "Final Value",
+                    "Sharpe Ratio", "Max Drawdown (%)", "Win Rate"):
+            assert key in summary, f"Missing key '{key}' in JSON summary section"
+
+    def test_json_equity_curve_matches_total_asset_value(self, tmp_path):
+        """equity_curve in JSON must exactly match results['total_asset_value']."""
+        results = self._results()
+        assert len(results["total_asset_value"]) > 0, "Fixture must produce a non-empty equity curve"
+        outpath = str(tmp_path / "report.json")
+        paths = export_report(results, outpath, format='json')
+        with open(paths["json"], encoding='utf-8') as fh:
+            data = json.load(fh)
+        assert len(data["equity_curve"]) == len(results["total_asset_value"]), (
+            "equity_curve length in JSON does not match total_asset_value length"
+        )
+        assert data["equity_curve"][0] == pytest.approx(results["total_asset_value"][0], rel=1e-9)
+
+    def test_json_profit_per_trade_matches_report(self, tmp_path):
+        """profit_per_trade in JSON must match the source list entry-for-entry."""
+        results = self._results()
+        assert len(results["profit_per_trade"]) > 0, (
+            "Fixture must produce at least one closed trade"
+        )
+        outpath = str(tmp_path / "report.json")
+        paths = export_report(results, outpath, format='json')
+        with open(paths["json"], encoding='utf-8') as fh:
+            data = json.load(fh)
+        assert data["profit_per_trade"] == pytest.approx(results["profit_per_trade"])
+
+    # ------------------------------------------------------------------
+    # CSV tests
+    # ------------------------------------------------------------------
+
+    def test_csv_export_creates_three_files(self, tmp_path):
+        """export_report with format='csv' must create three separate files."""
+        results = self._results()
+        outpath = str(tmp_path / "report")
+        paths = export_report(results, outpath, format='csv')
+        assert set(paths.keys()) == {"summary", "trades", "equity"}, (
+            f"Expected keys {{'summary','trades','equity'}}; got {set(paths.keys())}"
+        )
+        for section, path in paths.items():
+            assert os.path.isfile(path), (
+                f"CSV file for section '{section}' not found: {path}"
+            )
+
+    def test_csv_summary_columns_and_metric_keys(self, tmp_path):
+        """The summary CSV must have 'metric'/'value' columns and include required keys."""
+        results = self._results()
+        outpath = str(tmp_path / "report")
+        paths = export_report(results, outpath, format='csv')
+        with open(paths["summary"], newline='', encoding='utf-8') as fh:
+            rows = list(csv_module.DictReader(fh))
+        assert rows, "summary CSV must not be empty"
+        metrics_present = {row["metric"] for row in rows}
+        for key in ("sharpe", "max_drawdown", "win_rate", "Final Value"):
+            assert key in metrics_present, (
+                f"Metric '{key}' missing from summary CSV; found: {metrics_present}"
+            )
+
+    def test_csv_trades_columns(self, tmp_path):
+        """The trades CSV must have 'trade_index', 'pnl', 'cumulative_pnl' columns."""
+        results = self._results()
+        assert len(results["profit_per_trade"]) > 0, (
+            "Fixture must produce at least one closed trade"
+        )
+        outpath = str(tmp_path / "report")
+        paths = export_report(results, outpath, format='csv')
+        with open(paths["trades"], newline='', encoding='utf-8') as fh:
+            reader = csv_module.DictReader(fh)
+            fieldnames = reader.fieldnames
+            rows = list(reader)
+        assert fieldnames is not None, "trades CSV has no header row"
+        for col in ("trade_index", "pnl", "cumulative_pnl"):
+            assert col in fieldnames, (
+                f"Column '{col}' missing from trades CSV; got {fieldnames}"
+            )
+        assert len(rows) == len(results["profit_per_trade"]), (
+            "Number of rows in trades CSV must equal number of closed trades"
+        )
+
+    def test_csv_equity_columns_and_row_count(self, tmp_path):
+        """The equity CSV must have 'bar_index'/'portfolio_value' columns and one row per bar."""
+        results = self._results()
+        assert len(results["total_asset_value"]) > 0, "Fixture must produce a non-empty equity curve"
+        outpath = str(tmp_path / "report")
+        paths = export_report(results, outpath, format='csv')
+        with open(paths["equity"], newline='', encoding='utf-8') as fh:
+            reader = csv_module.DictReader(fh)
+            fieldnames = reader.fieldnames
+            rows = list(reader)
+        assert fieldnames is not None, "equity CSV has no header row"
+        for col in ("bar_index", "portfolio_value"):
+            assert col in fieldnames, (
+                f"Column '{col}' missing from equity CSV; got {fieldnames}"
+            )
+        assert len(rows) == len(results["total_asset_value"]), (
+            f"equity CSV row count {len(rows)} != total_asset_value length "
+            f"{len(results['total_asset_value'])}"
+        )
+
+    def test_csv_equity_first_value_is_initial_cash(self, tmp_path):
+        """The first portfolio_value in the equity CSV should equal the initial cash (100 000)."""
+        results = self._results()
+        outpath = str(tmp_path / "report")
+        paths = export_report(results, outpath, format='csv')
+        with open(paths["equity"], newline='', encoding='utf-8') as fh:
+            first_row = next(csv_module.DictReader(fh))
+        first_val = float(first_row["portfolio_value"])
+        assert first_val == pytest.approx(100_000, rel=1e-5), (
+            f"First equity CSV value should be ~100 000 (initial cash); got {first_val}"
+        )
+
+    def test_invalid_format_raises_value_error(self, tmp_path):
+        """Passing an unknown format string must raise ValueError."""
+        results = self._results()
+        with pytest.raises(ValueError, match="Unsupported format"):
+            export_report(results, str(tmp_path / "out"), format='xlsx')
