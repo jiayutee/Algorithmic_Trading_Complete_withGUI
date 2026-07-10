@@ -36,7 +36,9 @@ scripts/
 - Issue Tracker DB ID: `e575e816-cab1-4d24-8f40-89b1d5ca8f27`
 
 ## Orchestrator
-- Runs via macOS launchd every 2h (6,8,10,12,14,16,18,20 Berlin local time)
+- Runs via macOS launchd overnight only: 23:30 (morning brief), 01:00 (EOD debrief) Berlin local time
+- Schedule deliberately avoids: CariGaji orchestrator (02:00-16:00) and the owner's
+  reserved manual-prompting window (19:30-23:00) — both share the same Claude token pool
 - Two-way Telegram bot (chat_id=51218456) — user can send instructions, orchestrator responds
 - Uses `--append-system-prompt-file .github/agents/orchestrator.agent.md` (NOT `--agent`)
 - Notion updated via REST API (curl) using `$NOTION_API_KEY` from `.env`

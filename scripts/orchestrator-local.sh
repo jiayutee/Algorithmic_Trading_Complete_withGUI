@@ -1,5 +1,7 @@
 #!/bin/bash
-# Local orchestrator runner — called by macOS launchd every 2 hours.
+# Local orchestrator runner — called by macOS launchd at 23:30 and 01:00 Berlin.
+# Overnight-only window: avoids token contention with CariGaji (02:00-16:00)
+# and the owner's reserved manual-prompting window (19:30-23:00).
 # On wake, catches up all missed run slots since the Mac was last active.
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,7 +15,9 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 
 # ── Compute all missed run slots since last run ─────────────────────────────
-# Run slots in Berlin local time (24h hours): 6 8 10 12 14 16 18 20
+# Run slots in Berlin local time (24h hours): 23:30 (morning brief), 01:00 (EOD debrief)
+# Overnight-only window — avoids token contention with CariGaji (02:00-16:00)
+# and the owner's reserved manual-prompting window (19:30-23:00).
 MISSED=$(python3 - <<'PYEOF'
 from datetime import datetime, timedelta, timezone
 import os, sys
@@ -25,7 +29,7 @@ except Exception:
     from datetime import timezone
     tz = timezone(timedelta(hours=2))
 
-SLOTS = [6, 8, 10, 12, 14, 16, 18, 20]
+SLOTS = [23, 1]
 now = datetime.now(tz)
 last_run_file = sys.argv[1] if len(sys.argv) > 1 else ""
 
@@ -45,9 +49,9 @@ missed = []
 check = now.replace(minute=0, second=0, microsecond=0)
 while check > last:
     if check.hour in SLOTS and check > last and check <= now:
-        if check.hour == 6:
+        if check.hour == 23:
             run_type = "morning"
-        elif check.hour == 20:
+        elif check.hour == 1:
             run_type = "evening"
         else:
             run_type = "progress"
@@ -87,15 +91,18 @@ except: print('?')
 
     case "$RUN_TYPE" in
         morning)
-            PROMPT="RUN_TYPE=morning. 6am Berlin morning brief for Day ${DAY_N}/30 (${DAYS} days to launch 2026-07-28). Note: this is a catch-up run triggered at ${LOCAL_TIME}. Follow the Morning Brief procedure: read yesterday Notion carry-forwards, plan today agenda, assign tasks to specialist agents, create today Daily Log row, add Sprint Board tasks, send Telegram morning brief, spawn specialist agents."
+            PROMPT="RUN_TYPE=morning. 23:30 Berlin morning brief for Day ${DAY_N}/30 (${DAYS} days to launch 2026-07-28). Note: this is a catch-up run triggered at ${LOCAL_TIME}. Follow the Morning Brief procedure: read yesterday Notion carry-forwards, plan today agenda, assign tasks to specialist agents, create today Daily Log row, add Sprint Board tasks, send Telegram morning brief, spawn specialist agents."
             ;;
         evening)
-            PROMPT="RUN_TYPE=evening. 8pm Berlin EOD debrief for Day ${DAY_N}/30. Note: catch-up run at ${LOCAL_TIME}. Follow Evening Debrief: collect agent outcomes, update Issue Tracker for blockers, update Daily Log (Done Today, Blockers, Carry Forward, Commits, Status→Done), update Launch Roadmap %, update Agent Status Board, send Telegram EOD debrief."
+            PROMPT="RUN_TYPE=evening. 01:00 Berlin EOD debrief for Day ${DAY_N}/30. Note: catch-up run at ${LOCAL_TIME}. Follow Evening Debrief: collect agent outcomes, update Issue Tracker for blockers, update Daily Log (Done Today, Blockers, Carry Forward, Commits, Status→Done), update Launch Roadmap %, update Agent Status Board, send Telegram EOD debrief."
             ;;
         *)
             PROMPT="RUN_TYPE=progress. Missed ${SLOT_TIME} Berlin progress update for Day ${DAY_N}/30 (catch-up run at ${LOCAL_TIME}). Check Sprint Board statuses. Send Telegram: '⏱ AlgoTrader ${SLOT_TIME} update (catch-up) | Day ${DAY_N}/30\n✅ Done: N | 🔄 In progress: N | 🔴 Blocked: N\n<one line on status>'. Update Notion only if new info."
             ;;
     esac
+    # Note: only morning (23:30) and evening (01:00) slots fire under the new
+    # overnight-only schedule; the "progress" branch is retained for catch-up
+    # safety if the schedule is ever widened back to more slots.
 
     LOG_FILE="$LOG_DIR/orchestrator-$(date +%Y%m%d-%H%M)-${RUN_TYPE}.log"
 
