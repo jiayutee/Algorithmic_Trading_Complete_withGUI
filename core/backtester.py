@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import os
+import json
+import csv
 from core.logger import logger
 
 class CustomPandasData(bt.feeds.PandasData):
@@ -287,3 +289,167 @@ class Backtester:
         if self.cerebro.strats and hasattr(self.cerebro.strats[0][0], 'signals'):
             return self.cerebro.strats[0][0].signals
         return []
+
+
+# ---------------------------------------------------------------------------
+# Export helper — module-level so it can be imported independently of the
+# Backtester class and called from UI code or scripts.
+# ---------------------------------------------------------------------------
+
+def export_report(report: dict, filepath: str, format: str = 'csv') -> dict:
+    """Export a completed backtest report dict to disk as CSV or JSON.
+
+    Format design decisions
+    -----------------------
+    JSON (format='json'):
+        A single file is written containing every section of the report in a
+        naturally nested structure.  This is the recommended format when the
+        caller needs the full report in one file and wants to round-trip it
+        back into Python without extra parsing.
+
+        Top-level keys in the JSON file:
+          "summary"          dict — all summary metrics plus top-level shorthand
+                             keys (sharpe, max_drawdown, win_rate, final_value,
+                             total_return).
+          "equity_curve"     list[float] — portfolio value for each bar.
+          "profit_per_trade" list[float] — net P&L (after commission) for each
+                             closed trade, in chronological order.
+          "cumulative_pnl"   list[float] — running cumulative sum of
+                             profit_per_trade.
+          "signals"          list[dict]  — each entry has "date", "type",
+                             "price" (the same structure used by the chart overlay).
+
+    CSV (format='csv'):
+        CSV cannot cleanly represent nested data, so three separate files are
+        written.  The caller's filepath is treated as a *stem* — any trailing
+        file extension is stripped and the following suffixes are appended:
+
+          <stem>_summary.csv    Two columns: "metric", "value".
+                                Rows: every key from summary + top-level
+                                shorthand (sharpe, max_drawdown, win_rate,
+                                final_value, total_return).
+          <stem>_trades.csv     One row per closed trade.
+                                Columns: "trade_index", "pnl", "cumulative_pnl".
+          <stem>_equity.csv     One row per bar.
+                                Columns: "bar_index", "portfolio_value".
+
+        Signals are not written to a separate CSV by default because their
+        "date" field may already be represented in string form and the three
+        files above cover the metrics required by the roadmap item.
+
+    Args:
+        report:   The dict returned by ``Backtester.run_backtest()``.
+        filepath: Output path.
+                  - For JSON: written as-is; ".json" is appended if the path
+                    has no file extension.
+                  - For CSV: treated as a stem; three files are created from it.
+        format:   ``'csv'`` (default) or ``'json'`` (case-insensitive).
+
+    Returns:
+        A dict mapping logical section names to the absolute file path(s)
+        that were written.
+
+        JSON:  ``{"json": "/abs/path/to/report.json"}``
+        CSV:   ``{"summary": "..._summary.csv",
+                  "trades":  "..._trades.csv",
+                  "equity":  "..._equity.csv"}``
+
+    Raises:
+        ValueError: if ``format`` is not ``'csv'`` or ``'json'``.
+    """
+    fmt = format.lower()
+    if fmt not in ('csv', 'json'):
+        raise ValueError(
+            f"Unsupported format: {format!r}. Must be 'csv' or 'json'."
+        )
+
+    # Ensure the destination directory exists.
+    output_dir = os.path.dirname(os.path.abspath(filepath))
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Build the flat summary dict that is common to both formats.
+    # It merges the nested summary sub-dict with the top-level shorthand keys
+    # so callers get everything in one place.
+    final_value = report.get("summary", {}).get("Final Value", None)
+    initial_cash = (
+        final_value - report.get("summary", {}).get("P&L", 0)
+        if final_value is not None
+        else None
+    )
+    total_return = (
+        round((report.get("summary", {}).get("P&L", 0) / initial_cash) * 100, 4)
+        if initial_cash and initial_cash != 0
+        else None
+    )
+
+    flat_summary = {
+        **report.get("summary", {}),
+        "sharpe": report.get("sharpe"),
+        "max_drawdown": report.get("max_drawdown"),
+        "win_rate": report.get("win_rate"),
+        "final_value": final_value,
+        "total_return_pct": total_return,
+    }
+
+    equity_curve = report.get("total_asset_value", [])
+    profit_per_trade = report.get("profit_per_trade", [])
+    cumulative_pnl = report.get("cumulative_pnl", [])
+    signals = report.get("signals", [])
+
+    if fmt == 'json':
+        # Normalise filepath: add .json if the path has no extension.
+        if not os.path.splitext(filepath)[1]:
+            filepath = filepath + '.json'
+
+        payload = {
+            "summary": flat_summary,
+            "equity_curve": equity_curve,
+            "profit_per_trade": profit_per_trade,
+            "cumulative_pnl": cumulative_pnl,
+            "signals": signals,
+        }
+
+        with open(filepath, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh, indent=2, default=str)
+
+        logger.info(f"Backtest report exported (JSON): {filepath}")
+        return {"json": os.path.abspath(filepath)}
+
+    else:  # csv
+        # Strip any extension from filepath to derive the common stem.
+        stem = os.path.splitext(os.path.abspath(filepath))[0]
+
+        summary_path = stem + '_summary.csv'
+        trades_path = stem + '_trades.csv'
+        equity_path = stem + '_equity.csv'
+
+        # --- Summary CSV ---
+        with open(summary_path, 'w', newline='', encoding='utf-8') as fh:
+            writer = csv.writer(fh)
+            writer.writerow(['metric', 'value'])
+            for key, val in flat_summary.items():
+                writer.writerow([key, val])
+
+        # --- Trades CSV ---
+        with open(trades_path, 'w', newline='', encoding='utf-8') as fh:
+            writer = csv.writer(fh)
+            writer.writerow(['trade_index', 'pnl', 'cumulative_pnl'])
+            for i, pnl in enumerate(profit_per_trade):
+                cum = cumulative_pnl[i] if i < len(cumulative_pnl) else ''
+                writer.writerow([i + 1, pnl, cum])
+
+        # --- Equity curve CSV ---
+        with open(equity_path, 'w', newline='', encoding='utf-8') as fh:
+            writer = csv.writer(fh)
+            writer.writerow(['bar_index', 'portfolio_value'])
+            for i, val in enumerate(equity_curve):
+                writer.writerow([i, val])
+
+        logger.info(
+            f"Backtest report exported (CSV): {summary_path}, {trades_path}, {equity_path}"
+        )
+        return {
+            "summary": summary_path,
+            "trades": trades_path,
+            "equity": equity_path,
+        }
