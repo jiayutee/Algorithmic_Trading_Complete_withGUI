@@ -352,7 +352,7 @@ class MainWindow(QMainWindow):
 
     def _build_left_panel(self):
         panel = QWidget()
-        panel.setFixedWidth(220)
+        panel.setMinimumWidth(180)  # allow splitter to shrink below the initial 220px default
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
@@ -426,7 +426,7 @@ class MainWindow(QMainWindow):
 
     def _build_right_panel(self):
         panel = QWidget()
-        panel.setFixedWidth(200)
+        panel.setMinimumWidth(160)  # allow splitter to shrink below the initial 200px default
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
@@ -1092,6 +1092,8 @@ class MainWindow(QMainWindow):
             assert all(col in self.df.columns for col in required_cols), f"Missing columns: {required_cols}"
             assert pd.api.types.is_datetime64_any_dtype(self.df.index), "Index must be datetime"
 
+            # Compute indicators so simulation/strategy-signal checks never hit a KeyError
+            self.calculate_technical_indicators()
             self.plot_candles()
             self.statusBar().showMessage(f"Loaded {len(self.df)} candles for {symbol}")
 

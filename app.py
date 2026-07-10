@@ -9,12 +9,12 @@ try:
 except ImportError:
     pass  # python-dotenv not installed; rely on environment variables set externally
 
-from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5.QtCore import Qt
 try:
-    from PyQt5.QtWebEngineWidgets import QWebEngineView  # must import before QApplication
+    from PyQt5.QtWebEngineWidgets import QWebEngineView  # MUST come before QApplication — Qt ordering requirement
 except ImportError:
     QWebEngineView = None  # PyQtWebEngine not installed; chart view will be disabled
+from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtCore import Qt
 from core.data_loader import DataLoader
 from core.strategy_manager import StrategyManager
 from core.broker_manager import BrokerManager
