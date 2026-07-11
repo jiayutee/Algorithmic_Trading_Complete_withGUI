@@ -571,13 +571,64 @@ class OpenBBNewsSource(BaseNewsSource):
     name = "openbb_news"
     reliability = 0.85
 
+    # Explicit map for common USDT exchange pairs to Yahoo Finance news symbols.
+    # yfinance's news endpoint only recognises Yahoo Finance symbol format (e.g.
+    # "BTC-USD"), not Binance/exchange-format pairs like "BTCUSDT".
+    _CRYPTO_USDT_MAP: dict[str, str] = {
+        "BTCUSDT":   "BTC-USD",
+        "ETHUSDT":   "ETH-USD",
+        "SOLUSDT":   "SOL-USD",
+        "ADAUSDT":   "ADA-USD",
+        "BNBUSDT":   "BNB-USD",
+        "XRPUSDT":   "XRP-USD",
+        "DOGEUSDT":  "DOGE-USD",
+        "DOTUSDT":   "DOT-USD",
+        "MATICUSDT": "MATIC-USD",
+        "LTCUSDT":   "LTC-USD",
+        "AVAXUSDT":  "AVAX-USD",
+        "LINKUSDT":  "LINK-USD",
+        "UNIUSDT":   "UNI-USD",
+        "ATOMUSDT":  "ATOM-USD",
+    }
+
+    @classmethod
+    def map_to_news_ticker(cls, ticker: str) -> str:
+        """Map an exchange-format crypto pair to a yfinance news-compatible symbol.
+
+        yfinance's news endpoint uses Yahoo Finance symbol format (e.g. "BTC-USD")
+        rather than exchange pair format (e.g. "BTCUSDT", "ETHUSDC").  Equity
+        tickers (e.g. "AAPL", "MSFT") are returned unchanged.
+
+        Examples:
+            "BTCUSDT"  -> "BTC-USD"
+            "ETHUSDT"  -> "ETH-USD"
+            "SOLUSDC"  -> "SOL-USD"
+            "AAPL"     -> "AAPL"      (equity — unchanged)
+        """
+        upper = ticker.upper()
+        # 1. Explicit lookup first (handles edge cases like MATICUSDT)
+        if upper in cls._CRYPTO_USDT_MAP:
+            return cls._CRYPTO_USDT_MAP[upper]
+        # 2. Generic rule: *USDT  or *USDC  suffix → BASE-USD
+        for suffix in ("USDT", "USDC"):
+            if upper.endswith(suffix) and len(upper) > len(suffix):
+                return upper[: -len(suffix)] + "-USD"
+        # 3. Pass equity/non-crypto tickers through unchanged
+        return upper
+
     def __init__(self, provider: str = "yfinance"):
         self.provider = provider
 
     def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
         # query is typically "AAPL" or "Apple AAPL earnings"
         # Extract the ticker symbol (first word, strip non-alphanumeric)
-        ticker = query.split()[0].upper()
+        raw_ticker = query.split()[0].upper()
+        # Map crypto exchange pairs (e.g. BTCUSDT) to yfinance news symbols (BTC-USD).
+        # yfinance's news endpoint is equity-oriented and does not recognise
+        # Binance/exchange-format crypto pairs, causing 0 results for crypto tickers.
+        ticker = self.map_to_news_ticker(raw_ticker)
+        if ticker != raw_ticker:
+            logger.debug("OpenBB news: mapped ticker %s -> %s for yfinance news provider", raw_ticker, ticker)
         try:
             from openbb import obb
             result = obb.news.company(ticker, limit=limit, provider=self.provider)
@@ -617,7 +668,13 @@ class OpenBBNewsSource(BaseNewsSource):
                 logger.debug("OpenBB news item parse error: %s", e)
                 continue
 
-        logger.info("OpenBB news: %d articles for %s (provider=%s)", len(items), ticker, self.provider)
+        logger.info(
+            "OpenBB news: %d articles for %s (provider=%s)%s",
+            len(items),
+            ticker,
+            self.provider,
+            f" [mapped from {raw_ticker}]" if ticker != raw_ticker else "",
+        )
         return items
 
 
