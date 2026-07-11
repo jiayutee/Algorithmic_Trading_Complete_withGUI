@@ -535,3 +535,159 @@ def test_openbb_installed_in_environment():
     from openbb import obb  # noqa: F401
     assert hasattr(obb, "equity"), "obb.equity namespace not found"
     assert hasattr(obb, "news"), "obb.news namespace not found"
+
+
+# ---------------------------------------------------------------------------
+# Day 15: OpenBB crypto ticker mapping + fallback chain tests
+# ---------------------------------------------------------------------------
+
+class TestOpenBBNewsTickerMapping:
+    """Unit tests for OpenBBNewsSource.map_to_news_ticker — no network calls."""
+
+    def setup_method(self):
+        from core.news_sources import OpenBBNewsSource
+        self.map = OpenBBNewsSource.map_to_news_ticker
+
+    def test_btcusdt_maps_to_btc_usd(self):
+        assert self.map("BTCUSDT") == "BTC-USD"
+
+    def test_ethusdt_maps_to_eth_usd(self):
+        assert self.map("ETHUSDT") == "ETH-USD"
+
+    def test_solusdt_maps_to_sol_usd(self):
+        assert self.map("SOLUSDT") == "SOL-USD"
+
+    def test_lowercase_btcusdt_maps_correctly(self):
+        """Input is case-insensitive."""
+        assert self.map("btcusdt") == "BTC-USD"
+
+    def test_usdc_suffix_maps_to_usd(self):
+        """Generic USDC pairs are also mapped to BASE-USD."""
+        assert self.map("ETHUSDC") == "ETH-USD"
+
+    def test_generic_usdt_pair_maps_to_base_usd(self):
+        """Unknown USDT pairs fall through to the generic rule."""
+        # LINKUSDT is in the explicit map
+        assert self.map("LINKUSDT") == "LINK-USD"
+        # A hypothetical unknown pair hits the generic rule
+        assert self.map("XYZUSDT") == "XYZ-USD"
+
+    def test_equity_ticker_passes_through_unchanged(self):
+        """Standard equity tickers must not be altered."""
+        for ticker in ("AAPL", "MSFT", "TSLA", "SPY", "AMZN"):
+            assert self.map(ticker) == ticker
+
+    def test_already_yahoo_format_passes_through(self):
+        """Symbols already in Yahoo format should pass through unchanged."""
+        assert self.map("BTC-USD") == "BTC-USD"
+        assert self.map("ETH-USD") == "ETH-USD"
+
+
+def test_openbb_news_source_passes_mapped_ticker_to_obb(monkeypatch):
+    """OpenBBNewsSource.fetch() calls obb.news.company with 'BTC-USD', not 'BTCUSDT'."""
+    import unittest.mock as um
+    from core.news_sources import OpenBBNewsSource
+
+    source = OpenBBNewsSource(provider="yfinance")
+
+    class _FakeResult:
+        results = []
+
+    mock_obb = um.MagicMock()
+    mock_obb.news.company.return_value = _FakeResult()
+
+    import sys
+    fake_openbb_mod = um.MagicMock()
+    fake_openbb_mod.obb = mock_obb
+    original_module = sys.modules.get("openbb")
+    sys.modules["openbb"] = fake_openbb_mod
+    try:
+        source.fetch("BTCUSDT", limit=5)
+    finally:
+        if original_module is not None:
+            sys.modules["openbb"] = original_module
+        elif "openbb" in sys.modules:
+            del sys.modules["openbb"]
+
+    # The call must have used "BTC-USD" — NOT "BTCUSDT"
+    mock_obb.news.company.assert_called_once()
+    called_ticker = mock_obb.news.company.call_args[0][0]
+    assert called_ticker == "BTC-USD", (
+        f"Expected obb.news.company to be called with 'BTC-USD', got '{called_ticker}'"
+    )
+
+
+def test_openbb_news_source_equity_ticker_not_remapped(monkeypatch):
+    """OpenBBNewsSource.fetch() does NOT remap equity tickers like 'AAPL'."""
+    import unittest.mock as um
+    from core.news_sources import OpenBBNewsSource
+
+    source = OpenBBNewsSource(provider="yfinance")
+
+    class _FakeResult:
+        results = []
+
+    mock_obb = um.MagicMock()
+    mock_obb.news.company.return_value = _FakeResult()
+
+    import sys
+    fake_openbb_mod = um.MagicMock()
+    fake_openbb_mod.obb = mock_obb
+    original_module = sys.modules.get("openbb")
+    sys.modules["openbb"] = fake_openbb_mod
+    try:
+        source.fetch("AAPL earnings Q3", limit=5)
+    finally:
+        if original_module is not None:
+            sys.modules["openbb"] = original_module
+        elif "openbb" in sys.modules:
+            del sys.modules["openbb"]
+
+    mock_obb.news.company.assert_called_once()
+    called_ticker = mock_obb.news.company.call_args[0][0]
+    assert called_ticker == "AAPL", (
+        f"Equity ticker must pass through unchanged, got '{called_ticker}'"
+    )
+
+
+def test_news_pipeline_gdelt_fallback_when_openbb_empty():
+    """Pipeline returns GDELT items for BTCUSDT even when OpenBB returns nothing.
+
+    Verifies the fallback chain: OpenBB (0 results) + GDELT (has results)
+    → final list is non-empty.
+    """
+    from core.news_sources import GDELTSource, OpenBBNewsSource, BaseNewsSource, NewsItem
+    from core.news_pipeline import NewsPipeline
+    from core.sentiment import SentimentAnalyzer
+
+    gdelt_item = NewsItem(
+        datetime_utc=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        source="gdelt",
+        headline="Bitcoin hits new all-time high amid ETF euphoria",
+        url="https://example.com/btc-ath",
+        summary="BTCUSDT surges past previous highs.",
+        source_reliability=0.75,
+    )
+
+    class _EmptyOpenBB(BaseNewsSource):
+        name = "openbb_news"
+        reliability = 0.85
+
+        def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
+            # Simulates OpenBB returning 0 results (e.g. unrecognised ticker)
+            return []
+
+    class _MockGDELT(BaseNewsSource):
+        name = "gdelt"
+        reliability = 0.75
+
+        def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
+            return [gdelt_item]
+
+    pipeline = NewsPipeline(
+        sources=[_EmptyOpenBB(), _MockGDELT()],
+        sentiment_analyzer=SentimentAnalyzer(force_rule_based=True),
+    )
+    items = pipeline.fetch_news_items("BTCUSDT")
+    assert len(items) >= 1, "GDELT fallback should supply results when OpenBB returns empty"
+    assert any("bitcoin" in item.headline.lower() or "btc" in item.headline.lower() for item in items)
