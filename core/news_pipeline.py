@@ -70,6 +70,7 @@ DEFAULT_NUMERIC_COLUMNS = [
     "impact_score",
     "source_reliability",
     "news_count",
+    "news_sentiment",  # mean(positive - negative) for news in bar window; 0.0 = no news / neutral
 ]
 
 
@@ -346,9 +347,31 @@ class NewsPipeline:
         )
         aggregated = aggregated.rename(columns={"headline": "headline_count", "source": "source_count"})
         aggregated["news_flow_ratio"] = aggregated["sentiment_balance"].fillna(0.0) / aggregated["news_count"].replace(0, 1)
+        # news_sentiment: mean sentiment balance (positive − negative) for all news items
+        # published within the resampled bar window.  Range [−1, 1].  Matches sentiment_balance
+        # by construction; named separately so strategy code has a single canonical column to read.
+        aggregated["news_sentiment"] = aggregated["sentiment_balance"]
         return aggregated.fillna(0.0)
 
     def merge_features_into_prices(self, price_df: pd.DataFrame, news_df: pd.DataFrame, interval: str = "1D") -> pd.DataFrame:
+        """Merge time-aligned news sentiment features into a price OHLCV DataFrame.
+
+        Join strategy (``merge_asof`` backward carry-forward):
+          1. News items are resampled into time buckets matching ``interval``
+             (e.g. "1D" → daily, "1h" → hourly).  Sentiment scores are aggregated
+             as the **mean** over all news items in each bucket.
+          2. For each price bar, ``pd.merge_asof`` with ``direction="backward"``
+             attaches the most-recent news bucket whose timestamp is ≤ the bar's
+             timestamp.  This preserves causal order — no future news leaks in.
+          3. Price bars that precede *any* news bucket receive 0.0 for all numeric
+             sentiment columns (interpreted as "no news / neutral sentiment").
+
+        Added column ``news_sentiment``:
+            Mean sentiment balance (positive − negative) for all news items
+            published within the resampled bar window.  Range [−1, 1].
+            0.0 indicates either no news or a perfectly balanced sentiment mix.
+            When ``news_df`` is empty the column is set to 0.0 for every bar.
+        """
         if price_df is None or price_df.empty:
             return price_df
 

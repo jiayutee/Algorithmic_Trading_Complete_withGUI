@@ -691,3 +691,144 @@ def test_news_pipeline_gdelt_fallback_when_openbb_empty():
     items = pipeline.fetch_news_items("BTCUSDT")
     assert len(items) >= 1, "GDELT fallback should supply results when OpenBB returns empty"
     assert any("bitcoin" in item.headline.lower() or "btc" in item.headline.lower() for item in items)
+
+
+# ---------------------------------------------------------------------------
+# Day 15: news_sentiment merge logic — covers within-bar, no-news, multi-item
+# ---------------------------------------------------------------------------
+
+def _make_price_df_for_sentiment(timestamps):
+    """Minimal OHLCV DataFrame with DatetimeIndex (UTC-aware) for sentiment merge tests."""
+    idx = pd.DatetimeIndex(
+        [pd.Timestamp(t, tz="UTC") for t in timestamps], name="Datetime"
+    )
+    return pd.DataFrame(
+        {"Open": 100.0, "High": 105.0, "Low": 95.0, "Close": 102.0, "Volume": 1000.0},
+        index=idx,
+    )
+
+
+def _make_news_df_for_sentiment(items):
+    """Build a minimal news DataFrame matching the schema produced by NewsPipeline._item_to_row."""
+    base = {
+        "headline": "test headline",
+        "source": "test",
+        "link": "https://example.com",
+        "summary": "",
+        "content": "",
+        "language": "en",
+        "tickers": [],
+        "entities": [],
+        "event_type": "general",
+        "positive": 0.0,
+        "negative": 0.0,
+        "neutral": 1.0,
+        "sentiment_label": "neutral",
+        "sentiment_confidence": 0.5,
+        "sentiment_model": "",
+        "sentiment_balance": 0.0,
+        "sentiment_magnitude": 0.0,
+        "impact_score": 0.0,
+        "source_reliability": 0.7,
+        "news_count": 1,
+        "event_earnings": 0,
+        "event_guidance": 0,
+        "event_mna": 0,
+        "event_analyst": 0,
+        "event_macro": 0,
+        "event_regulatory": 0,
+        "event_product": 0,
+        "event_litigation": 0,
+        "event_dividend": 0,
+        "event_general": 1,
+    }
+    rows = [{**base, **item} for item in items]
+    return pd.DataFrame(rows)
+
+
+def test_news_sentiment_merge_within_bar():
+    """A single news item published before a price bar produces news_sentiment == sentiment_balance.
+
+    Join strategy: news is resampled to 1D buckets; merge_asof backward attaches
+    the bucket whose timestamp ≤ price bar timestamp.
+    """
+    from core.news_pipeline import NewsPipeline
+    from core.sentiment import SentimentAnalyzer
+
+    pipeline = NewsPipeline(sentiment_analyzer=SentimentAnalyzer(force_rule_based=True))
+
+    price_df = _make_price_df_for_sentiment(["2026-07-01 12:00:00"])
+    news_df = _make_news_df_for_sentiment([
+        {
+            "datetime": pd.Timestamp("2026-07-01 11:50:00", tz="UTC"),
+            "sentiment_balance": 0.7,
+            "positive": 0.8,
+            "negative": 0.1,
+            "neutral": 0.1,
+        }
+    ])
+
+    merged = pipeline.merge_features_into_prices(price_df, news_df, interval="1D")
+
+    assert "news_sentiment" in merged.columns, "news_sentiment column must be present after merge"
+    assert merged.loc[merged.index[0], "news_sentiment"] == pytest.approx(0.7, abs=0.01)
+
+
+def test_news_sentiment_merge_no_news():
+    """Price bars with a completely empty news DataFrame get news_sentiment == 0.0 (neutral).
+
+    This exercises the empty-aggregated early-exit path inside merge_features_into_prices.
+    """
+    from core.news_pipeline import NewsPipeline
+    from core.sentiment import SentimentAnalyzer
+
+    pipeline = NewsPipeline(sentiment_analyzer=SentimentAnalyzer(force_rule_based=True))
+
+    price_df = _make_price_df_for_sentiment([
+        "2026-07-01 12:00:00",
+        "2026-07-02 12:00:00",
+    ])
+    empty_news_df = pd.DataFrame()  # no news at all
+
+    merged = pipeline.merge_features_into_prices(price_df, empty_news_df, interval="1D")
+
+    assert "news_sentiment" in merged.columns, "news_sentiment column must be present even with no news"
+    assert (merged["news_sentiment"] == 0.0).all(), (
+        "All bars should be 0.0 (neutral) when there is no news data"
+    )
+
+
+def test_news_sentiment_merge_multiple_items_in_bar():
+    """Multiple news items within the same bar window produce news_sentiment == mean(sentiment_balance).
+
+    Items at 09:00 (balance=0.6) and 10:00 (balance=0.4) both fall inside the
+    1D bucket for 2026-07-01; the expected merged value is 0.5.
+    """
+    from core.news_pipeline import NewsPipeline
+    from core.sentiment import SentimentAnalyzer
+
+    pipeline = NewsPipeline(sentiment_analyzer=SentimentAnalyzer(force_rule_based=True))
+
+    price_df = _make_price_df_for_sentiment(["2026-07-01 12:00:00"])
+    news_df = _make_news_df_for_sentiment([
+        {
+            "datetime": pd.Timestamp("2026-07-01 09:00:00", tz="UTC"),
+            "sentiment_balance": 0.6,
+            "positive": 0.7,
+            "negative": 0.1,
+            "neutral": 0.2,
+        },
+        {
+            "datetime": pd.Timestamp("2026-07-01 10:00:00", tz="UTC"),
+            "sentiment_balance": 0.4,
+            "positive": 0.6,
+            "negative": 0.2,
+            "neutral": 0.2,
+        },
+    ])
+
+    merged = pipeline.merge_features_into_prices(price_df, news_df, interval="1D")
+
+    assert "news_sentiment" in merged.columns
+    # mean(0.6, 0.4) = 0.5
+    assert merged.loc[merged.index[0], "news_sentiment"] == pytest.approx(0.5, abs=0.01)
