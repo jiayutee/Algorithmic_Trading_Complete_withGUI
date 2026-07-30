@@ -1,11 +1,13 @@
 # ui/main_window.py
+import os
+import tempfile
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QComboBox, QPushButton, QLabel, QGroupBox, QLineEdit,
                              QTextEdit, QTabWidget, QSplitter, QTableWidget,
                              QTableWidgetItem, QHeaderView, QApplication, QFormLayout,
                              QFrame, QSizePolicy)
 from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView
     _WEBENGINE_AVAILABLE = True
@@ -58,6 +60,37 @@ class NewsWorker(QThread):
             pipeline = NewsPipeline.from_env()
             pipeline.sentiment_analyzer = SentimentAnalyzer(force_rule_based=True)
             df = pipeline.fetch_news_dataframe(self.symbol, limit=25)
+            self.results_ready.emit(df)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class DataLoadWorker(QThread):
+    """Fetches price candles (+ the news/sentiment merge embedded in
+    data_loader.load_data) off the main thread. Without this, the initial
+    load froze the whole window for 45-90s while rate-limited news sources
+    retried, since network I/O ran directly on the Qt event-loop thread."""
+    results_ready = pyqtSignal(object)   # emits a pd.DataFrame
+    error = pyqtSignal(str)
+
+    def __init__(self, data_loader, symbol: str, source: str, live: bool, days: int, interval: str):
+        super().__init__()
+        self.data_loader = data_loader
+        self.symbol = symbol
+        self.source = source
+        self.live = live
+        self.days = days
+        self.interval = interval
+
+    def run(self):
+        try:
+            df = self.data_loader.load_data(
+                symbol=self.symbol,
+                source=self.source,
+                live=self.live,
+                days=self.days,
+                interval=self.interval,
+            )
             self.results_ready.emit(df)
         except Exception as e:
             self.error.emit(str(e))
@@ -1070,23 +1103,41 @@ class MainWindow(QMainWindow):
         interval = self.interval_combo.currentText()
         logger.debug("Loading data — source: %s, symbol: %s, interval: %s", source, symbol, interval)
 
+        if source == "Realtime Stream":
+            self.start_realtime_stream(symbol)
+            return
+
+        if self.is_streaming:
+            self.stop_realtime_stream()
+
+        if getattr(self, "_data_load_worker", None) and self._data_load_worker.isRunning():
+            self.statusBar().showMessage("Already loading data — please wait...")
+            return
+
         try:
-            if source == "Realtime Stream":
-                self.start_realtime_stream(symbol)
-                return
-
-            if self.is_streaming:
-                self.stop_realtime_stream()
-
             days = int(self.days_input.text())
-            self.df = self.data_loader.load_data(
-                symbol=symbol,
-                source=source,
-                live=(source == "Live"),
-                days=days,
-                interval=interval
-            )
+        except Exception as e:
+            self.statusBar().showMessage(f"Error: {str(e)}")
+            return
 
+        self.statusBar().showMessage(f"Loading {symbol}...")
+        self._data_load_worker = DataLoadWorker(
+            data_loader=self.data_loader,
+            symbol=symbol,
+            source=source,
+            live=(source == "Live"),
+            days=days,
+            interval=interval,
+        )
+        self._data_load_worker.results_ready.connect(
+            lambda df: self._on_data_loaded(df, symbol)
+        )
+        self._data_load_worker.error.connect(self._on_data_load_error)
+        self._data_load_worker.start()
+
+    def _on_data_loaded(self, df, symbol):
+        try:
+            self.df = df
             assert not self.df.empty, "Loaded empty DataFrame"
             required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
             assert all(col in self.df.columns for col in required_cols), f"Missing columns: {required_cols}"
@@ -1101,6 +1152,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Error: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
+
+    def _on_data_load_error(self, message):
+        self.statusBar().showMessage(f"Error: {message}")
+        logger.error("Data load failed: %s", message)
 
     def _run_backtest_logic(self):
         """Unified backtest entry point called by background thread worker usually."""
@@ -1529,12 +1584,24 @@ class MainWindow(QMainWindow):
         self.update_plotly_view()
 
     def update_plotly_view(self):
-        """Render Plotly figure directly into QWebEngineView (no disk I/O)."""
+        """Render Plotly figure into QWebEngineView via a temp file.
+
+        QWebEngineView.setHtml() base64-encodes its argument internally and
+        silently fails to render anything above ~2MB (no exception raised —
+        it just shows a blank view). to_html(include_plotlyjs=True) embeds
+        the full Plotly.js bundle inline, which alone exceeds that limit.
+        Writing to disk and using load(QUrl.fromLocalFile(...)) has no such
+        size restriction.
+        """
         if not _WEBENGINE_AVAILABLE or not _PLOTLY_AVAILABLE:
             return
-        if hasattr(self, 'fig') and hasattr(self.plotly_view, 'setHtml'):
-            html = self.fig.to_html(include_plotlyjs=True, full_html=True)
-            self.plotly_view.setHtml(html)
+        if not hasattr(self, 'fig'):
+            return
+        html = self.fig.to_html(include_plotlyjs=True, full_html=True)
+        chart_path = os.path.join(tempfile.gettempdir(), "algotrader_chart.html")
+        with open(chart_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        self.plotly_view.load(QUrl.fromLocalFile(chart_path))
 
     def stop_realtime_stream(self):
         if self.is_streaming:
