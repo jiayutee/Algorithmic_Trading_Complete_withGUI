@@ -1,7 +1,9 @@
 #!/bin/bash
-# Local orchestrator runner — called by macOS launchd at 23:30 and 01:00 Berlin.
+# Local orchestrator runner — called by macOS launchd at 23:05, 23:20, 00:20, 01:15 Berlin.
 # Overnight-only window: avoids token contention with CariGaji (02:00-16:00)
 # and the owner's reserved manual-prompting window (19:30-23:00).
+# Runs unattended via launchd (does NOT require the Claude Code app to be open,
+# unlike claude.ai Routines -- which is why this exists instead of Routines).
 # On wake, catches up all missed run slots since the Mac was last active.
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,9 +17,14 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 
 # ── Compute all missed run slots since last run ─────────────────────────────
-# Run slots in Berlin local time (24h hours): 23:30 (morning brief), 01:00 (EOD debrief)
-# Overnight-only window — avoids token contention with CariGaji (02:00-16:00)
-# and the owner's reserved manual-prompting window (19:30-23:00).
+# Exact (hour, minute) slots in Berlin local time:
+#   23:05 morning (report-only)
+#   23:20 work-loop (codes)
+#   00:20 work-loop (codes, safety-net retry)
+#   01:15 evening (report-only)
+# Two different run types share hour 23, so this walks in 5-minute steps
+# and matches exact (hour, minute) pairs -- hourly granularity would conflate
+# the 23:05 morning slot with the 23:20 work-loop slot.
 MISSED=$(python3 - <<'PYEOF'
 from datetime import datetime, timedelta, timezone
 import os, sys
@@ -29,11 +36,15 @@ except Exception:
     from datetime import timezone
     tz = timezone(timedelta(hours=2))
 
-SLOTS = [23, 1]
+SLOTS = {
+    (23, 5): "morning",
+    (23, 20): "work-loop",
+    (0, 20): "work-loop",
+    (1, 15): "evening",
+}
 now = datetime.now(tz)
 last_run_file = sys.argv[1] if len(sys.argv) > 1 else ""
 
-# Read last run time
 if last_run_file and os.path.exists(last_run_file):
     try:
         ts = float(open(last_run_file).read().strip())
@@ -41,24 +52,17 @@ if last_run_file and os.path.exists(last_run_file):
     except Exception:
         last = now - timedelta(hours=2.5)
 else:
-    # First ever run — just do the current slot
     last = now - timedelta(hours=2.5)
 
 missed = []
-# Walk backwards from now to find all slots after last_run
-check = now.replace(minute=0, second=0, microsecond=0)
+check = now.replace(second=0, microsecond=0)
+check = check - timedelta(minutes=check.minute % 5)  # snap to 5-min grid
 while check > last:
-    if check.hour in SLOTS and check > last and check <= now:
-        if check.hour == 23:
-            run_type = "morning"
-        elif check.hour == 1:
-            run_type = "evening"
-        else:
-            run_type = "progress"
-        missed.append((check.strftime("%Y-%m-%d %H:%M"), run_type, check.hour))
-    check -= timedelta(hours=1)
+    key = (check.hour, check.minute)
+    if key in SLOTS and check > last and check <= now:
+        missed.append((check.strftime("%Y-%m-%d %H:%M"), SLOTS[key], check.hour))
+    check -= timedelta(minutes=5)
 
-# Output oldest first
 for dt, rt, h in sorted(missed, key=lambda x: x[0]):
     print(f"{dt}|{rt}|{h}")
 PYEOF
@@ -73,9 +77,6 @@ fi
 DAYS=$(python3 -c "from datetime import date; print((date(2026,7,28)-date.today()).days)" 2>/dev/null || echo "?")
 DAY_N=$(python3 -c "from datetime import date; print(max(1, 30-(date(2026,7,28)-date.today()).days+1))" 2>/dev/null || echo "?")
 
-# Timestamp (epoch) of the most recent slot that actually completed successfully.
-# Only this gets persisted to LAST_RUN_FILE — a failed slot must stay eligible
-# for retry on the next catch-up pass, so we never blindly advance past it.
 LAST_SUCCESS_EPOCH=""
 
 while IFS='|' read -r SLOT_TIME RUN_TYPE SLOT_HOUR; do
@@ -91,18 +92,18 @@ except: print('?')
 
     case "$RUN_TYPE" in
         morning)
-            PROMPT="RUN_TYPE=morning. 23:30 Berlin morning brief for Day ${DAY_N}/30 (${DAYS} days to launch 2026-07-28). Note: this is a catch-up run triggered at ${LOCAL_TIME}. Follow the Morning Brief procedure: read yesterday Notion carry-forwards, plan today agenda, assign tasks to specialist agents, create today Daily Log row, add Sprint Board tasks, send Telegram morning brief, spawn specialist agents."
+            PROMPT="RUN_TYPE=morning. 23:05 Berlin morning brief (REPORT ONLY -- do not touch code) for Day ${DAY_N}/30 (${DAYS} days to launch 2026-07-28). Note: this is a catch-up run triggered at ${LOCAL_TIME}. Follow the Morning Brief procedure in .github/agents/orchestrator.agent.md: read yesterday Notion carry-forwards, plan today agenda from the Sprint Board backlog, create today Daily Log row, add new Sprint Board tasks only if not already covered, send Telegram morning brief. Do NOT spawn any subagent."
+            ;;
+        work-loop)
+            PROMPT="RUN_TYPE=work-loop. Work-loop cycle for Day ${DAY_N}/30 (catch-up run at ${LOCAL_TIME}). Follow the Work Loop procedure in .github/agents/orchestrator.agent.md exactly: STEP 0.5 foreign-dirty-tree guard first, then read today's Daily Log agenda, then repeat pick/classify/execute/test-gate/commit/update-Notion for every pending item, then send ONE consolidated Telegram summary at the end."
             ;;
         evening)
-            PROMPT="RUN_TYPE=evening. 01:00 Berlin EOD debrief for Day ${DAY_N}/30. Note: catch-up run at ${LOCAL_TIME}. Follow Evening Debrief: collect agent outcomes, update Issue Tracker for blockers, update Daily Log (Done Today, Blockers, Carry Forward, Commits, Status->Done), update Launch Roadmap %, update Agent Status Board, send Telegram EOD debrief."
+            PROMPT="RUN_TYPE=evening. 01:15 Berlin EOD debrief (REPORT ONLY -- do not touch code) for Day ${DAY_N}/30. Note: catch-up run at ${LOCAL_TIME}. Follow Evening Debrief in .github/agents/orchestrator.agent.md: collect Sprint Board outcomes, update Issue Tracker for blockers, update Daily Log (Done Today, Blockers, Carry Forward, Commits via fixed 4-hour git log window, Status->Done), update Launch Roadmap %, update Agent Status Board, send Telegram EOD debrief, verify the Status write landed."
             ;;
         *)
             PROMPT="RUN_TYPE=progress. Missed ${SLOT_TIME} Berlin progress update for Day ${DAY_N}/30 (catch-up run at ${LOCAL_TIME}). Check Sprint Board statuses. Send Telegram: 'AlgoTrader ${SLOT_TIME} update (catch-up) | Day ${DAY_N}/30\nDone: N | In progress: N | Blocked: N\n<one line on status>'. Update Notion only if new info."
             ;;
     esac
-    # Note: only morning (23:30) and evening (01:00) slots fire under the new
-    # overnight-only schedule; the "progress" branch is retained for catch-up
-    # safety if the schedule is ever widened back to more slots.
 
     LOG_FILE="$LOG_DIR/orchestrator-$(date +%Y%m%d-%H%M)-${RUN_TYPE}.log"
 
@@ -125,24 +126,9 @@ except: print('?')
             >> "$LOG_FILE" 2>&1
         CLAUDE_EXIT=$?
 
-        # ── Session/usage-limit detection ────────────────────────────────────
-        # When the account-level session quota is exhausted, `claude --print`
-        # writes "You've hit your session limit * resets ..." to stdout and
-        # exits (observed Day 14, 2026-07-11 01:29 Berlin — log line:
-        #   "You've hit your session limit * resets 3:20am (Europe/Berlin)").
-        # This is a different failure mode from an API/connection error: the
-        # quota resets on a fixed schedule (~3:20am Berlin, typically ~2h away)
-        # so retrying immediately wastes the second attempt and produces an
-        # identical failure.  Skip the retry, send a targeted Telegram alert,
-        # and let the next morning run's start-of-cycle self-healing check
-        # (see orchestrator.agent.md "Start-of-cycle self-healing check")
-        # backfill the stale Daily Log row automatically.
-        # Limitation: if Anthropic changes this CLI output string the detection
-        # falls through to the generic retry path — worst case is one wasted
-        # retry attempt with the same eventual outcome.
         if grep -q "hit your session limit\|session limit.*resets\|usage limit" "$LOG_FILE" 2>/dev/null; then
             SESSION_LIMIT_HIT=true
-            break  # do not retry into an exhausted session window
+            break
         fi
 
         if [ "$CLAUDE_EXIT" -eq 0 ] && ! grep -q "API Error" "$LOG_FILE"; then
@@ -153,8 +139,6 @@ except: print('?')
 
     if [ "$SLOT_OK" = true ]; then
         echo "[$(date -u)] Finished: $SLOT_TIME ($RUN_TYPE)" | tee -a "$LOG_DIR/launchd.log"
-
-        # Track this slot as the new high-water mark for LAST_RUN_FILE.
         LAST_SUCCESS_EPOCH=$(python3 -c "
 from datetime import datetime
 try:
@@ -167,13 +151,12 @@ dt = datetime.strptime('$SLOT_TIME', '%Y-%m-%d %H:%M').replace(tzinfo=tz)
 print(dt.timestamp())
 " 2>/dev/null)
     else
-        # ── Failure alert: differentiate session-limit from generic API error ──
         if [ "$SESSION_LIMIT_HIT" = true ]; then
             echo "[$(date -u)] Session limit hit: $SLOT_TIME ($RUN_TYPE) — skipped retry (resets ~3:20am Berlin); morning self-healing check will recover" | tee -a "$LOG_DIR/launchd.log"
             if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
                 curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
                     --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-                    --data-urlencode "text=AlgoTrader orchestrator: ${RUN_TYPE} slot ${SLOT_TIME} hit Claude session limit (resets ~3:20am Berlin). Skipped retry — morning run self-healing check will backfill the Daily Log row." \
+                    --data-urlencode "text=AlgoTrader orchestrator: ${RUN_TYPE} slot ${SLOT_TIME} hit Claude session limit (resets ~3:20am Berlin). Skipped retry — morning run self-healing check will backfill." \
                     --data-urlencode "parse_mode=Markdown" > /dev/null
             fi
         else
@@ -186,33 +169,29 @@ print(dt.timestamp())
             fi
         fi
 
-        if [ "$RUN_TYPE" = "progress" ]; then
-            # A stuck low-stakes progress ping must never block the morning/evening
-            # slots bundled behind it in the same catch-up batch (this is exactly
-            # what silently ate the Day 7 evening debrief: a redundant progress
-            # slot failed twice, hit the old unconditional `break`, and the real
-            # evening slot right behind it never ran). Move on; this slot is
-            # abandoned once a later slot succeeds and advances LAST_RUN_FILE past it.
-            echo "[$(date -u)] Skipping failed progress slot, continuing to next slot in batch." | tee -a "$LOG_DIR/launchd.log"
+        if [ "$RUN_TYPE" = "progress" ] || [ "$RUN_TYPE" = "work-loop" ]; then
+            # A stuck work-loop or progress slot must never block morning/evening
+            # slots bundled behind it in the same catch-up batch (see the Day 7
+            # incident in orchestrator.agent.md). A second work-loop firing (00:20)
+            # exists precisely as a safety net if the first fails -- don't let a
+            # failure here eat the evening debrief.
+            echo "[$(date -u)] Skipping failed $RUN_TYPE slot, continuing to next slot in batch." | tee -a "$LOG_DIR/launchd.log"
             sleep 5
             continue
         fi
 
-        # morning/evening are load-bearing — stop processing further (later)
-        # slots this pass and leave LAST_RUN_FILE untouched so this slot (and
-        # anything after it) is retried next wake.
+        # morning/evening are load-bearing -- stop processing further slots
+        # this pass and leave LAST_RUN_FILE untouched so this slot is retried
+        # next wake.
         break
     fi
 
-    # Small gap between catch-up runs to avoid rate limits
     sleep 5
 
 done <<< "$MISSED"
 
-# ── Save last run timestamp (only advances past slots that actually succeeded) ──
 if [ -n "$LAST_SUCCESS_EPOCH" ]; then
     python3 -c "open('$LAST_RUN_FILE','w').write('$LAST_SUCCESS_EPOCH')"
 fi
 
-# Keep only last 30 log files
 ls -t "$LOG_DIR"/orchestrator-*.log 2>/dev/null | tail -n +31 | xargs rm -f

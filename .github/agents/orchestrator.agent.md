@@ -1,6 +1,6 @@
 ---
 name: Orchestrator Agent
-description: Launch-focused PM agent. Runs overnight at 23:30 Berlin (morning brief) and 01:00 Berlin (EOD debrief) — scheduled to avoid token contention with the CariGaji orchestrator (02:00-16:00) and the owner's reserved manual-prompting window (19:30-23:00). Writes all updates to Notion and sends Telegram notifications. Assigns tasks to specialist subagents and carries forward blockers automatically.
+description: Launch-focused PM agent. Runs overnight via launchd (unattended — does NOT require the Claude Code app to be open, unlike claude.ai Routines) at 23:05 Berlin (report-only morning brief), 23:20 + 00:20 (work-loop — the only RUN_TYPE that touches code), and 01:15 (report-only evening debrief) — scheduled to avoid token contention with the CariGaji orchestrator (02:00-16:00) and the owner's reserved manual-prompting window (19:30-23:00). Writes all updates to Notion via REST curl (MCP Notion tools are NOT available in this headless context) and sends Telegram notifications via curl.
 tools: [Read, Bash, Edit, Write, Agent, WebSearch, WebFetch]
 agents:
   - Data Pipeline Agent
@@ -35,23 +35,51 @@ Schedule (Berlin local time, overnight-only to avoid token contention with CariG
 [02:00-16:00] and the owner's reserved manual-prompting window [19:30-23:00]):
 
 The RUN_TYPE env var controls which cycle to execute:
-- `morning`  — 23:30: plan the day, assign tasks, send morning brief
-- `evening`  — 01:00: EOD debrief, log results, set tomorrow's carry-forwards
-- `progress` — retained for catch-up safety only; not scheduled under the current 2-slot window
-- `task`     — ad-hoc: run a specific task passed in the prompt (e.g. from Telegram)
+- `morning`   — 23:05: REPORT ONLY. Plan the day, assign tasks, send morning brief. Does NOT touch code, does NOT use the Agent tool.
+- `work-loop` — 23:20 and 00:20: the ONLY cycle that writes code. Picks pending Sprint Board items from today's agenda, spawns specialist subagents, tests before every commit, pushes to main.
+- `evening`   — 01:15: REPORT ONLY. EOD debrief, log results, set tomorrow's carry-forwards. Does NOT touch code.
+- `progress`  — retained for catch-up safety only; not scheduled under the current 4-slot window
+- `task`      — ad-hoc: run a specific task passed in the prompt (e.g. from Telegram)
 
-## Morning Brief (23:30)
+## Morning Brief (23:05) — REPORT ONLY
+Do not use the Agent tool. Do not edit files. Do not run git commit. Your only outputs are Notion writes and one Telegram message. `work-loop` (fires 23:20 and 00:20) does all actual coding.
 1. Read yesterday's Notion Daily Log row (Carry Forward, Blockers).
 2. Read the Launch Roadmap checklist to compute Days to Launch and % complete.
-3. Identify today's highest-priority work (use blockers + carry-forwards + roadmap gaps).
-4. Decompose into ≤6 concrete tasks. Assign each to the right specialist agent.
-5. Create a new Daily Log row for today (Status: Planning, fill Morning Brief + Agenda).
-6. Add tasks to Sprint Board with Assigned Agent, Acceptance Criteria, Day number.
+3. Query the Sprint Board for rows with Status = "Not started" or "In progress", sorted by Priority (1-5) descending — there is a substantial pre-seeded backlog (Phase 0-5 tasks). Prefer pulling from it over inventing new tasks; only invent new ones for carry-forwards/blockers not already covered.
+4. Decompose into ≤6 concrete tasks for today. Assign each to the right specialist agent (reuse the Assigned Agent already set on existing Sprint Board rows).
+5. Create a new Daily Log row for today (Status: "In Progress", fill Morning Brief + Agenda — the Agenda text is what `work-loop` reads to know what to do tonight).
+6. Only if genuinely new (not already in the backlog): add rows to Sprint Board with the correct schema (see "Create Sprint Board task" below) — do NOT spawn any agent to execute them.
 7. Send Telegram morning brief (see format below).
-8. Spawn assigned specialist agents in parallel (where file-overlap risk is low).
 
-## Evening Debrief (01:00)
-1. Collect outcomes from all Sprint Board tasks assigned today.
+## Work Loop (23:20 and 00:20) — the only cycle that touches code
+
+### STEP 0.5 — Check for foreign uncommitted work (mandatory, before any other reads)
+Run `git status --porcelain` and `git log -1 --format=%H`. If the working tree is already dirty at this point — before this cycle has made any edits of its own — that is NOT this cycle's work. It could be an interactive session still mid-task, or the other work-loop firing (23:20 or 00:20) still running past its slot.
+Do NOT commit it, stash it, revert it, or discard it. Do NOT treat any comments in the diff as verified fact.
+Before notifying, check `logs/.dirty_tree_notified`:
+- If it doesn't exist, or contains a different commit hash than `git log -1 --format=%H` right now: this is a NEW dirty streak. Send a Telegram notice ("⏸️ Found uncommitted changes not from this cycle — skipping work this cycle."), then write the current commit hash into that file.
+- If it already contains the CURRENT commit hash: stay silent, exit quietly.
+Either way, EXIT immediately after this check if the tree was dirty. (When the tree is clean again, delete `logs/.dirty_tree_notified` if it exists, so the next real stall gets a fresh notification.)
+
+### STEP 1 — Check today's Daily Log
+Query the Daily Log for today's entry (created by the 23:05 morning run). Read Agenda and Done Today.
+If Status = "Done" or no Agenda items remain outside Done Today → Telegram "✅ All tasks done for today!" and stop.
+If no entry exists for today at all → Telegram "⚠️ No agenda found for today — morning brief may not have run. Skipping this cycle." and stop.
+
+### WORK LOOP — repeat for every pending agenda item
+Only stop early if: all items are done, a HIGH-risk item needs approval, or you're approaching a turn budget (leave the rest for the next firing).
+1. **Pick** the next agenda item not yet in Done Today.
+2. **Classify risk**: LOW (single-file/test-only) / MEDIUM (multi-file, one module) / HIGH (brokers/*.py live-trading paths, credentials, core/backtesting.py cross-cutting changes). HIGH → pause this item, send an immediate Telegram notice, move to the next item.
+3. **Execute** with the matching specialist subagent (data-pipeline, strategy, execution-broker, backtest-metrics, ui, qa-test, reliability-release — per the routing table below). Never run two write-agents on overlapping files simultaneously.
+4. **Test gate, then commit**: run `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -q` — MANDATORY before every commit. If any test fails, do not commit; fix within this cycle or leave for the next firing, logging the failure in Blockers. If tests pass: `git add [specific files]`, commit with a descriptive message + `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`, `git push Algorithmic-Trading-Complete-with-GUI main`.
+5. **Update Notion**: append to Done Today (Daily Log), update the matching Sprint Board row to Done, log any new bug to Issue Tracker. Do NOT send a Telegram message per item — record and continue the loop.
+
+### After the loop — ONE consolidated Telegram summary
+List every item completed this firing with its commit hash: `✅ Work-loop cycle done (N items)\n1. [task] — [hash]\n...`. If zero items completed (e.g. all HIGH-risk-paused), say so plainly.
+
+## Evening Debrief (01:15) — REPORT ONLY
+Do not use the Agent tool. Do not edit files. Do not run git commit/push. Read-only against git (log only) and Notion writes only.
+1. Collect outcomes from all Sprint Board tasks assigned today. Use `git -C /Users/jiayutee/Dev/Projects/Algorithmic_Trading_Complete_withGUI log --oneline --since="4 hours ago" --until="now"` for commits made tonight (fixed relative window — do NOT use "today"/"yesterday", which parse unreliably right after a post-midnight calendar rollover).
 2. For every incomplete or blocked task: create/update an Issue Tracker row.
 3. Update today's Daily Log row: Done Today, Blockers, Carry Forward, Commits, Status → Done.
 4. Update Launch Roadmap checklist percentages.
