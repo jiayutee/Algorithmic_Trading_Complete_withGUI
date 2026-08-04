@@ -832,3 +832,107 @@ def test_news_sentiment_merge_multiple_items_in_bar():
     assert "news_sentiment" in merged.columns
     # mean(0.6, 0.4) = 0.5
     assert merged.loc[merged.index[0], "news_sentiment"] == pytest.approx(0.5, abs=0.01)
+
+
+def test_news_sentiment_carry_forward():
+    """News on day 1 is carried forward to day 2 when day 2 has no news.
+
+    merge_asof(direction='backward') carries the last known sentiment bucket to
+    all subsequent price bars that have no newer news bucket.  This test pins
+    that behavior so regressions (e.g. accidental direction change) are caught.
+    """
+    from core.news_pipeline import NewsPipeline
+    from core.sentiment import SentimentAnalyzer
+
+    pipeline = NewsPipeline(sentiment_analyzer=SentimentAnalyzer(force_rule_based=True))
+
+    price_df = _make_price_df_for_sentiment([
+        "2026-07-01 12:00:00",
+        "2026-07-02 12:00:00",
+    ])
+    # News only on day 1
+    news_df = _make_news_df_for_sentiment([
+        {
+            "datetime": pd.Timestamp("2026-07-01 09:00:00", tz="UTC"),
+            "sentiment_balance": 0.7,
+            "positive": 0.8,
+            "negative": 0.1,
+            "neutral": 0.1,
+        }
+    ])
+
+    merged = pipeline.merge_features_into_prices(price_df, news_df, interval="1D")
+
+    assert "news_sentiment" in merged.columns
+    # Day 1 bar must have the sentiment from that day's news
+    assert merged["news_sentiment"].iloc[0] == pytest.approx(0.7, abs=0.01), (
+        "Day 1 price bar must carry news_sentiment from day 1 news bucket"
+    )
+    # Day 2 bar has no new news; merge_asof backward carries forward day 1 sentiment
+    assert merged["news_sentiment"].iloc[1] == pytest.approx(0.7, abs=0.01), (
+        "Day 2 price bar must carry forward sentiment from the preceding news bucket (day 1)"
+    )
+
+
+def test_news_sentiment_no_rows_dropped():
+    """merge_features_into_prices must not drop any price bars.
+
+    Uses a 5-bar price DataFrame where only 2 days have news; verifies that
+    all 5 rows survive the merge (the join is index-based with merge_asof, not
+    a filtering inner join).
+    """
+    from core.news_pipeline import NewsPipeline
+    from core.sentiment import SentimentAnalyzer
+
+    pipeline = NewsPipeline(sentiment_analyzer=SentimentAnalyzer(force_rule_based=True))
+
+    price_df = _make_price_df_for_sentiment([
+        "2026-07-01 12:00:00",
+        "2026-07-02 12:00:00",
+        "2026-07-03 12:00:00",
+        "2026-07-04 12:00:00",
+        "2026-07-05 12:00:00",
+    ])
+    # News only on 2 of the 5 days
+    news_df = _make_news_df_for_sentiment([
+        {
+            "datetime": pd.Timestamp("2026-07-02 09:00:00", tz="UTC"),
+            "sentiment_balance": 0.5,
+            "positive": 0.6,
+            "negative": 0.1,
+            "neutral": 0.3,
+        },
+        {
+            "datetime": pd.Timestamp("2026-07-04 09:00:00", tz="UTC"),
+            "sentiment_balance": -0.3,
+            "positive": 0.2,
+            "negative": 0.5,
+            "neutral": 0.3,
+        },
+    ])
+
+    merged = pipeline.merge_features_into_prices(price_df, news_df, interval="1D")
+
+    assert len(merged) == 5, (
+        f"merge_features_into_prices must preserve all 5 price bars; got {len(merged)}"
+    )
+    assert "news_sentiment" in merged.columns
+    # Day 1 (2026-07-01) precedes any news bucket → 0.0 (no prior news)
+    assert merged["news_sentiment"].iloc[0] == pytest.approx(0.0, abs=0.01), (
+        "Bar before any news bucket must be 0.0"
+    )
+    # Day 2 has news → 0.5
+    assert merged["news_sentiment"].iloc[1] == pytest.approx(0.5, abs=0.01)
+    # Day 3 has no news; pandas resample creates an empty bucket for this day
+    # (it falls between news on day 2 and day 4), which is filled with 0.0 by fillna.
+    # This is NOT a carry-forward — the empty bucket explicitly suppresses day 2's value.
+    assert merged["news_sentiment"].iloc[2] == pytest.approx(0.0, abs=0.01), (
+        "Empty resample bucket between two news days must be 0.0, not a carry-forward"
+    )
+    # Day 4 has news → -0.3
+    assert merged["news_sentiment"].iloc[3] == pytest.approx(-0.3, abs=0.01)
+    # Day 5 has no news and no subsequent news bucket → merge_asof backward
+    # carry-forward from the last (day 4) bucket
+    assert merged["news_sentiment"].iloc[4] == pytest.approx(-0.3, abs=0.01), (
+        "Bar after the last news bucket must carry forward the last known sentiment"
+    )
