@@ -72,6 +72,7 @@ class SimulatedBroker:
         self.orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
         self.portfolio_value = initial_balance
+        self.realized_pnl: float = 0.0
         self.market_data: Dict[str, float] = defaultdict(lambda: 100.0)
         self._running = True
         self._lock = threading.Lock()
@@ -280,6 +281,13 @@ class SimulatedBroker:
                 logger.debug("Added to position -> %.6f @ $%.2f", position.qty, position.avg_price)
             else:
                 old_qty = position.qty
+                # Accrue realized PnL for the portion being closed
+                if order.side == OrderSide.SELL and old_qty > 0:
+                    # Closing/reducing a long position
+                    self.realized_pnl += executable_qty * (actual_fill_price - position.avg_price)
+                elif order.side == OrderSide.BUY and old_qty < 0:
+                    # Covering a short position
+                    self.realized_pnl += executable_qty * (position.avg_price - actual_fill_price)
                 position.qty += (executable_qty if order.side == OrderSide.BUY else -executable_qty)
                 logger.debug("Changed position: %.6f -> %.6f", old_qty, position.qty)
                 if abs(position.qty) < 0.000001:
@@ -329,6 +337,7 @@ class SimulatedBroker:
         """Get current account information (thread-safe snapshot)"""
         with self._lock:
             self._update_portfolio_value()
+            unrealized = self._get_unrealized_pnl_locked()
             return {
                 "balance": self.balance,
                 "portfolio_value": self.portfolio_value,
@@ -336,8 +345,46 @@ class SimulatedBroker:
                 "buying_power": self.balance * 2,  # Simple 2x leverage
                 "positions_value": self.portfolio_value - self.balance,
                 "initial_balance": self.initial_balance,
-                "pnl": self.portfolio_value - self.initial_balance
+                "pnl": self.portfolio_value - self.initial_balance,
+                "realized_pnl": self.realized_pnl,
+                "unrealized_pnl": unrealized,
             }
+
+    # ------------------------------------------------------------------
+    # PnL split: realized vs. unrealized
+    # ------------------------------------------------------------------
+
+    def _get_unrealized_pnl_locked(self, prices: Optional[Dict[str, float]] = None) -> float:
+        """Mark-to-market PnL for open positions.  Caller must hold self._lock."""
+        total = 0.0
+        for symbol, pos in self.positions.items():
+            if prices and symbol in prices:
+                current_price = prices[symbol]
+            else:
+                current_price = self.market_data.get(symbol, pos.avg_price)
+            total += pos.qty * (current_price - pos.avg_price)
+        return total
+
+    def get_realized_pnl(self) -> float:
+        """Return total PnL locked in from closed / partially-closed positions."""
+        with self._lock:
+            return self.realized_pnl
+
+    def get_unrealized_pnl(self, prices: Optional[Dict[str, float]] = None) -> float:
+        """Return mark-to-market PnL for all currently open positions.
+
+        Args:
+            prices: Optional mapping of symbol -> current price to use instead
+                    of the broker's internal random-walk market data.  Pass
+                    deterministic values in tests to avoid flakiness.
+        """
+        with self._lock:
+            return self._get_unrealized_pnl_locked(prices=prices)
+
+    def get_total_pnl(self, prices: Optional[Dict[str, float]] = None) -> float:
+        """Return realized + unrealized PnL in a single consistent snapshot."""
+        with self._lock:
+            return self.realized_pnl + self._get_unrealized_pnl_locked(prices=prices)
 
     def close(self):
         """Clean up the broker"""

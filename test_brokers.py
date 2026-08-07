@@ -436,6 +436,271 @@ class TestPnLCorrectness:
 
 
 # ---------------------------------------------------------------------------
+# Realized / unrealized PnL split
+# ---------------------------------------------------------------------------
+
+class TestRealizedUnrealizedPnL:
+    """
+    Verify SimulatedBroker.get_realized_pnl(), get_unrealized_pnl(), and
+    get_total_pnl() are correct and additive.
+
+    All tests use zero fees so the arithmetic stays simple.
+    The `prices` kwarg on get_unrealized_pnl / get_total_pnl pins the
+    mark-to-market price, bypassing the random-walk background thread.
+    """
+
+    def _broker(self, balance=100_000.0):
+        b = SimulatedBroker(initial_balance=balance, market_fee=0.0, limit_fee=0.0)
+        return b
+
+    # --- initial state ---
+
+    def test_initial_realized_pnl_is_zero(self):
+        b = self._broker()
+        assert b.get_realized_pnl() == 0.0
+        b.close()
+
+    def test_initial_unrealized_pnl_is_zero(self):
+        b = self._broker()
+        assert b.get_unrealized_pnl() == 0.0
+        b.close()
+
+    def test_initial_total_pnl_is_zero(self):
+        b = self._broker()
+        assert b.get_total_pnl() == 0.0
+        b.close()
+
+    def test_get_account_info_includes_realized_and_unrealized_keys(self):
+        b = self._broker()
+        info = b.get_account_info()
+        assert "realized_pnl" in info
+        assert "unrealized_pnl" in info
+        b.close()
+
+    # --- buy then partial sell ---
+
+    def test_partial_sell_realized_pnl_correct(self):
+        """
+        Buy 4 units @ $100, sell 2 @ $120 (zero fee).
+        Realized PnL = 2 * ($120 - $100) = $40.
+        """
+        b = self._broker()
+        b.market_data["X"] = 100.0
+        b.submit_order("X", qty=4.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("X", qty=2.0, side="sell",
+                       order_type="market", execution_price=120.0)
+
+        assert abs(b.get_realized_pnl() - 40.0) < 1e-9, (
+            f"Expected realized PnL 40.0, got {b.get_realized_pnl()}"
+        )
+        b.close()
+
+    def test_partial_sell_unrealized_pnl_correct(self):
+        """
+        After partial sell, 2 units remain at avg cost $100.
+        Pinning current price at $110 → unrealized PnL = 2 * ($110 - $100) = $20.
+        """
+        b = self._broker()
+        b.market_data["X"] = 100.0
+        b.submit_order("X", qty=4.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("X", qty=2.0, side="sell",
+                       order_type="market", execution_price=120.0)
+
+        unrealized = b.get_unrealized_pnl(prices={"X": 110.0})
+        assert abs(unrealized - 20.0) < 1e-9, (
+            f"Expected unrealized PnL 20.0, got {unrealized}"
+        )
+        b.close()
+
+    def test_partial_sell_total_pnl_correct(self):
+        """
+        Realized ($40) + unrealized at $110 ($20) = total $60.
+        """
+        b = self._broker()
+        b.market_data["X"] = 100.0
+        b.submit_order("X", qty=4.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("X", qty=2.0, side="sell",
+                       order_type="market", execution_price=120.0)
+
+        total = b.get_total_pnl(prices={"X": 110.0})
+        assert abs(total - 60.0) < 1e-9, (
+            f"Expected total PnL 60.0, got {total}"
+        )
+        b.close()
+
+    def test_partial_sell_position_still_open(self):
+        """After partial sell the position must remain for the residual qty."""
+        b = self._broker()
+        b.market_data["X"] = 100.0
+        b.submit_order("X", qty=4.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("X", qty=2.0, side="sell",
+                       order_type="market", execution_price=120.0)
+
+        pos = b.get_position("X")
+        assert pos is not None
+        assert abs(pos.qty - 2.0) < 1e-9
+        b.close()
+
+    # --- buy then full sell ---
+
+    def test_full_sell_realized_pnl_correct(self):
+        """
+        Buy 3 units @ $100, sell all 3 @ $130 (zero fee).
+        Realized PnL = 3 * ($130 - $100) = $90.
+        """
+        b = self._broker()
+        b.market_data["Y"] = 100.0
+        b.submit_order("Y", qty=3.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("Y", qty=3.0, side="sell",
+                       order_type="market", execution_price=130.0)
+
+        assert abs(b.get_realized_pnl() - 90.0) < 1e-9, (
+            f"Expected realized PnL 90.0, got {b.get_realized_pnl()}"
+        )
+        b.close()
+
+    def test_full_sell_unrealized_pnl_is_zero(self):
+        """After a full close, no open position → unrealized PnL must be 0."""
+        b = self._broker()
+        b.market_data["Y"] = 100.0
+        b.submit_order("Y", qty=3.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("Y", qty=3.0, side="sell",
+                       order_type="market", execution_price=130.0)
+
+        # No open position: any price pinned in → should still be 0
+        assert b.get_unrealized_pnl(prices={"Y": 200.0}) == 0.0
+        b.close()
+
+    def test_full_sell_total_pnl_equals_realized(self):
+        """Total PnL after full close must equal realized PnL (no unrealized)."""
+        b = self._broker()
+        b.market_data["Y"] = 100.0
+        b.submit_order("Y", qty=3.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("Y", qty=3.0, side="sell",
+                       order_type="market", execution_price=130.0)
+
+        assert abs(b.get_total_pnl(prices={"Y": 130.0}) - 90.0) < 1e-9
+        b.close()
+
+    def test_full_sell_no_open_position(self):
+        """Position must be None after selling the entire holding."""
+        b = self._broker()
+        b.market_data["Y"] = 100.0
+        b.submit_order("Y", qty=3.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("Y", qty=3.0, side="sell",
+                       order_type="market", execution_price=130.0)
+        assert b.get_position("Y") is None
+        b.close()
+
+    # --- multiple buys at different prices then a sell (avg cost basis) ---
+
+    def test_avg_cost_basis_realized_pnl_two_buys_full_close(self):
+        """
+        Buy 2 units @ $100, then 2 units @ $200.
+        Avg cost = (2*100 + 2*200) / 4 = $150.
+        Sell all 4 @ $160 → realized PnL = 4 * ($160 - $150) = $40.
+        """
+        b = self._broker()
+        b.market_data["Z"] = 100.0
+        b.submit_order("Z", qty=2.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("Z", qty=2.0, side="buy",
+                       order_type="market", execution_price=200.0)
+
+        pos = b.get_position("Z")
+        assert pos is not None
+        assert abs(pos.avg_price - 150.0) < 1e-9, (
+            f"Expected avg cost 150.0, got {pos.avg_price}"
+        )
+
+        b.submit_order("Z", qty=4.0, side="sell",
+                       order_type="market", execution_price=160.0)
+
+        assert abs(b.get_realized_pnl() - 40.0) < 1e-9, (
+            f"Expected realized PnL 40.0, got {b.get_realized_pnl()}"
+        )
+        b.close()
+
+    def test_avg_cost_basis_realized_pnl_three_buys_partial_close(self):
+        """
+        Buy 1 unit @ $90, 2 units @ $120, 3 units @ $150.
+        Avg cost = (1*90 + 2*120 + 3*150) / 6 = (90+240+450)/6 = 780/6 = $130.
+        Sell 3 units @ $145 → realized PnL = 3 * ($145 - $130) = $45.
+        Remaining: 3 units @ $130 avg.
+        """
+        b = self._broker()
+        b.market_data["W"] = 90.0
+        b.submit_order("W", qty=1.0, side="buy",
+                       order_type="market", execution_price=90.0)
+        b.submit_order("W", qty=2.0, side="buy",
+                       order_type="market", execution_price=120.0)
+        b.submit_order("W", qty=3.0, side="buy",
+                       order_type="market", execution_price=150.0)
+
+        pos = b.get_position("W")
+        assert pos is not None
+        assert abs(pos.qty - 6.0) < 1e-9
+        assert abs(pos.avg_price - 130.0) < 1e-9, (
+            f"Expected avg cost 130.0, got {pos.avg_price}"
+        )
+
+        b.submit_order("W", qty=3.0, side="sell",
+                       order_type="market", execution_price=145.0)
+
+        assert abs(b.get_realized_pnl() - 45.0) < 1e-9, (
+            f"Expected realized PnL 45.0, got {b.get_realized_pnl()}"
+        )
+        # Remaining 3 units should still be open
+        remaining = b.get_position("W")
+        assert remaining is not None
+        assert abs(remaining.qty - 3.0) < 1e-9
+        b.close()
+
+    def test_realized_pnl_accumulates_across_multiple_round_trips(self):
+        """
+        Each round-trip accrues to the running realized total without resetting.
+        3 round-trips: buy 1 @ $100, sell @ $110 each → cumulative $30.
+        """
+        b = self._broker()
+        b.market_data["RT"] = 100.0
+        for _ in range(3):
+            b.submit_order("RT", qty=1.0, side="buy",
+                           order_type="market", execution_price=100.0)
+            b.submit_order("RT", qty=1.0, side="sell",
+                           order_type="market", execution_price=110.0)
+
+        assert abs(b.get_realized_pnl() - 30.0) < 1e-9, (
+            f"Expected cumulative realized PnL 30.0, got {b.get_realized_pnl()}"
+        )
+        b.close()
+
+    def test_realized_pnl_loss_scenario(self):
+        """
+        Selling below cost → negative realized PnL.
+        Buy 2 @ $100, sell 2 @ $80 → realized = 2 * ($80 - $100) = -$40.
+        """
+        b = self._broker()
+        b.market_data["LOSS"] = 100.0
+        b.submit_order("LOSS", qty=2.0, side="buy",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("LOSS", qty=2.0, side="sell",
+                       order_type="market", execution_price=80.0)
+
+        assert abs(b.get_realized_pnl() - (-40.0)) < 1e-9, (
+            f"Expected realized PnL -40.0, got {b.get_realized_pnl()}"
+        )
+        b.close()
+
+
+# ---------------------------------------------------------------------------
 # Thread-safety stress tests
 # ---------------------------------------------------------------------------
 
