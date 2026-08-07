@@ -1,6 +1,7 @@
 import pytest
 import pandas as pd
 import time
+import threading
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 from core.data_loader import DataLoader
@@ -936,3 +937,246 @@ def test_news_sentiment_no_rows_dropped():
     assert merged["news_sentiment"].iloc[4] == pytest.approx(-0.3, abs=0.01), (
         "Bar after the last news bucket must carry forward the last known sentiment"
     )
+
+
+# ---------------------------------------------------------------------------
+# Day 16: Binance WebSocket reconnect / backoff / heartbeat unit tests
+#
+# All tests use a fake WebSocketApp — no real Binance connection is opened.
+# The DataLoader tunables (_ws_reconnect_initial, _ws_heartbeat_interval, …)
+# are overridden to millisecond-scale values so the soak can finish in < 1 s.
+# ---------------------------------------------------------------------------
+
+class TestBinanceWebSocketResilience:
+    """Soak-style unit tests for reconnect / backoff / heartbeat logic."""
+
+    @pytest.fixture
+    def loader(self):
+        """DataLoader with mocked CCXT exchanges and fast WS tunables."""
+        ld = DataLoader()
+        mock_ex = MagicMock()
+        mock_ex.milliseconds.return_value = int(time.time() * 1000)
+        mock_ex.rateLimit = 0
+        mock_ex.fetch_ticker.return_value = {"last": 50000.0}
+        ld.binance_public = mock_ex
+        ld.binance_connector = mock_ex
+        # Override tunables for speed — these are the knobs exposed for exactly
+        # this purpose (see _ws_reconnect_initial etc. set in DataLoader.__init__)
+        ld._ws_reconnect_initial = 0.02    # 20 ms first backoff
+        ld._ws_reconnect_max    = 0.05    # 50 ms cap
+        ld._ws_heartbeat_interval   = 0.05  # 50 ms liveness check
+        ld._ws_heartbeat_staleness  = 0.12  # 120 ms before stale
+        ld._ws_connect_timeout = 2          # 2 s initial connect timeout
+        return ld
+
+    # ------------------------------------------------------------------
+    # Internal helper: fake WebSocketApp classes
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _disconnecting_ws_class(ws_instances):
+        """Returns a FakeWSApp that calls on_open then on_close after a tiny delay.
+
+        Simulates a connection that drops immediately — the reconnect loop
+        must create a new instance to restore the stream.
+        """
+        class FakeWSApp:
+            def __init__(self_, url,
+                         on_message=None, on_error=None,
+                         on_close=None, on_open=None, **kw):
+                self_._on_open  = on_open
+                self_._on_close = on_close
+                self_._closed_manually = False
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                # Stay "connected" very briefly, then simulate a drop
+                time.sleep(0.02)
+                if not self_._closed_manually and self_._on_close:
+                    self_._on_close(self_, None, "simulated drop")
+
+            def close(self_):
+                self_._closed_manually = True
+
+        return FakeWSApp
+
+    @staticmethod
+    def _error_ws_class(ws_instances):
+        """Returns a FakeWSApp that calls on_open then on_error during run_forever.
+
+        Models a network error mid-stream.
+        """
+        class FakeWSApp:
+            def __init__(self_, url,
+                         on_message=None, on_error=None,
+                         on_close=None, on_open=None, **kw):
+                self_._on_open  = on_open
+                self_._on_close = on_close
+                self_._on_error = on_error
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                time.sleep(0.01)
+                if self_._on_error:
+                    self_._on_error(self_, ConnectionError("simulated network error"))
+                if self_._on_close:
+                    self_._on_close(self_, None, None)
+
+            def close(self_):
+                pass
+
+        return FakeWSApp
+
+    @staticmethod
+    def _blocking_ws_class(ws_instances, close_calls):
+        """Returns a FakeWSApp that stays open until close() is called.
+
+        Used for the heartbeat test: the heartbeat fires ws.close() when it
+        detects a stale connection, which unblocks run_forever().
+        """
+        class FakeWSApp:
+            def __init__(self_, url,
+                         on_message=None, on_error=None,
+                         on_close=None, on_open=None, **kw):
+                self_._on_open  = on_open
+                self_._on_close = on_close
+                self_._release  = threading.Event()
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                # Block until close() is called (or 5 s safety timeout)
+                self_._release.wait(timeout=5.0)
+                if self_._on_close:
+                    self_._on_close(self_, None, None)
+
+            def close(self_):
+                close_calls.append(time.time())
+                self_._release.set()
+
+        return FakeWSApp
+
+    # ------------------------------------------------------------------
+    # Tests
+    # ------------------------------------------------------------------
+
+    def test_reconnects_after_on_close(self, loader):
+        """At least one reconnect occurs when the connection drops (on_close)."""
+        ws_instances = []
+        FakeWSApp = self._disconnecting_ws_class(ws_instances)
+
+        with patch('websocket.WebSocketApp',
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            loader.start_realtime_stream('BTCUSDT', lambda x: None)
+            # Initial connect + close (0.02 s) + backoff (0.02 s) + second connect
+            time.sleep(0.4)
+            loader.stop_realtime_stream()
+
+        assert len(ws_instances) >= 2, (
+            f"Expected >= 2 WebSocketApp instances (initial + reconnect); "
+            f"got {len(ws_instances)}"
+        )
+
+    def test_reconnects_after_on_error(self, loader):
+        """At least one reconnect occurs when the WebSocket reports an error."""
+        ws_instances = []
+        FakeWSApp = self._error_ws_class(ws_instances)
+
+        with patch('websocket.WebSocketApp',
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            loader.start_realtime_stream('BTCUSDT', lambda x: None)
+            time.sleep(0.4)
+            loader.stop_realtime_stream()
+
+        assert len(ws_instances) >= 2, (
+            f"Expected >= 2 WebSocketApp instances after on_error reconnect; "
+            f"got {len(ws_instances)}"
+        )
+
+    def test_exponential_backoff_caps_at_max(self, loader):
+        """Backoff delay is capped at _ws_reconnect_max and does not grow forever."""
+        ws_instances = []
+        FakeWSApp = self._disconnecting_ws_class(ws_instances)
+
+        # Let multiple reconnects fire so backoff has time to hit the cap
+        with patch('websocket.WebSocketApp',
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            loader.start_realtime_stream('BTCUSDT', lambda x: None)
+            time.sleep(0.8)
+            final_delay = loader._reconnect_delay
+            loader.stop_realtime_stream()
+
+        # After several drops the delay must have been capped
+        assert final_delay <= loader._ws_reconnect_max + 1e-9, (
+            f"Backoff delay {final_delay:.4f}s exceeded cap "
+            f"{loader._ws_reconnect_max:.4f}s"
+        )
+
+    def test_stop_halts_all_threads(self, loader):
+        """stop_realtime_stream() terminates both ws_thread and _heartbeat_thread."""
+        ws_instances = []
+        FakeWSApp = self._disconnecting_ws_class(ws_instances)
+
+        with patch('websocket.WebSocketApp',
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            loader.start_realtime_stream('BTCUSDT', lambda x: None)
+            # Verify threads are running before stop
+            assert loader.ws_thread is not None
+            assert loader._heartbeat_thread is not None
+            loader.stop_realtime_stream()
+
+        # After stop, everything must be cleaned up
+        assert loader.ws_thread is None,         "ws_thread must be None after stop"
+        assert loader._heartbeat_thread is None, "_heartbeat_thread must be None after stop"
+        assert not loader.ws_connected,          "ws_connected must be False after stop"
+        assert not loader._stream_active,        "_stream_active must be False after stop"
+
+    def test_stop_prevents_further_reconnects(self, loader):
+        """No new WebSocket is created after stop_realtime_stream() returns."""
+        ws_instances = []
+        FakeWSApp = self._disconnecting_ws_class(ws_instances)
+
+        with patch('websocket.WebSocketApp',
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            loader.start_realtime_stream('BTCUSDT', lambda x: None)
+            loader.stop_realtime_stream()
+            count_at_stop = len(ws_instances)
+            # Wait; no new instances should appear
+            time.sleep(0.2)
+
+        assert len(ws_instances) == count_at_stop, (
+            f"New WebSocket created after stop: expected {count_at_stop}, "
+            f"got {len(ws_instances)}"
+        )
+
+    def test_heartbeat_triggers_reconnect_on_stale_connection(self, loader):
+        """Heartbeat calls ws.close() when no messages arrive within the staleness window.
+
+        The blocking FakeWSApp stays open until close() is called; we verify
+        that (a) close() is invoked by the heartbeat and (b) the reconnect loop
+        opens at least one new connection afterwards.
+        """
+        ws_instances = []
+        close_calls = []
+        FakeWSApp = self._blocking_ws_class(ws_instances, close_calls)
+
+        with patch('websocket.WebSocketApp',
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            loader.start_realtime_stream('BTCUSDT', lambda x: None)
+            # Wait for staleness to be detected:
+            #   heartbeat fires every 0.05 s; staleness threshold is 0.12 s
+            #   → first stale detect at ~0.15 s from start
+            time.sleep(0.5)
+            loader.stop_realtime_stream()
+
+        assert len(close_calls) >= 1, (
+            "Heartbeat must have called ws.close() on the stale connection"
+        )
+        assert len(ws_instances) >= 2, (
+            "A new WebSocket must be opened after the heartbeat-triggered close"
+        )

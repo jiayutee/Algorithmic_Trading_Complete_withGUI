@@ -54,6 +54,18 @@ class DataLoader:
         self.ws_connected = False
         self.ws = None
         self._callback = None
+        # Reconnect / heartbeat state
+        self._stream_active = False          # True while stream should remain alive
+        self._stop_event = threading.Event() # wakes sleeping reconnect/heartbeat loops
+        self._last_message_time = None       # epoch time of last received WS message
+        self._reconnect_delay = 1.0          # current backoff delay (seconds)
+        self._heartbeat_thread = None        # monitors message freshness
+        # WebSocket tunables — exposed as instance attrs so tests can override them
+        self._ws_reconnect_initial = 1.0     # first backoff delay (seconds)
+        self._ws_reconnect_max = 30.0        # maximum backoff cap
+        self._ws_heartbeat_interval = 5.0    # liveness check frequency (seconds)
+        self._ws_heartbeat_staleness = 60.0  # seconds without a message → force reconnect
+        self._ws_connect_timeout = 10        # seconds to wait for initial on_open
         self.news_pipeline = get_default_news_pipeline()
 
     def load_data(self, symbol, source="Historical", live=False, days=365, interval='1d'):
@@ -391,35 +403,79 @@ class DataLoader:
 
     # REAL-TIME STREAMING METHODS
     def start_realtime_stream(self, symbol, callback):
-        """Start real-time WebSocket stream for crypto"""
-        if self.ws_connected:
+        """Start real-time WebSocket stream for crypto.
+
+        Public signature is unchanged — callers (ui/main_window.py etc.) are
+        unaffected.  If a stream is already active (or mid-reconnect) it is
+        cleanly stopped before the new one begins.
+        """
+        if self._stream_active:
             self.stop_realtime_stream()
 
         self.active_symbol = symbol
         self._callback = callback
-        
+        self._stop_event.clear()   # reset any lingering stop signal
+
         logger.info(f"[DataLoader] Starting real-time WebSocket for {symbol}")
-        
+
         # Use Binance WebSocket (no API keys needed for public streams)
         self._start_binance_websocket(symbol)
 
     def _start_binance_websocket(self, symbol):
-        """Start Binance WebSocket for real-time crypto data"""
+        """Start Binance WebSocket with automatic reconnect and heartbeat.
+
+        Reconnect strategy
+        ------------------
+        * On ``on_close`` or ``on_error`` the reconnect loop (inside
+          ``ws_thread``) waits ``_reconnect_delay`` seconds then opens a fresh
+          connection.  The delay doubles on each attempt (exponential backoff)
+          up to ``_ws_reconnect_max``.  A successful ``on_open`` + first
+          message resets the delay to ``_ws_reconnect_initial``.
+
+        Heartbeat liveness check
+        ------------------------
+        A separate ``_heartbeat_thread`` wakes every ``_ws_heartbeat_interval``
+        seconds.  If ``ws_connected`` is True but the last message arrived more
+        than ``_ws_heartbeat_staleness`` seconds ago it calls ``ws.close()``
+        which unblocks ``run_forever()``, triggering the reconnect loop.
+
+        Both loops honour ``_stop_event`` so ``stop_realtime_stream()``
+        terminates everything promptly with no orphaned threads.
+        """
+        # ------------------------------------------------------------------ #
+        #  Tunables (read once at start so tests can override per-instance)   #
+        # ------------------------------------------------------------------ #
+        _RECONNECT_INITIAL   = self._ws_reconnect_initial
+        _RECONNECT_MAX       = self._ws_reconnect_max
+        _HEARTBEAT_INTERVAL  = self._ws_heartbeat_interval
+        _HEARTBEAT_STALENESS = self._ws_heartbeat_staleness
+        _CONNECT_TIMEOUT     = self._ws_connect_timeout
+
         stream_name = f"{symbol.lower()}@depth@100ms"
         ws_url = f"wss://stream.binance.com:9443/ws/{stream_name}"
-        
+
+        # Reset per-stream state
+        self._reconnect_delay = _RECONNECT_INITIAL
+        self._last_message_time = time.time()
+        self._stream_active = True
+
+        # ------------------------------------------------------------------ #
+        #  WebSocket callbacks                                                 #
+        # ------------------------------------------------------------------ #
         def on_message(ws, message):
             try:
+                self._last_message_time = time.time()
+                self._reconnect_delay = _RECONNECT_INITIAL  # reset backoff on success
                 data = json.loads(message)
                 # logger.debug(f"[WebSocket Raw] {message}") # Debug raw message
-                
+
                 # Check for order book depth update structure
                 if 'b' in data and 'a' in data:
                     order_book_update = {
                         'symbol': data['s'],
-                        'bids': data['b'], # [[price, quantity], ...]
-                        'asks': data['a'], # [[price, quantity], ...]
-                        'timestamp': datetime.fromtimestamp(data['E'] / 1000), # Event time
+                        'bids': data['b'],   # [[price, quantity], ...]
+                        'asks': data['a'],   # [[price, quantity], ...]
+                        'timestamp': datetime.fromtimestamp(data['E'] / 1000),  # Event time
                         'exchange': 'binance',
                         'type': 'depthUpdate'
                     }
@@ -429,7 +485,6 @@ class DataLoader:
                 # Add handling for other message types if necessary
                 else:
                     logger.warning(f"Unhandled WebSocket message type: {data.get('e', 'unknown_event')}")
-
             except Exception as e:
                 logger.error(f"WebSocket message parsing error: {e}, Message: {message}")
 
@@ -444,63 +499,131 @@ class DataLoader:
         def on_open(ws):
             logger.info(f"WebSocket connected for {self.active_symbol}")
             self.ws_connected = True
+            self._last_message_time = time.time()
+            self._reconnect_delay = _RECONNECT_INITIAL  # reset backoff on clean open
 
-        # Create and start WebSocket
-        self.ws = websocket.WebSocketApp(
-            ws_url,
-            on_message=on_message,
-            on_error=on_error,
-            on_close=on_close,
-            on_open=on_open
-        )
-        
-        def run_websocket():
-            try:
-                # Remove daemon=True for graceful shutdown
-                self.ws.run_forever(ping_interval=30, ping_timeout=10)
-            except Exception as e:
-                logger.error(f"WebSocket run error: {e}")
-            
-        self.ws_thread = threading.Thread(target=run_websocket) # Removed daemon=True
+        def _make_ws():
+            return websocket.WebSocketApp(
+                ws_url,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+                on_open=on_open,
+            )
+
+        # ------------------------------------------------------------------ #
+        #  Reconnect loop — runs inside ws_thread                             #
+        # ------------------------------------------------------------------ #
+        def _run_ws_with_reconnect():
+            while self._stream_active and not self._stop_event.is_set():
+                self.ws = _make_ws()
+                try:
+                    self.ws.run_forever(ping_interval=30, ping_timeout=10)
+                except Exception as e:
+                    logger.error(f"WebSocket run error: {e}")
+
+                # Exit immediately if stop was requested
+                if not self._stream_active or self._stop_event.is_set():
+                    break
+
+                # Exponential backoff before next attempt
+                delay = self._reconnect_delay
+                self._reconnect_delay = min(self._reconnect_delay * 2, _RECONNECT_MAX)
+                logger.info(
+                    f"[DataLoader] WebSocket for {symbol} disconnected; "
+                    f"reconnecting in {delay:.2f}s (backoff)"
+                )
+                # Block for `delay` seconds, but wake immediately on stop signal
+                self._stop_event.wait(timeout=delay)
+
+        # ------------------------------------------------------------------ #
+        #  Heartbeat liveness monitor — runs in _heartbeat_thread             #
+        # ------------------------------------------------------------------ #
+        def _heartbeat_loop():
+            # wait() returns True as soon as _stop_event is set, False on timeout
+            while not self._stop_event.wait(timeout=_HEARTBEAT_INTERVAL):
+                if not self._stream_active:
+                    break
+                if self.ws_connected and self._last_message_time is not None:
+                    staleness = time.time() - self._last_message_time
+                    if staleness > _HEARTBEAT_STALENESS:
+                        logger.warning(
+                            f"[DataLoader] No WS message for {staleness:.0f}s "
+                            f"on {symbol}; forcing reconnect"
+                        )
+                        ws = self.ws
+                        if ws:
+                            try:
+                                ws.close()
+                            except Exception:
+                                pass
+                        # ws_thread's reconnect loop handles the new connection
+
+        # ------------------------------------------------------------------ #
+        #  Launch threads                                                      #
+        # ------------------------------------------------------------------ #
+        self.ws_thread = threading.Thread(target=_run_ws_with_reconnect, daemon=True)
         self.ws_thread.start()
-        
-        # Wait for connection with timeout
-        timeout = 10
+
+        self._heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
+
+        # Wait for the initial connection (not needed for subsequent reconnects)
         start_time = time.time()
-        while not self.ws_connected and time.time() - start_time < timeout:
+        while not self.ws_connected and time.time() - start_time < _CONNECT_TIMEOUT:
             time.sleep(0.1)
-            
+
         if not self.ws_connected:
-            raise Exception(f"Failed to establish WebSocket connection for {symbol} within {timeout} seconds")
+            raise Exception(
+                f"Failed to establish WebSocket connection for {symbol} "
+                f"within {_CONNECT_TIMEOUT} seconds"
+            )
 
     def stop_realtime_stream(self):
-        """Stop the real-time WebSocket stream"""
+        """Stop the real-time WebSocket stream.
+
+        Sets the stop flag and wakes any sleeping reconnect/heartbeat loops,
+        then closes the current WebSocket and joins both threads.  No orphaned
+        threads remain after this call returns.
+        """
         logger.info(f"[DataLoader] Stopping real-time stream for {self.active_symbol}")
-        
-        if self.ws:
+
+        # Signal all loops to exit before doing anything else
+        self._stream_active = False
+        self._stop_event.set()   # wake sleeping wait() calls immediately
+
+        # Close the WebSocket to unblock run_forever()
+        ws = self.ws
+        if ws:
             try:
-                self.ws.close()
+                ws.close()
             except Exception as e:
                 logger.error(f"Error closing WebSocket: {e}")
-            finally:
-                self.ws = None
-        
+        self.ws = None
+
+        # Join WebSocket (reconnect) thread
         if self.ws_thread:
-            # Explicitly join the thread for graceful termination
-            self.ws_thread.join(timeout=2) 
+            self.ws_thread.join(timeout=5)
             if self.ws_thread.is_alive():
                 logger.warning("WebSocket thread did not terminate gracefully.")
             self.ws_thread = None
-            
+
+        # Join heartbeat thread
+        if self._heartbeat_thread:
+            self._heartbeat_thread.join(timeout=2)
+            if self._heartbeat_thread.is_alive():
+                logger.warning("Heartbeat thread did not terminate gracefully.")
+            self._heartbeat_thread = None
+
         self.ws_connected = False
         self.active_symbol = None
         self._callback = None
-        
+
         # Clear the queue
         while not self.realtime_queue.empty():
             try:
                 self.realtime_queue.get_nowait()
-            except:
+            except Exception:
                 break
 
     def get_realtime_updates(self):
