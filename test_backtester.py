@@ -801,3 +801,156 @@ class TestExportReport:
         results = self._results()
         with pytest.raises(ValueError, match="Unsupported format"):
             export_report(results, str(tmp_path / "out"), format='xlsx')
+
+
+# ---------------------------------------------------------------------------
+# Tests: Backtester.compute_alpha_beta() static method (Phase 0.2)
+#
+# Covers:
+#   1. Known-input beta/alpha against a hand-computed expected value.
+#   2. beta=1 / alpha=0 edge case when strategy returns == benchmark returns.
+#   3. Positive-alpha case (strategy = benchmark + constant daily offset).
+#   4. Top-level 'alpha' and 'beta' keys present in the full results dict.
+#   5. Graceful fallback when no benchmark is provided to run_backtest().
+# ---------------------------------------------------------------------------
+
+class TestAlphaBetaComputation:
+    """Unit tests for Backtester.compute_alpha_beta() static method and the
+    'alpha'/'beta' top-level keys added to the results dict."""
+
+    def test_known_beta_value_from_scaled_series(self):
+        """Beta must equal the scaling factor when strategy = k * benchmark.
+
+        With strategy = k * benchmark (same direction, k times the magnitude):
+          cov(k*b, b) = k * var(b)   →   beta = k * var(b) / var(b) = k
+          mean(k*b) = k * mean(b)    →   alpha = k*mean(b)*252 - k*mean(b)*252 = 0
+        """
+        rng = np.random.default_rng(0)
+        bench = rng.normal(0.001, 0.01, 200)  # 200 daily returns
+        k = 2.5
+        strat = k * bench
+
+        alpha, beta = Backtester.compute_alpha_beta(strat, bench)
+
+        assert beta == pytest.approx(k, abs=1e-9), (
+            f"Expected beta={k} (scaling factor); got beta={beta}"
+        )
+        assert alpha == pytest.approx(0.0, abs=1e-6), (
+            f"Expected alpha=0.0 when strategy is a pure scale of benchmark; got alpha={alpha}"
+        )
+
+    def test_identical_returns_yield_beta_one_alpha_zero(self):
+        """When strategy returns are identical to benchmark returns, beta=1 and alpha=0.
+
+        cov(b, b) / var(b) = var(b) / var(b) = 1  →  beta = 1
+        alpha = mean(b)*252 - 1*mean(b)*252 = 0
+        """
+        returns = np.array([0.01, -0.005, 0.02, -0.01, 0.005, 0.003, -0.008, 0.015])
+
+        alpha, beta = Backtester.compute_alpha_beta(returns, returns)
+
+        assert beta == pytest.approx(1.0, abs=1e-10), (
+            f"Expected beta=1.0 when strategy == benchmark; got beta={beta}"
+        )
+        assert alpha == pytest.approx(0.0, abs=1e-9), (
+            f"Expected alpha=0.0 when strategy == benchmark; got alpha={alpha}"
+        )
+
+    def test_constant_daily_outperformance_gives_positive_alpha_beta_one(self):
+        """strategy = benchmark + constant_offset  →  beta=1, alpha=offset*252.
+
+        cov(b + c, b) = cov(b, b) = var(b)  →  beta = var(b)/var(b) = 1
+        alpha = (mean(b) + c)*252 - 1*mean(b)*252 = c*252
+        """
+        rng = np.random.default_rng(1)
+        bench = rng.normal(0.0, 0.01, 200)
+        daily_edge = 0.001  # 0.1 % / day constant outperformance
+        strat = bench + daily_edge
+
+        alpha, beta = Backtester.compute_alpha_beta(strat, bench)
+        expected_alpha = daily_edge * 252
+
+        assert beta == pytest.approx(1.0, abs=1e-10), (
+            f"Expected beta=1.0 for constant-offset strategy; got beta={beta}"
+        )
+        assert alpha == pytest.approx(expected_alpha, rel=1e-8), (
+            f"Expected alpha={expected_alpha:.4f}; got alpha={alpha:.4f}"
+        )
+
+    def test_zero_variance_benchmark_returns_zero_zero(self):
+        """Constant (zero-variance) benchmark must return (0.0, 0.0) gracefully."""
+        strat = np.array([0.01, -0.005, 0.02, -0.01, 0.005])
+        bench_flat = np.full(5, 0.003)  # zero variance
+
+        alpha, beta = Backtester.compute_alpha_beta(strat, bench_flat)
+
+        assert alpha == 0.0
+        assert beta == 0.0
+
+    def test_fewer_than_two_points_returns_zero_zero(self):
+        """With fewer than 2 observations the method must return (0.0, 0.0)."""
+        alpha, beta = Backtester.compute_alpha_beta([0.01], [0.01])
+        assert alpha == 0.0
+        assert beta == 0.0
+
+        alpha, beta = Backtester.compute_alpha_beta([], [])
+        assert alpha == 0.0
+        assert beta == 0.0
+
+    def test_mismatched_lengths_returns_zero_zero(self):
+        """Mismatched-length arrays must return (0.0, 0.0) gracefully."""
+        alpha, beta = Backtester.compute_alpha_beta([0.01, 0.02], [0.01, 0.02, 0.03])
+        assert alpha == 0.0
+        assert beta == 0.0
+
+    def test_annualization_factor_respected(self):
+        """Changing annualization_factor scales alpha proportionally."""
+        bench = np.array([0.01, -0.01, 0.01, -0.01, 0.01, -0.01, 0.01, -0.01])
+        strat = bench + 0.001  # constant daily edge
+
+        alpha_252, _ = Backtester.compute_alpha_beta(strat, bench, annualization_factor=252)
+        alpha_52, _ = Backtester.compute_alpha_beta(strat, bench, annualization_factor=52)
+
+        # alpha should scale exactly with the annualization_factor
+        assert alpha_252 == pytest.approx(alpha_52 * (252 / 52), rel=1e-9)
+
+    def test_results_dict_has_top_level_alpha_beta_keys(self):
+        """The dict returned by run_backtest() must have top-level 'alpha' and 'beta' keys."""
+        df = _make_ohlcv(252)
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        assert "alpha" in results, "Missing top-level 'alpha' key in results dict"
+        assert "beta" in results, "Missing top-level 'beta' key in results dict"
+
+    def test_alpha_beta_are_numeric(self):
+        """Top-level 'alpha' and 'beta' must be numeric (int or float)."""
+        df = _make_ohlcv(252)
+        results = _run_backtest(EMACrossoverStrategy, df)
+        assert "error" not in results, f"Backtest errored: {results.get('error')}"
+        assert isinstance(results["alpha"], (int, float)), (
+            f"'alpha' must be numeric; got {type(results['alpha'])}"
+        )
+        assert isinstance(results["beta"], (int, float)), (
+            f"'beta' must be numeric; got {type(results['beta'])}"
+        )
+
+    def test_report_unchanged_when_no_benchmark_supplied(self):
+        """Passing benchmark_ticker=None must not break the report — all
+        required keys must still be present and alpha/beta must default to 0.0."""
+        b = Backtester()
+        df = _make_ohlcv(60, seed=7)
+        b.add_data(df.copy())
+        b.add_strategy(EMACrossoverStrategy)
+        results = b.run_backtest(cash=100_000, benchmark_ticker=None)
+
+        assert "error" not in results, f"Backtest errored with no benchmark: {results.get('error')}"
+
+        for key in ("sharpe", "max_drawdown", "win_rate", "summary",
+                    "alpha", "beta", "signals", "total_asset_value"):
+            assert key in results, (
+                f"Key '{key}' missing from results when benchmark_ticker=None"
+            )
+
+        # With an invalid/None benchmark, _calculate_alpha_beta returns (0, 0)
+        assert isinstance(results["alpha"], (int, float))
+        assert isinstance(results["beta"], (int, float))

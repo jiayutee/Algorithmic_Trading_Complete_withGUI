@@ -211,6 +211,10 @@ class Backtester:
             "sharpe": sharpe,
             "max_drawdown": max_drawdown_pct,
             "win_rate": win_rate,
+            # Alpha/Beta — top-level shorthand mirrors summary["Alpha"/"Beta"].
+            # Values are 0.0 when no benchmark is provided or data is unavailable.
+            "alpha": alpha,
+            "beta": beta,
             # Detailed summary for GUI display
             "summary": summary,
             "cumulative_pnl": np.cumsum(pnl_per_trade).tolist() if pnl_per_trade else [],
@@ -284,6 +288,56 @@ class Backtester:
         except Exception as e:
             logger.error(f"Alpha/Beta calculation failed: {e}")
             return 0, 0
+
+    @staticmethod
+    def compute_alpha_beta(
+        strategy_returns,
+        benchmark_returns,
+        annualization_factor: int = 252,
+    ):
+        """Compute CAPM-style alpha and beta from two daily return series.
+
+        Formula
+        -------
+        beta  = cov(strategy, benchmark) / var(benchmark)   [sample statistics]
+        alpha = mean(strategy) * N - beta * mean(benchmark) * N
+
+        where N is ``annualization_factor`` (default 252 trading days/year),
+        matching the ``* 252`` convention already used in
+        :py:meth:`_calculate_alpha_beta` and backtrader's
+        ``SharpeRatio(timeframe=bt.TimeFrame.Days)`` analyser.
+
+        This method is purely computational — it takes pre-aligned arrays
+        directly and never touches the network.  For full backtest integration
+        (fetching a live benchmark and caching) use
+        :py:meth:`_calculate_alpha_beta` instead.
+
+        Args:
+            strategy_returns:    array-like of daily returns for the strategy.
+            benchmark_returns:   array-like of daily returns for the benchmark.
+                                 Must already be in return form (not prices).
+            annualization_factor: trading-days-per-year multiplier (default 252).
+
+        Returns:
+            (alpha, beta) — both ``float``.  Returns ``(0.0, 0.0)`` when the
+            benchmark has zero variance or fewer than 2 observations.
+        """
+        strat = np.asarray(strategy_returns, dtype=float)
+        bench = np.asarray(benchmark_returns, dtype=float)
+
+        if len(strat) < 2 or len(bench) < 2 or len(strat) != len(bench):
+            return 0.0, 0.0
+
+        bench_var = np.var(bench, ddof=1)
+        if bench_var == 0.0:
+            return 0.0, 0.0
+
+        beta = float(np.cov(strat, bench, ddof=1)[0, 1] / bench_var)
+        alpha = float(
+            np.mean(strat) * annualization_factor
+            - beta * np.mean(bench) * annualization_factor
+        )
+        return alpha, beta
 
     def get_signals(self):
         if self.cerebro.strats and hasattr(self.cerebro.strats[0][0], 'signals'):
