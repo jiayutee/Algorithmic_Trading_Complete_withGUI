@@ -1,3 +1,4 @@
+import json
 import pytest
 import pandas as pd
 import time
@@ -1180,3 +1181,334 @@ class TestBinanceWebSocketResilience:
         assert len(ws_instances) >= 2, (
             "A new WebSocket must be opened after the heartbeat-triggered close"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 0.4: LivePriceService — multi-symbol background streaming service
+#
+# All tests mock websocket.WebSocketApp to avoid real Binance connections.
+# WS tunables are overridden on the service instance to use millisecond-scale
+# timeouts so tests finish quickly.
+# ---------------------------------------------------------------------------
+
+class TestLivePriceService:
+    """Unit tests for LivePriceService — no real network connections opened."""
+
+    # ------------------------------------------------------------------
+    # Shared fixture
+    # ------------------------------------------------------------------
+
+    @pytest.fixture
+    def service(self):
+        """LivePriceService with fast WS tunables so tests complete quickly."""
+        from core.live_price_service import LivePriceService
+
+        svc = LivePriceService()
+        svc._ws_connect_timeout = 2          # 2 s initial connect window
+        svc._ws_reconnect_initial = 0.02     # 20 ms first backoff
+        svc._ws_reconnect_max = 0.05         # 50 ms backoff cap
+        svc._ws_heartbeat_interval = 5.0     # slow heartbeat — won't fire in tests
+        svc._ws_heartbeat_staleness = 60.0   # 60 s staleness — won't fire in tests
+        return svc
+
+    # ------------------------------------------------------------------
+    # Helpers: fake WebSocketApp implementations
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_open_only_ws_class(ws_instances):
+        """FakeWSApp that fires on_open then blocks until close() is called.
+
+        Simulates a connected socket that never sends any messages.  Used to
+        verify that get_price() returns None before any message arrives.
+        """
+        class FakeWSApp:
+            def __init__(self_, url, on_open=None, on_close=None,
+                         on_message=None, on_error=None, **kw):
+                self_._on_open = on_open
+                self_._on_close = on_close
+                self_._release = threading.Event()
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                # Block until close() is called (5 s safety timeout)
+                self_._release.wait(timeout=5.0)
+                if self_._on_close:
+                    self_._on_close(self_, None, None)
+
+            def close(self_):
+                self_._release.set()
+
+        return FakeWSApp
+
+    @staticmethod
+    def _make_message_ws_class(symbol, bid, ask, ws_instances):
+        """FakeWSApp that fires on_open, sends one order-book message, then blocks.
+
+        The message has the same structure DataLoader's on_message handler
+        expects (keys: 'b', 'a', 's', 'E', 'e').
+        """
+        class FakeWSApp:
+            def __init__(self_, url, on_open=None, on_close=None,
+                         on_message=None, on_error=None, **kw):
+                self_._on_open = on_open
+                self_._on_close = on_close
+                self_._on_message = on_message
+                self_._release = threading.Event()
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                # Send one order-book depth update
+                msg = json.dumps({
+                    "e": "depthUpdate",
+                    "E": int(time.time() * 1000),
+                    "s": symbol,
+                    "b": [[str(bid), "1.0"]],
+                    "a": [[str(ask), "0.5"]],
+                })
+                if self_._on_message:
+                    self_._on_message(self_, msg)
+                # Block until close()
+                self_._release.wait(timeout=5.0)
+                if self_._on_close:
+                    self_._on_close(self_, None, None)
+
+            def close(self_):
+                self_._release.set()
+
+        return FakeWSApp
+
+    # ------------------------------------------------------------------
+    # Tests
+    # ------------------------------------------------------------------
+
+    def test_get_price_returns_none_before_any_message(self, service):
+        """get_price() returns None immediately after subscribe, before any WS message."""
+        ws_instances = []
+        FakeWSApp = self._make_open_only_ws_class(ws_instances)
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT")
+            # No messages sent — cache slot should still be None
+            assert service.get_price("BTCUSDT") is None
+            service.stop()
+
+    def test_get_price_returns_none_for_unknown_symbol(self, service):
+        """get_price() returns None for a symbol that was never subscribed."""
+        assert service.get_price("XYZUSDT") is None
+
+    def test_subscribe_populates_price_cache(self, service):
+        """Price cache is populated after a simulated order-book message arrives."""
+        ws_instances = []
+        bid, ask = 49999.0, 50001.0
+        FakeWSApp = self._make_message_ws_class("BTCUSDT", bid, ask, ws_instances)
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT")
+            # Give the ws_thread time to call on_message and populate the cache.
+            time.sleep(0.1)
+            price = service.get_price("BTCUSDT")
+            service.stop()
+
+        expected_mid = (bid + ask) / 2.0
+        assert price == pytest.approx(expected_mid), (
+            f"Expected mid-price {expected_mid}, got {price}"
+        )
+
+    def test_callback_invoked_on_message(self, service):
+        """User-registered callback receives the raw order-book dict."""
+        ws_instances = []
+        received = []
+        FakeWSApp = self._make_message_ws_class("BTCUSDT", 50000.0, 50002.0, ws_instances)
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT", callback=received.append)
+            time.sleep(0.1)
+            service.stop()
+
+        assert len(received) >= 1, "callback must be called at least once"
+        assert received[0].get("bids") is not None, "callback dict must contain 'bids'"
+        assert received[0].get("asks") is not None, "callback dict must contain 'asks'"
+
+    def test_multiple_symbols_tracked_independently(self, service):
+        """Two subscribed symbols maintain independent price caches."""
+        ws_instances = []
+
+        # FakeWSApp extracts the symbol from the WebSocket URL and sends
+        # symbol-specific prices.
+        class MultiSymbolFakeWSApp:
+            def __init__(self_, url, on_open=None, on_close=None,
+                         on_message=None, on_error=None, **kw):
+                self_._on_open = on_open
+                self_._on_close = on_close
+                self_._on_message = on_message
+                self_._release = threading.Event()
+                # URL format: wss://stream.binance.com:9443/ws/<symbol>@depth@100ms
+                import re
+                m = re.search(r"/ws/([^@]+)@", url)
+                self_._symbol = m.group(1).upper() if m else "UNKNOWN"
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                if self_._symbol == "BTCUSDT":
+                    bid, ask = 49000.0, 49002.0
+                else:
+                    bid, ask = 3000.0, 3002.0
+                msg = json.dumps({
+                    "e": "depthUpdate",
+                    "E": int(time.time() * 1000),
+                    "s": self_._symbol,
+                    "b": [[str(bid), "1.0"]],
+                    "a": [[str(ask), "0.5"]],
+                })
+                if self_._on_message:
+                    self_._on_message(self_, msg)
+                self_._release.wait(timeout=5.0)
+                if self_._on_close:
+                    self_._on_close(self_, None, None)
+
+            def close(self_):
+                self_._release.set()
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: MultiSymbolFakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT")
+            service.subscribe("ETHUSDT")
+            time.sleep(0.1)
+            btc_price = service.get_price("BTCUSDT")
+            eth_price = service.get_price("ETHUSDT")
+            service.stop()
+
+        assert btc_price == pytest.approx((49000.0 + 49002.0) / 2.0), (
+            f"BTC mid-price mismatch: {btc_price}"
+        )
+        assert eth_price == pytest.approx((3000.0 + 3002.0) / 2.0), (
+            f"ETH mid-price mismatch: {eth_price}"
+        )
+        # Prices must be independent — different values
+        assert btc_price != eth_price
+
+    def test_subscribe_is_idempotent(self, service):
+        """Calling subscribe() twice for the same symbol creates only one WebSocket."""
+        ws_instances = []
+        FakeWSApp = self._make_message_ws_class("BTCUSDT", 50000.0, 50002.0, ws_instances)
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT")
+            service.subscribe("BTCUSDT")   # second call must be a no-op
+            time.sleep(0.05)
+            service.stop()
+
+        assert len(ws_instances) == 1, (
+            f"Expected exactly 1 WebSocketApp instance; got {len(ws_instances)}"
+        )
+
+    def test_unsubscribe_clears_cache_and_stops_stream(self, service):
+        """unsubscribe() removes the symbol from the cache and stops the DataLoader."""
+        ws_instances = []
+        FakeWSApp = self._make_message_ws_class("BTCUSDT", 50000.0, 50002.0, ws_instances)
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT")
+            time.sleep(0.1)
+            # Price should be populated before unsubscribe
+            assert service.get_price("BTCUSDT") is not None
+            service.unsubscribe("BTCUSDT")
+
+        # After unsubscribe: cache cleared, symbol not in subscribed list
+        assert service.get_price("BTCUSDT") is None, (
+            "get_price must return None after unsubscribe"
+        )
+        assert "BTCUSDT" not in service.subscribed_symbols()
+        # The WS instance must have been closed (release event set by close())
+        for ws in ws_instances:
+            assert ws._release.is_set(), "ws.close() must be called on unsubscribe"
+
+    def test_stop_tears_down_all_streams_no_orphaned_threads(self, service):
+        """stop() terminates all active DataLoaders; no WS instances remain blocked."""
+        ws_instances = []
+        release_events = []
+
+        class TrackingFakeWSApp:
+            def __init__(self_, url, on_open=None, on_close=None,
+                         on_message=None, on_error=None, **kw):
+                self_._on_open = on_open
+                self_._on_close = on_close
+                self_._release = threading.Event()
+                release_events.append(self_._release)
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                self_._release.wait(timeout=5.0)
+                if self_._on_close:
+                    self_._on_close(self_, None, None)
+
+            def close(self_):
+                self_._release.set()
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: TrackingFakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT")
+            service.subscribe("ETHUSDT")
+            service.stop()
+
+        # All subscriptions must be gone
+        assert service.subscribed_symbols() == [], (
+            "subscribed_symbols() must be empty after stop()"
+        )
+        # Every WS instance must have had close() called
+        assert len(release_events) == 2, (
+            f"Expected 2 WS instances (one per symbol); got {len(release_events)}"
+        )
+        for ev in release_events:
+            assert ev.is_set(), "ws.close() must be called for every stream on stop()"
+
+    def test_unsubscribe_unknown_symbol_is_noop(self, service):
+        """unsubscribe() for a symbol that was never subscribed does not raise."""
+        service.unsubscribe("XYZUSDT")   # must not raise
+
+    def test_subscribed_symbols_reflects_active_subscriptions(self, service):
+        """subscribed_symbols() returns the set of currently active subscriptions."""
+        ws_instances = []
+
+        class FakeWSApp:
+            def __init__(self_, url, on_open=None, on_close=None,
+                         on_message=None, on_error=None, **kw):
+                self_._on_open = on_open
+                self_._on_close = on_close
+                self_._release = threading.Event()
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                self_._release.wait(timeout=5.0)
+                if self_._on_close:
+                    self_._on_close(self_, None, None)
+
+            def close(self_):
+                self_._release.set()
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            assert service.subscribed_symbols() == []
+            service.subscribe("BTCUSDT")
+            assert "BTCUSDT" in service.subscribed_symbols()
+            service.subscribe("ETHUSDT")
+            assert set(service.subscribed_symbols()) == {"BTCUSDT", "ETHUSDT"}
+            service.unsubscribe("BTCUSDT")
+            assert service.subscribed_symbols() == ["ETHUSDT"]
+            service.stop()
