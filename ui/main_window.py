@@ -890,10 +890,31 @@ class MainWindow(QMainWindow):
         self.simulation_timer.stop()
         self.news_timer.stop()
         self._news_auto_timer.stop()
-        if self._news_worker and self._news_worker.isRunning():
-            self._news_worker.quit()
-            self._news_worker.wait(2000)
+
+        # Best-effort graceful stop. This does NOT reliably work: NewsWorker
+        # and DataLoadWorker both do synchronous blocking network I/O inside
+        # run() (HTTP requests with retry/backoff, sometimes 30s+ under rate
+        # limiting), and QThread.quit() only tells a thread's *event loop* to
+        # exit -- it has no effect on code that's blocked in a network call
+        # and isn't processing events at all. wait() below will very often
+        # time out having done nothing. Left in place because it's free and
+        # harmless, not because it's sufficient -- the real fix is the
+        # os._exit() below.
+        for worker in (getattr(self, "_news_worker", None), getattr(self, "_data_load_worker", None)):
+            if worker and worker.isRunning():
+                worker.quit()
+                worker.wait(200)
+
         super().closeEvent(event)
+
+        # Python will not fully exit the process until every non-daemon
+        # thread finishes -- including any of the above still blocked in
+        # network I/O. Without this, the window disappears immediately but
+        # the underlying process (and its Dock icon) lingers until that
+        # blocked call eventually completes on its own, up to ~30s. Hard-exit
+        # immediately instead: no in-memory state here needs a graceful
+        # flush, and this is what "closing the window" should actually mean.
+        os._exit(0)
 
     # ------------------------------------------------------------------
     # Data & chart methods
