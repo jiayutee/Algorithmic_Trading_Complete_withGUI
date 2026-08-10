@@ -12,6 +12,22 @@ import requests
 from core.news_pipeline import get_default_news_pipeline
 from core.logger import logger
 
+
+def _to_float_or_none(value):
+    """Convert a pandas cell to float, or None for NaN/missing (pd.isna(None) is False, so check both)."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class DataLoader:
     """
     Manages data loading from various sources (Historical, Live, FinRL)
@@ -716,3 +732,46 @@ class DataLoader:
         except Exception as e:
             logger.error(f"Binance connection test failed: {e}")
             return False
+
+    def get_earnings_calendar(self, symbol: str) -> list:
+        """Fetch upcoming/past earnings dates for an equity symbol.
+
+        BACKUP NOTE: originally planned via OpenBB's obb.equity.calendar.earnings(),
+        but that endpoint only supports provider='fmp', and FMP restricts it to
+        legacy accounts with subscriptions predating 2025-08-31 -- a fresh free-tier
+        key gets UnauthorizedError regardless of a valid API key. Uses yfinance's
+        Ticker.earnings_dates directly instead, which needs no separate credential
+        and matches the fallback pattern already used elsewhere in this file.
+
+        Returns a list of dicts: [{"date": "YYYY-MM-DD", "eps_estimate": float|None,
+        "eps_actual": float|None, "revenue_estimate": float|None, "revenue_actual": float|None}, ...]
+        Returns [] for crypto symbols (no earnings) and on any fetch failure —
+        never raises, matching the graceful-degradation pattern used throughout
+        this class.
+        """
+        is_crypto = "USDT" in symbol.upper()
+        if is_crypto:
+            logger.debug("get_earnings_calendar(%s): crypto symbol, no earnings data", symbol)
+            return []
+
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.earnings_dates
+            if df is None or df.empty:
+                return []
+
+            results = []
+            for idx, row in df.iterrows():
+                results.append({
+                    "date": idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
+                    "eps_estimate": _to_float_or_none(row.get("EPS Estimate")),
+                    "eps_actual": _to_float_or_none(row.get("Reported EPS")),
+                    "revenue_estimate": None,   # yfinance's earnings_dates doesn't carry revenue figures
+                    "revenue_actual": None,
+                })
+            logger.info("get_earnings_calendar(%s): %d entries via yfinance", symbol, len(results))
+            return results
+
+        except Exception as e:
+            logger.warning("get_earnings_calendar(%s) failed: %s", symbol, e)
+            return []

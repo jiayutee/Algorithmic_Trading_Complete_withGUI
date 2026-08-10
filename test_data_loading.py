@@ -1512,3 +1512,68 @@ class TestLivePriceService:
             service.unsubscribe("BTCUSDT")
             assert service.subscribed_symbols() == ["ETHUSDT"]
             service.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests: DataLoader.get_earnings_calendar (Phase 0.3)
+# ---------------------------------------------------------------------------
+# Uses yfinance's Ticker.earnings_dates directly, NOT OpenBB/FMP -- OpenBB's
+# obb.equity.calendar.earnings() only supports provider='fmp', and FMP
+# restricts that endpoint to legacy accounts (subscriptions predating
+# 2025-08-31); a fresh free-tier key still gets UnauthorizedError. All tests
+# here mock yfinance so they never depend on a live network call or key.
+
+class TestEarningsCalendar:
+
+    def test_crypto_symbol_returns_empty_list_no_network_call(self):
+        """Crypto symbols have no earnings -- must short-circuit before touching yfinance."""
+        ld = DataLoader()
+        with patch("yfinance.Ticker") as mock_ticker_cls:
+            result = ld.get_earnings_calendar("BTCUSDT")
+            assert result == []
+            mock_ticker_cls.assert_not_called()
+
+    def test_equity_symbol_returns_parsed_entries(self):
+        ld = DataLoader()
+        idx = pd.to_datetime(["2026-01-15", "2026-04-20"])
+        fake_df = pd.DataFrame({
+            "EPS Estimate": [2.10, 2.35],
+            "Reported EPS": [2.18, float("nan")],  # future date, not yet reported
+        }, index=idx)
+
+        mock_ticker = MagicMock()
+        mock_ticker.earnings_dates = fake_df
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            result = ld.get_earnings_calendar("AAPL")
+
+        assert len(result) == 2
+        assert result[0]["date"] == "2026-01-15"
+        assert result[0]["eps_estimate"] == pytest.approx(2.10)
+        assert result[0]["eps_actual"] == pytest.approx(2.18)
+        # NaN (not yet reported) must become None, not NaN leaking into the dict
+        assert result[1]["eps_actual"] is None
+        # Revenue figures aren't available from yfinance's earnings_dates
+        assert result[0]["revenue_estimate"] is None
+        assert result[0]["revenue_actual"] is None
+
+    def test_empty_dataframe_returns_empty_list(self):
+        ld = DataLoader()
+        mock_ticker = MagicMock()
+        mock_ticker.earnings_dates = pd.DataFrame()
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            assert ld.get_earnings_calendar("AAPL") == []
+
+    def test_none_earnings_dates_returns_empty_list(self):
+        """Some tickers (e.g. delisted/illiquid) return None instead of an empty df."""
+        ld = DataLoader()
+        mock_ticker = MagicMock()
+        mock_ticker.earnings_dates = None
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            assert ld.get_earnings_calendar("AAPL") == []
+
+    def test_yfinance_exception_degrades_gracefully_not_raises(self):
+        """Rate limiting, network errors, etc. must never propagate -- return [] instead."""
+        ld = DataLoader()
+        with patch("yfinance.Ticker", side_effect=Exception("Too Many Requests. Rate limited.")):
+            result = ld.get_earnings_calendar("AAPL")
+        assert result == []
