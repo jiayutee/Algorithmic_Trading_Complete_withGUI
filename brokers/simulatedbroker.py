@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, date as date_cls
 from typing import Dict, List, Optional, Union
 from dataclasses import dataclass, field
 from enum import Enum
@@ -45,6 +46,8 @@ class Order:
     filled_avg_price: float = 0
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    realized_pnl: float = 0.0  # this order's own contribution to closing/reducing a position; 0 for opens
+    fee: float = 0.0  # commission paid on this fill
 
 
 @dataclass
@@ -259,7 +262,8 @@ class SimulatedBroker:
         # Calculate required capital and actual fee
         required_capital = executable_qty * actual_fill_price
         actual_fee = required_capital * fee_rate
-        
+        order.fee = actual_fee
+
         if order.side == OrderSide.BUY:
             total_cost = required_capital + actual_fee
         else:
@@ -294,10 +298,12 @@ class SimulatedBroker:
                 # Accrue realized PnL for the portion being closed
                 if order.side == OrderSide.SELL and old_qty > 0:
                     # Closing/reducing a long position
-                    self.realized_pnl += executable_qty * (actual_fill_price - position.avg_price)
+                    order.realized_pnl = executable_qty * (actual_fill_price - position.avg_price)
+                    self.realized_pnl += order.realized_pnl
                 elif order.side == OrderSide.BUY and old_qty < 0:
                     # Covering a short position
-                    self.realized_pnl += executable_qty * (position.avg_price - actual_fill_price)
+                    order.realized_pnl = executable_qty * (position.avg_price - actual_fill_price)
+                    self.realized_pnl += order.realized_pnl
                 position.qty += (executable_qty if order.side == OrderSide.BUY else -executable_qty)
                 logger.debug("Changed position: %.6f -> %.6f", old_qty, position.qty)
                 if abs(position.qty) < 0.000001:
@@ -395,6 +401,31 @@ class SimulatedBroker:
         """Return realized + unrealized PnL in a single consistent snapshot."""
         with self._lock:
             return self.realized_pnl + self._get_unrealized_pnl_locked(prices=prices)
+
+    def get_pnl_by_day(self) -> Dict[date_cls, float]:
+        """Return realized PnL grouped by calendar day, net of fees.
+
+        Powers the PnL calendar view: {date: net_pnl_that_day}. Each closing
+        order's own realized_pnl (set at fill time in _fill_order) is summed
+        per day, minus ALL fees paid that day -- both closing-order fees and
+        opening-order fees, since an opening trade's commission is real cash
+        that left the balance that day even though its P&L impact isn't
+        "realized" until the position eventually closes (possibly on a
+        different day). This matches what a trader would actually see in
+        their day-over-day account balance change, not just booked trade P&L.
+
+        Days with only opening trades (no closes) still appear, with a
+        negative value equal to that day's opening fees -- this is correct,
+        not a bug: opening a position is a real cash outflow on that day.
+        """
+        with self._lock:
+            by_day: Dict[date_cls, float] = defaultdict(float)
+            for order in self.order_history:
+                if order.status != OrderStatus.FILLED:
+                    continue
+                day = datetime.fromtimestamp(order.created_at).date()
+                by_day[day] += order.realized_pnl - order.fee
+            return dict(by_day)
 
     def close(self):
         """Clean up the broker"""

@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QComboBox, QPushButton, QLabel, QGroupBox, QLineEdit,
                              QTextEdit, QTabWidget, QSplitter, QTableWidget,
                              QTableWidgetItem, QHeaderView, QApplication, QFormLayout,
-                             QFrame, QSizePolicy)
+                             QFrame, QSizePolicy, QGridLayout)
 from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 try:
@@ -30,7 +30,8 @@ import json
 import pandas as pd
 import numpy as np
 from queue import Empty
-from datetime import datetime, timedelta
+import calendar as calendar_mod
+from datetime import datetime, timedelta, date
 
 try:
     from ui.statistics_window import StatisticsWindow
@@ -531,6 +532,7 @@ class MainWindow(QMainWindow):
         self.bottom_tabs.setMaximumHeight(320)
 
         self._setup_orders_tab()
+        self._setup_pnl_calendar_tab()
         self._setup_news_tab()
         self._setup_agent_monitor_tab()
 
@@ -576,6 +578,154 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._orders_table)
 
         self.bottom_tabs.addTab(tab, "Orders")
+
+    # ------------------------------------------------------------------
+    # PnL Calendar tab
+    # ------------------------------------------------------------------
+
+    def _setup_pnl_calendar_tab(self):
+        """Build a month-grid PnL calendar: each day cell shows that day's
+        net realized PnL (from current_broker.get_pnl_by_day()), colour-coded
+        green/red, similar to a trading-journal calendar view."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        # Month navigation header
+        nav = QHBoxLayout()
+        prev_btn = QPushButton("◀")
+        prev_btn.setFixedWidth(30)
+        prev_btn.clicked.connect(lambda: self._shift_pnl_calendar_month(-1))
+        nav.addWidget(prev_btn)
+
+        self._pnl_calendar_title = QLabel("")
+        self._pnl_calendar_title.setAlignment(Qt.AlignCenter)
+        self._pnl_calendar_title.setStyleSheet("font-size: 13px; font-weight: 600;")
+        nav.addWidget(self._pnl_calendar_title, stretch=1)
+
+        next_btn = QPushButton("▶")
+        next_btn.setFixedWidth(30)
+        next_btn.clicked.connect(lambda: self._shift_pnl_calendar_month(1))
+        nav.addWidget(next_btn)
+
+        today_btn = QPushButton("Today")
+        today_btn.setFixedWidth(60)
+        today_btn.clicked.connect(self._jump_pnl_calendar_to_today)
+        nav.addWidget(today_btn)
+
+        self._pnl_calendar_total_label = QLabel("")
+        self._pnl_calendar_total_label.setStyleSheet("font-size: 12px; font-weight: 600; margin-left: 8px;")
+        nav.addWidget(self._pnl_calendar_total_label)
+
+        layout.addLayout(nav)
+
+        # Weekday header row
+        weekday_row = QHBoxLayout()
+        weekday_row.setSpacing(2)
+        for name in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]:
+            lbl = QLabel(name)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet("color: #8b949e; font-size: 10px; font-weight: 600;")
+            weekday_row.addWidget(lbl)
+        layout.addLayout(weekday_row)
+
+        # 6-row x 7-col grid of day cells
+        self._pnl_calendar_grid = QGridLayout()
+        self._pnl_calendar_grid.setSpacing(2)
+        self._pnl_calendar_cells = []  # list[QLabel], 42 cells (6 weeks x 7 days)
+        for row in range(6):
+            for col in range(7):
+                cell = QLabel("")
+                cell.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+                cell.setMinimumHeight(44)
+                cell.setStyleSheet("background: #161b22; border: 1px solid #21262d; border-radius: 3px; "
+                                    "color: #8b949e; font-size: 10px; padding: 3px;")
+                cell.setWordWrap(True)
+                self._pnl_calendar_grid.addWidget(cell, row, col)
+                self._pnl_calendar_cells.append(cell)
+        layout.addLayout(self._pnl_calendar_grid)
+        layout.addStretch()
+
+        today = date.today()
+        self._pnl_calendar_year = today.year
+        self._pnl_calendar_month = today.month
+        self._refresh_pnl_calendar()
+
+        self.bottom_tabs.addTab(tab, "PnL Calendar")
+
+    def _shift_pnl_calendar_month(self, delta):
+        month = self._pnl_calendar_month + delta
+        year = self._pnl_calendar_year
+        if month < 1:
+            month = 12
+            year -= 1
+        elif month > 12:
+            month = 1
+            year += 1
+        self._pnl_calendar_year = year
+        self._pnl_calendar_month = month
+        self._refresh_pnl_calendar()
+
+    def _jump_pnl_calendar_to_today(self):
+        today = date.today()
+        self._pnl_calendar_year = today.year
+        self._pnl_calendar_month = today.month
+        self._refresh_pnl_calendar()
+
+    def _refresh_pnl_calendar(self):
+        """Repopulate the currently displayed month's grid from the broker's
+        get_pnl_by_day(). Safe no-op if there's no broker or it doesn't
+        support daily PnL (e.g. a live broker connector without that method)."""
+        if not hasattr(self, "_pnl_calendar_cells"):
+            return  # tab not built yet
+
+        year, month = self._pnl_calendar_year, self._pnl_calendar_month
+        self._pnl_calendar_title.setText(f"{calendar_mod.month_name[month]} {year}")
+
+        by_day = {}
+        if self.current_broker and hasattr(self.current_broker, "get_pnl_by_day"):
+            try:
+                by_day = self.current_broker.get_pnl_by_day()
+            except Exception as e:
+                logger.warning("PnL calendar: get_pnl_by_day() failed: %s", e)
+
+        cal = calendar_mod.Calendar(firstweekday=0)  # Monday-first, matches header row
+        month_days = list(cal.itermonthdates(year, month))[:42]  # always 6 full weeks
+
+        month_total = 0.0
+        today = date.today()
+        for idx, cell_date in enumerate(month_days):
+            cell = self._pnl_calendar_cells[idx]
+            in_month = cell_date.month == month
+            pnl = by_day.get(cell_date)
+
+            if not in_month:
+                cell.setText(str(cell_date.day))
+                cell.setStyleSheet("background: #0d1117; border: 1px solid #161b22; border-radius: 3px; "
+                                    "color: #484f58; font-size: 10px; padding: 3px;")
+                continue
+
+            if pnl is not None:
+                month_total += pnl
+                sign = "+" if pnl >= 0 else ""
+                bg = "#1a4731" if pnl >= 0 else "#3d1a1a"
+                fg = "#3fb950" if pnl >= 0 else "#f85149"
+                cell.setText(f"{cell_date.day}\n{sign}${pnl:,.2f}")
+            else:
+                bg = "#161b22"
+                fg = "#8b949e"
+                cell.setText(str(cell_date.day))
+
+            border = "#58a6ff" if cell_date == today else "#21262d"
+            cell.setStyleSheet(f"background: {bg}; border: 1px solid {border}; border-radius: 3px; "
+                                f"color: {fg}; font-size: 10px; font-weight: 600; padding: 3px;")
+
+        total_color = "#3fb950" if month_total >= 0 else "#f85149"
+        self._pnl_calendar_total_label.setText(f"Month total: {'+' if month_total >= 0 else ''}${month_total:,.2f}")
+        self._pnl_calendar_total_label.setStyleSheet(
+            f"font-size: 12px; font-weight: 600; margin-left: 8px; color: {total_color};"
+        )
 
     def _refresh_orders_tab(self):
         """Repopulate the Orders table from current_broker.order_history."""
@@ -1380,6 +1530,7 @@ class MainWindow(QMainWindow):
                 self.pnl_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {pnl_color};")
 
                 self.update_positions_display()
+                self._refresh_pnl_calendar()
 
         except Exception as e:
             logger.warning("Error refreshing account: %s", e)

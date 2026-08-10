@@ -2,6 +2,8 @@
 import time
 import threading
 import pytest
+from datetime import datetime, date
+from unittest.mock import patch
 from brokers.simulatedbroker import SimulatedBroker, OrderStatus, OrderSide, OrderType
 from brokers.binance_connector import BinanceConnector
 from brokers.kucoin_connector import KuCoinConnector
@@ -760,6 +762,106 @@ class TestAccountInfoReflectsRealMarketPrice:
         assert abs(info["pnl"] - (b.get_total_pnl() - total_fees)) < 0.01, (
             "pnl should be get_total_pnl() minus trading fees"
         )
+        b.close()
+
+
+class TestPnLByDay:
+    """
+    get_pnl_by_day() powers the PnL calendar view: {date: net_pnl_that_day}.
+    Each order's created_at timestamp is controlled by patching
+    brokers.simulatedbroker.time.time() so trades land on specific,
+    deterministic days instead of "whenever the test happens to run".
+    """
+
+    def _submit_on(self, broker, day, symbol, qty, side, execution_price):
+        """Submit an order, then pin created_at to `day` (a date) after the fact.
+
+        Order.created_at uses field(default_factory=time.time), which binds
+        the actual time.time function object at class-definition time --
+        patch("...time.time", ...) has no effect on it since the dataclass
+        already holds a direct reference, not a name it looks up later.
+        Simplest reliable approach: submit normally, then set the field
+        directly on the returned (mutable, non-frozen) Order object.
+        """
+        order = broker.submit_order(symbol, qty=qty, side=side,
+                                     order_type="market", execution_price=execution_price)
+        order.created_at = datetime.combine(day, datetime.min.time()).timestamp() + 12 * 3600
+        return order
+
+    def test_single_closed_trade_on_one_day(self):
+        """Buy and sell same day, zero fees: that day's PnL == the trade's profit."""
+        b = SimulatedBroker(initial_balance=100_000.0, market_fee=0.0, limit_fee=0.0)
+        day = date(2026, 6, 15)
+        self._submit_on(b, day, "X", 2.0, "buy", 100.0)
+        self._submit_on(b, day, "X", 2.0, "sell", 110.0)
+
+        by_day = b.get_pnl_by_day()
+        assert by_day == {day: pytest.approx(20.0)}, f"Expected {{{day}: 20.0}}, got {by_day}"
+        b.close()
+
+    def test_trades_split_across_multiple_days(self):
+        """Open on day 1, close on day 2: PnL attributed to day 2 (the close),
+        day 1 shows 0 (zero fees, opening trade carries no realized PnL)."""
+        b = SimulatedBroker(initial_balance=100_000.0, market_fee=0.0, limit_fee=0.0)
+        day1 = date(2026, 6, 15)
+        day2 = date(2026, 6, 16)
+        self._submit_on(b, day1, "X", 1.0, "buy", 100.0)
+        self._submit_on(b, day2, "X", 1.0, "sell", 130.0)
+
+        by_day = b.get_pnl_by_day()
+        assert by_day.get(day1, 0.0) == pytest.approx(0.0)
+        assert by_day.get(day2, 0.0) == pytest.approx(30.0)
+        b.close()
+
+    def test_pnl_is_net_of_fees(self):
+        """With fees, a day with only an opening trade shows a negative
+        value (the fee paid) -- this is correct, real cash left the account
+        that day, even though no P&L is "realized" until the eventual close."""
+        b = SimulatedBroker(initial_balance=100_000.0, market_fee=0.01, limit_fee=0.0)  # 1% fee
+        day1 = date(2026, 6, 15)
+        day2 = date(2026, 6, 16)
+        self._submit_on(b, day1, "X", 1.0, "buy", 100.0)   # fee = 1.0
+        self._submit_on(b, day2, "X", 1.0, "sell", 110.0)  # fee = 1.1, realized_pnl = 10.0
+
+        by_day = b.get_pnl_by_day()
+        assert by_day[day1] == pytest.approx(-1.0)          # opening fee only, negative
+        assert by_day[day2] == pytest.approx(10.0 - 1.1)    # realized profit minus closing fee
+
+        total_net = sum(by_day.values())
+        assert total_net == pytest.approx(b.get_total_pnl() - 1.0 - 1.1), (
+            "Sum across all days must equal total realized PnL minus total fees"
+        )
+        b.close()
+
+    def test_multiple_separate_trades_same_day_accumulate(self):
+        """Two independent round-trips on the same day must sum together."""
+        b = SimulatedBroker(initial_balance=100_000.0, market_fee=0.0, limit_fee=0.0)
+        day = date(2026, 6, 15)
+        self._submit_on(b, day, "X", 1.0, "buy", 100.0)
+        self._submit_on(b, day, "X", 1.0, "sell", 105.0)   # +5
+        self._submit_on(b, day, "X", 1.0, "buy", 100.0)
+        self._submit_on(b, day, "X", 1.0, "sell", 95.0)    # -5
+
+        by_day = b.get_pnl_by_day()
+        assert by_day[day] == pytest.approx(0.0)
+        b.close()
+
+    def test_no_trades_returns_empty_dict(self):
+        b = SimulatedBroker(initial_balance=100_000.0)
+        assert b.get_pnl_by_day() == {}
+        b.close()
+
+    def test_rejected_order_not_counted(self):
+        """An order that never fills (e.g. insufficient funds) must not
+        contribute a spurious entry. Zero balance guarantees max_affordable_qty
+        is exactly 0 -> REJECTED (a small-but-nonzero balance would instead
+        clamp to a smaller affordable quantity and still fill, per the
+        broker's existing behavior -- see TestInsufficientFunds)."""
+        b = SimulatedBroker(initial_balance=0.0, market_fee=0.0, limit_fee=0.0)
+        day = date(2026, 6, 15)
+        order = self._submit_on(b, day, "X", 100.0, "buy", 100.0)
+        assert order.status == OrderStatus.REJECTED
+        assert b.get_pnl_by_day() == {}
         b.close()
 
 
