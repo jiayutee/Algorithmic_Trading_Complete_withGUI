@@ -1577,3 +1577,116 @@ class TestEarningsCalendar:
         with patch("yfinance.Ticker", side_effect=Exception("Too Many Requests. Rate limited.")):
             result = ld.get_earnings_calendar("AAPL")
         assert result == []
+
+
+class TestEarningsCalendarFMP:
+    """
+    FMP is tried first (has revenue_estimate/revenue_actual, which yfinance's
+    earnings_dates does not carry), with yfinance as fallback. All tests here
+    mock requests.get and monkeypatch the env var -- no live network call or
+    real key needed. See DataLoader.get_earnings_calendar()'s docstring for
+    why this calls FMP's REST API directly instead of going through OpenBB.
+    """
+
+    def test_no_api_key_falls_back_to_yfinance(self, monkeypatch):
+        monkeypatch.delenv("OPENBB_FMP_API_KEY", raising=False)
+        ld = DataLoader()
+        mock_ticker = MagicMock()
+        mock_ticker.earnings_dates = pd.DataFrame({
+            "EPS Estimate": [1.5], "Reported EPS": [1.6],
+        }, index=pd.to_datetime(["2026-05-01"]))
+        with patch("requests.get") as mock_get, patch("yfinance.Ticker", return_value=mock_ticker):
+            result = ld.get_earnings_calendar("AAPL")
+            mock_get.assert_not_called()
+        assert len(result) == 1
+        assert result[0]["revenue_estimate"] is None  # yfinance path, no revenue data
+
+    def test_fmp_success_returns_data_with_revenue_fields(self, monkeypatch):
+        monkeypatch.setenv("OPENBB_FMP_API_KEY", "fake-key-for-test")
+        ld = DataLoader()
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = [
+            {"symbol": "AAPL", "date": "2026-10-29", "epsActual": None, "epsEstimated": 1.98,
+             "revenueActual": None, "revenueEstimated": 113441200000},
+            {"symbol": "MSFT", "date": "2026-10-22", "epsEstimated": 3.1, "revenueEstimated": 65000000000},
+        ]
+        with patch("requests.get", return_value=mock_response) as mock_get, \
+             patch("yfinance.Ticker") as mock_ticker_cls:
+            result = ld.get_earnings_calendar("AAPL")
+            mock_ticker_cls.assert_not_called()  # FMP succeeded, must not fall back
+
+        assert mock_get.called
+        assert len(result) == 1
+        assert result[0]["date"] == "2026-10-29"
+        assert result[0]["eps_estimate"] == pytest.approx(1.98)
+        assert result[0]["eps_actual"] is None
+        assert result[0]["revenue_estimate"] == pytest.approx(113441200000)
+
+    def test_fmp_no_matching_symbol_falls_back_to_yfinance(self, monkeypatch):
+        """The bulk endpoint only lists companies with a scheduled date in the
+        window -- a symbol with no result there isn't an FMP error, just
+        empty, and must still fall back to yfinance."""
+        monkeypatch.setenv("OPENBB_FMP_API_KEY", "fake-key-for-test")
+        ld = DataLoader()
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = [{"symbol": "MSFT", "date": "2026-10-22", "epsEstimated": 3.1}]
+
+        mock_ticker = MagicMock()
+        mock_ticker.earnings_dates = pd.DataFrame({
+            "EPS Estimate": [1.5], "Reported EPS": [None],
+        }, index=pd.to_datetime(["2026-05-01"]))
+
+        with patch("requests.get", return_value=mock_response), \
+             patch("yfinance.Ticker", return_value=mock_ticker) as mock_ticker_cls:
+            result = ld.get_earnings_calendar("AAPL")
+            mock_ticker_cls.assert_called_once()  # fell back correctly
+
+        assert len(result) == 1
+        assert result[0]["revenue_estimate"] is None  # via yfinance fallback
+
+    def test_fmp_request_exception_falls_back_to_yfinance(self, monkeypatch):
+        monkeypatch.setenv("OPENBB_FMP_API_KEY", "fake-key-for-test")
+        ld = DataLoader()
+        mock_ticker = MagicMock()
+        mock_ticker.earnings_dates = pd.DataFrame({
+            "EPS Estimate": [1.5], "Reported EPS": [1.6],
+        }, index=pd.to_datetime(["2026-05-01"]))
+
+        with patch("requests.get", side_effect=Exception("402 Payment Required")), \
+             patch("yfinance.Ticker", return_value=mock_ticker) as mock_ticker_cls:
+            result = ld.get_earnings_calendar("AAPL")
+            mock_ticker_cls.assert_called_once()
+
+        assert len(result) == 1
+
+    def test_fmp_unexpected_response_shape_falls_back_to_yfinance(self, monkeypatch):
+        """FMP returning a dict (e.g. an error payload) instead of a list must
+        not crash -- treat as no data and fall back."""
+        monkeypatch.setenv("OPENBB_FMP_API_KEY", "fake-key-for-test")
+        ld = DataLoader()
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"Error Message": "something went wrong"}
+
+        mock_ticker = MagicMock()
+        mock_ticker.earnings_dates = pd.DataFrame({
+            "EPS Estimate": [1.5], "Reported EPS": [1.6],
+        }, index=pd.to_datetime(["2026-05-01"]))
+
+        with patch("requests.get", return_value=mock_response), \
+             patch("yfinance.Ticker", return_value=mock_ticker) as mock_ticker_cls:
+            result = ld.get_earnings_calendar("AAPL")
+            mock_ticker_cls.assert_called_once()
+
+        assert len(result) == 1
+
+    def test_crypto_symbol_never_calls_fmp_or_yfinance(self, monkeypatch):
+        monkeypatch.setenv("OPENBB_FMP_API_KEY", "fake-key-for-test")
+        ld = DataLoader()
+        with patch("requests.get") as mock_get, patch("yfinance.Ticker") as mock_ticker_cls:
+            result = ld.get_earnings_calendar("BTCUSDT")
+            mock_get.assert_not_called()
+            mock_ticker_cls.assert_not_called()
+        assert result == []

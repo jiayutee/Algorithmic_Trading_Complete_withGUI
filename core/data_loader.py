@@ -739,9 +739,31 @@ class DataLoader:
         BACKUP NOTE: originally planned via OpenBB's obb.equity.calendar.earnings(),
         but that endpoint only supports provider='fmp', and FMP restricts it to
         legacy accounts with subscriptions predating 2025-08-31 -- a fresh free-tier
-        key gets UnauthorizedError regardless of a valid API key. Uses yfinance's
-        Ticker.earnings_dates directly instead, which needs no separate credential
-        and matches the fallback pattern already used elsewhere in this file.
+        key gets UnauthorizedError regardless of a valid API key. Every OpenBB->FMP
+        equity endpoint tested (profile, quote, metrics, income, balance, ratios,
+        historical price, estimates) hits the same "Legacy Endpoint" restriction --
+        it's not specific to earnings, OpenBB's FMP provider calls FMP's old
+        /api/v3//v4/ paths, and a post-2025-08-31 free key only has access to FMP's
+        newer /stable/ API surface, which OpenBB's provider integration doesn't use
+        at all. Confirmed live: calling https://financialmodelingprep.com/stable/...
+        directly with the same key works fine (verified: profile, quote,
+        income-statement, ratios, earnings-calendar all return real HTTP 200 data).
+
+        So this bypasses OpenBB's FMP provider and calls FMP's stable REST API
+        directly. Two more free-tier constraints worth knowing:
+        - The stable earnings-calendar endpoint's `symbol` query param requires a
+          paid plan (confirmed: 402 Payment Required). Only the *unfiltered*,
+          date-range-only bulk endpoint is free -- so this fetches the bulk list
+          and filters for `symbol` client-side in Python.
+        - The bulk endpoint only returns companies with an earnings date already
+          scheduled in that window (confirmed: ~70 rows across ALL companies for
+          a 4-month window) -- a symbol with no result isn't necessarily an error,
+          it may just not have a confirmed date yet.
+
+        FMP is tried first (has revenue_estimate/revenue_actual, which yfinance's
+        earnings_dates does not carry). Falls back to yfinance's Ticker.earnings_dates
+        if FMP_API_KEY isn't configured, the request fails, or no row matches the
+        symbol in the fetched window.
 
         Returns a list of dicts: [{"date": "YYYY-MM-DD", "eps_estimate": float|None,
         "eps_actual": float|None, "revenue_estimate": float|None, "revenue_actual": float|None}, ...]
@@ -754,6 +776,64 @@ class DataLoader:
             logger.debug("get_earnings_calendar(%s): crypto symbol, no earnings data", symbol)
             return []
 
+        fmp_results = self._get_earnings_calendar_fmp(symbol)
+        if fmp_results:
+            return fmp_results
+
+        return self._get_earnings_calendar_yfinance(symbol)
+
+    def _get_earnings_calendar_fmp(self, symbol: str) -> list:
+        """FMP stable-API earnings calendar (has revenue estimate/actual). See
+        get_earnings_calendar()'s docstring for why this calls FMP's REST API
+        directly instead of going through OpenBB. Returns [] on any failure
+        (missing key, network error, no matching row) so the caller can fall
+        back to yfinance -- never raises.
+        """
+        api_key = os.getenv("OPENBB_FMP_API_KEY", "").strip()
+        if not api_key:
+            return []
+
+        try:
+            # Free tier also rejects date ranges beyond roughly a ~120-day
+            # total window with 402 Payment Required, separately from the
+            # `symbol` param restriction above (confirmed live: 30d back +
+            # 90d fwd = 200 OK, 90d back + 90d fwd = 402). Kept comfortably
+            # inside that boundary rather than right at the edge.
+            start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            end = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+            resp = requests.get(
+                "https://financialmodelingprep.com/stable/earnings-calendar",
+                params={"from": start, "to": end, "apikey": api_key},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            rows = resp.json()
+            if not isinstance(rows, list):
+                logger.warning("get_earnings_calendar(%s): unexpected FMP response shape: %s", symbol, type(rows))
+                return []
+
+            matches = [row for row in rows if row.get("symbol") == symbol]
+            results = [
+                {
+                    "date": row.get("date"),
+                    "eps_estimate": _to_float_or_none(row.get("epsEstimated")),
+                    "eps_actual": _to_float_or_none(row.get("epsActual")),
+                    "revenue_estimate": _to_float_or_none(row.get("revenueEstimated")),
+                    "revenue_actual": _to_float_or_none(row.get("revenueActual")),
+                }
+                for row in matches
+            ]
+            if results:
+                logger.info("get_earnings_calendar(%s): %d entries via FMP", symbol, len(results))
+            return results
+
+        except Exception as e:
+            logger.warning("get_earnings_calendar(%s) FMP fetch failed, will try yfinance: %s", symbol, e)
+            return []
+
+    def _get_earnings_calendar_yfinance(self, symbol: str) -> list:
+        """Fallback path: yfinance's Ticker.earnings_dates. No revenue figures
+        available from this source (see get_earnings_calendar()'s docstring)."""
         try:
             ticker = yf.Ticker(symbol)
             df = ticker.earnings_dates
@@ -773,5 +853,5 @@ class DataLoader:
             return results
 
         except Exception as e:
-            logger.warning("get_earnings_calendar(%s) failed: %s", symbol, e)
+            logger.warning("get_earnings_calendar(%s) yfinance fetch failed: %s", symbol, e)
             return []
