@@ -1,7 +1,7 @@
 # AlgoTrader — CLAUDE.md
 
 ## Project
-**Algorithmic Trading Complete with GUI** — 30-day sprint to ship by **2026-07-28**.
+**Algorithmic Trading Complete with GUI** — sprint to ship by **2026-08-18** (revised launch date — original 2026-07-28 target pushed 3 weeks by owner decision on 2026-08-09, see Daily Log). 51-day sprint total.
 Repo: `jiayutee/Algorithmic_Trading_Complete_withGUI`
 Stack: Python 3.11, PyQt5, backtrader, OpenBB, Binance/Alpaca/KuCoin/SimulatedBroker, SQLite news store.
 
@@ -29,7 +29,7 @@ scripts/
 ```
 
 ## Sprint Context
-- Launch: 2026-07-28 | Day counter: `python3 -c "from datetime import date; print(30-(date(2026,7,28)-date.today()).days+1)"`
+- Launch: 2026-08-18 (revised, was 2026-07-28) | Day counter: `python3 -c "from datetime import date; print(51-(date(2026,8,18)-date.today()).days+1)"`
 - Notion hub: https://app.notion.com/p/36ad2ab050d980439d4ce7d7d235c9af
 - Daily Log DB ID: `00008c59-c054-4c67-97f8-9753a9a23163`
 - Sprint Board DB ID: `91e3aa02-65de-40fb-8cb4-d297683bd67e`

@@ -102,10 +102,20 @@ class SimulatedBroker:
             time.sleep(1)  # Update prices every second
 
     def _update_portfolio_value(self):
-        """Calculate current portfolio value"""
+        """Calculate current portfolio value.
+
+        Uses self.market_data (current price) rather than pos.last_price --
+        that field defaults to 0 and is only ever updated by
+        _simulate_market_data(), the broker's internal fake random-walk
+        generator. It is never refreshed by real market data (e.g. from
+        LivePriceService or any direct write to self.market_data), so
+        portfolio_value/pnl/positions_value in get_account_info() were
+        silently wrong for any real (non-simulated) position. Mirrors the
+        already-correct pattern in _get_unrealized_pnl_locked().
+        """
         total_positions_value = sum(
-            pos.qty * pos.last_price
-            for pos in self.positions.values()
+            pos.qty * self.market_data.get(symbol, pos.avg_price)
+            for symbol, pos in self.positions.items()
         )
         self.portfolio_value = self.balance + total_positions_value
 

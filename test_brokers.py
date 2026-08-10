@@ -700,6 +700,69 @@ class TestRealizedUnrealizedPnL:
         b.close()
 
 
+class TestAccountInfoReflectsRealMarketPrice:
+    """
+    Regression test for a bug where get_account_info()'s portfolio_value,
+    positions_value and pnl silently ignored real market data: they were
+    computed from pos.last_price, a field only ever updated by the broker's
+    internal fake random-walk simulation thread, never by real prices written
+    to self.market_data (e.g. via LivePriceService). Fixed by computing
+    positions_value from self.market_data directly, matching the pattern
+    already used correctly in get_unrealized_pnl().
+    """
+
+    def test_account_info_positions_value_reflects_market_data_not_stale_last_price(self):
+        """
+        Buy 1 unit @ $50000, move market_data to $55000 (never touching
+        pos.last_price -- the old code path), sell half. get_account_info()
+        must reflect the real $55000 price, not the buggy near-zero value
+        from before the fix.
+        """
+        b = SimulatedBroker(initial_balance=100_000.0, market_fee=0.0, limit_fee=0.0)
+        b.market_data["BTCUSDT"] = 50_000.0
+        b.submit_order("BTCUSDT", qty=1.0, side="buy", order_type="market")
+        b.market_data["BTCUSDT"] = 55_000.0  # real price update; pos.last_price is untouched
+        b.submit_order("BTCUSDT", qty=0.5, side="sell", order_type="market")
+
+        info = b.get_account_info()
+        # Remaining position: 0.5 BTC @ current market price 55000 = 27500
+        assert abs(info["positions_value"] - 27_500.0) < 0.01, (
+            f"Expected positions_value 27500.0 (0.5 BTC @ $55000), got {info['positions_value']}"
+        )
+        assert abs(info["portfolio_value"] - (info["balance"] + 27_500.0)) < 0.01
+        # Zero fees here, so pnl (balance-based) must equal get_total_pnl() (realized+unrealized) exactly.
+        assert abs(info["pnl"] - b.get_total_pnl()) < 0.01, (
+            f"get_account_info()['pnl'] ({info['pnl']}) must match get_total_pnl() "
+            f"({b.get_total_pnl()}) when there are no fees"
+        )
+        b.close()
+
+    def test_account_info_pnl_with_fees_is_net_of_fees_not_gross(self):
+        """
+        get_account_info()['pnl'] is derived from portfolio_value (which
+        includes the fee-debited balance), so it is net-of-fees by
+        construction -- unlike get_total_pnl(), which sums realized_pnl +
+        unrealized_pnl and does not currently subtract trading costs. This
+        is a real, separate inconsistency (not the bug this test class
+        targets) -- documented here so a future fee-accounting pass doesn't
+        rediscover it from scratch. Do not "fix" this by changing pnl to
+        match get_total_pnl(); the balance-based pnl is the economically
+        correct one.
+        """
+        b = SimulatedBroker(initial_balance=100_000.0, market_fee=0.001, limit_fee=0.0005)
+        b.market_data["BTCUSDT"] = 50_000.0
+        b.submit_order("BTCUSDT", qty=1.0, side="buy", order_type="market")
+        b.market_data["BTCUSDT"] = 55_000.0
+        b.submit_order("BTCUSDT", qty=0.5, side="sell", order_type="market")
+
+        info = b.get_account_info()
+        total_fees = 50_000.0 * 0.001 + (0.5 * 55_000.0) * 0.001
+        assert abs(info["pnl"] - (b.get_total_pnl() - total_fees)) < 0.01, (
+            "pnl should be get_total_pnl() minus trading fees"
+        )
+        b.close()
+
+
 # ---------------------------------------------------------------------------
 # Thread-safety stress tests
 # ---------------------------------------------------------------------------

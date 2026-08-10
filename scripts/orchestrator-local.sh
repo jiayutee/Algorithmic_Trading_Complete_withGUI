@@ -74,8 +74,8 @@ if [ -z "$MISSED" ]; then
 fi
 
 # ── Run each missed slot in order ───────────────────────────────────────────
-DAYS=$(python3 -c "from datetime import date; print((date(2026,7,28)-date.today()).days)" 2>/dev/null || echo "?")
-DAY_N=$(python3 -c "from datetime import date; print(max(1, 30-(date(2026,7,28)-date.today()).days+1))" 2>/dev/null || echo "?")
+DAYS=$(python3 -c "from datetime import date; print((date(2026,8,18)-date.today()).days)" 2>/dev/null || echo "?")
+DAY_N=$(python3 -c "from datetime import date; print(max(1, 51-(date(2026,8,18)-date.today()).days+1))" 2>/dev/null || echo "?")
 
 LAST_SUCCESS_EPOCH=""
 
@@ -92,16 +92,16 @@ except: print('?')
 
     case "$RUN_TYPE" in
         morning)
-            PROMPT="RUN_TYPE=morning. 23:05 Berlin morning brief (REPORT ONLY -- do not touch code) for Day ${DAY_N}/30 (${DAYS} days to launch 2026-07-28). Note: this is a catch-up run triggered at ${LOCAL_TIME}. Follow the Morning Brief procedure in .github/agents/orchestrator.agent.md: read yesterday Notion carry-forwards, plan today agenda from the Sprint Board backlog, create today Daily Log row, add new Sprint Board tasks only if not already covered, send Telegram morning brief. Do NOT spawn any subagent."
+            PROMPT="RUN_TYPE=morning. 23:05 Berlin morning brief (REPORT ONLY -- do not touch code) for Day ${DAY_N}/51 (${DAYS} days to launch 2026-08-18 (revised, was 2026-07-28)). Note: this is a catch-up run triggered at ${LOCAL_TIME}. Follow the Morning Brief procedure in .github/agents/orchestrator.agent.md: read yesterday Notion carry-forwards, plan today agenda from the Sprint Board backlog, create today Daily Log row, add new Sprint Board tasks only if not already covered, send Telegram morning brief. Do NOT spawn any subagent."
             ;;
         work-loop)
-            PROMPT="RUN_TYPE=work-loop. Work-loop cycle for Day ${DAY_N}/30 (catch-up run at ${LOCAL_TIME}). Follow the Work Loop procedure in .github/agents/orchestrator.agent.md exactly: STEP 0.5 foreign-dirty-tree guard first, then read today's Daily Log agenda, then repeat pick/classify/execute/test-gate/commit/update-Notion for every pending item, then send ONE consolidated Telegram summary at the end."
+            PROMPT="RUN_TYPE=work-loop. Work-loop cycle for Day ${DAY_N}/51 (catch-up run at ${LOCAL_TIME}). Follow the Work Loop procedure in .github/agents/orchestrator.agent.md exactly: STEP 0.5 foreign-dirty-tree guard first, then read today's Daily Log agenda, then repeat pick/classify/execute/test-gate/commit/update-Notion for every pending item, then send ONE consolidated Telegram summary at the end."
             ;;
         evening)
-            PROMPT="RUN_TYPE=evening. 01:15 Berlin EOD debrief (REPORT ONLY -- do not touch code) for Day ${DAY_N}/30. Note: catch-up run at ${LOCAL_TIME}. Follow Evening Debrief in .github/agents/orchestrator.agent.md: collect Sprint Board outcomes, update Issue Tracker for blockers, update Daily Log (Done Today, Blockers, Carry Forward, Commits via fixed 4-hour git log window, Status->Done), update Launch Roadmap %, update Agent Status Board, send Telegram EOD debrief, verify the Status write landed."
+            PROMPT="RUN_TYPE=evening. 01:15 Berlin EOD debrief (REPORT ONLY -- do not touch code) for Day ${DAY_N}/51. Note: catch-up run at ${LOCAL_TIME}. Follow Evening Debrief in .github/agents/orchestrator.agent.md: collect Sprint Board outcomes, update Issue Tracker for blockers, update Daily Log (Done Today, Blockers, Carry Forward, Commits via fixed 4-hour git log window, Status->Done), update Launch Roadmap %, update Agent Status Board, send Telegram EOD debrief, verify the Status write landed."
             ;;
         *)
-            PROMPT="RUN_TYPE=progress. Missed ${SLOT_TIME} Berlin progress update for Day ${DAY_N}/30 (catch-up run at ${LOCAL_TIME}). Check Sprint Board statuses. Send Telegram: 'AlgoTrader ${SLOT_TIME} update (catch-up) | Day ${DAY_N}/30\nDone: N | In progress: N | Blocked: N\n<one line on status>'. Update Notion only if new info."
+            PROMPT="RUN_TYPE=progress. Missed ${SLOT_TIME} Berlin progress update for Day ${DAY_N}/51 (catch-up run at ${LOCAL_TIME}). Check Sprint Board statuses. Send Telegram: 'AlgoTrader ${SLOT_TIME} update (catch-up) | Day ${DAY_N}/51\nDone: N | In progress: N | Blocked: N\n<one line on status>'. Update Notion only if new info."
             ;;
     esac
 
