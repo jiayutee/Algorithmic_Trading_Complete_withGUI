@@ -93,6 +93,10 @@ class DataLoadWorker(QThread):
                 days=self.days,
                 interval=self.interval,
             )
+            logger.debug(
+                "DataLoadWorker(%s) about to emit results_ready (worker id=%s, %d rows)",
+                self.symbol, id(self), len(df) if df is not None else -1,
+            )
             self.results_ready.emit(df)
         except Exception as e:
             self.error.emit(str(e))
@@ -1308,6 +1312,7 @@ class MainWindow(QMainWindow):
         self._data_load_worker.start()
 
     def _on_data_loaded(self, df, symbol):
+        logger.debug("_on_data_loaded entered for symbol=%s (%d rows)", symbol, len(df) if df is not None else -1)
         try:
             self.df = df
             assert not self.df.empty, "Loaded empty DataFrame"
