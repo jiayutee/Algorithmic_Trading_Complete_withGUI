@@ -154,6 +154,57 @@ def overlay_signals(
 # ---------------------------------------------------------------------------
 
 
+def is_crypto_symbol(symbol: str) -> bool:
+    """Return True if *symbol* looks like a crypto trading pair.
+
+    Uses the same heuristic as the rest of the codebase: a symbol that
+    contains "USDT" (e.g. ``"BTCUSDT"``, ``"ETHUSDT"``) is treated as a
+    crypto pair whose live price streams via Binance WebSocket; everything
+    else is treated as an equity and uses REST/yfinance polling.
+
+    This mirrors the ``"USDT" in symbol.upper()`` check in
+    ``core/data_loader.py``, ``brokers/``, etc. — one source of truth.
+    """
+    return "USDT" in symbol.upper()
+
+
+def add_live_tick_trace(fig: go.Figure) -> go.Figure:
+    """Append an empty *live-tick* scatter trace to *fig* and return it.
+
+    The Dash interval callback patches this trace (always ``figure.data[-1]``)
+    with the latest real-time price without rebuilding the whole figure.
+    Call this at the end of any figure-building path (success *and* error
+    placeholder) so the trace index is always predictable.
+
+    Parameters
+    ----------
+    fig:
+        An existing ``go.Figure`` (e.g. from :func:`build_candlestick_figure`
+        or from :func:`_empty_figure`).
+
+    Returns
+    -------
+    go.Figure
+        The same figure with the live-tick scatter trace appended as the
+        final trace.
+    """
+    fig.add_trace(go.Scatter(
+        x=[],
+        y=[],
+        mode="markers",
+        marker=dict(
+            symbol="circle-open",
+            size=10,
+            color="#ffff00",        # yellow — easy to spot on the dark theme
+            line=dict(width=2, color="#ffff00"),
+        ),
+        name="Live",
+        showlegend=False,
+        hovertemplate="Live: %{y:,.4f}<extra></extra>",
+    ))
+    return fig
+
+
 def _apply_dark_layout(fig: go.Figure, height: int = 600) -> None:
     """Apply the AlgoTrader dark theme to *fig* in-place."""
     fig.update_layout(

@@ -143,19 +143,43 @@ def _topbar() -> html.Div:
 
 
 def _chart_panel() -> dbc.Col:
-    """Main candlestick chart area with a placeholder empty figure."""
+    """Main candlestick chart area with a placeholder empty figure.
+
+    Includes a "live badge" div positioned above the chart that shows
+    '🟢 Live' for crypto WebSocket streams or '🟡 Near real-time' for
+    equity REST polling.  Both texts are set by the interval callback in
+    callbacks.py; the div starts empty so it occupies no visual space
+    before a chart is loaded.
+    """
+    from core.chart_builder import add_live_tick_trace
     placeholder = build_candlestick_figure(df=None, symbol="", height=600)
+    add_live_tick_trace(placeholder)  # keep trace index consistent from the start
     return dbc.Col(
-        dcc.Graph(
-            id="main-chart",
-            figure=placeholder,
-            config={
-                "displayModeBar": True,
-                "modeBarButtonsToRemove": ["select2d", "lasso2d"],
-                "displaylogo": False,
-            },
-            style={"height": "600px"},
-        ),
+        [
+            # Live-price badge row — right-aligned, updated by interval callback
+            html.Div(
+                id="live-badge",
+                style={
+                    "textAlign": "right",
+                    "fontSize": "11px",
+                    "paddingRight": "6px",
+                    "paddingBottom": "2px",
+                    "minHeight": "16px",
+                    "fontFamily": "'SF Mono', 'Consolas', 'Menlo', monospace",
+                    "color": THEME["text_muted"],
+                },
+            ),
+            dcc.Graph(
+                id="main-chart",
+                figure=placeholder,
+                config={
+                    "displayModeBar": True,
+                    "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+                    "displaylogo": False,
+                },
+                style={"height": "600px"},
+            ),
+        ],
         width=9,
     )
 
@@ -244,6 +268,20 @@ def build_layout() -> html.Div:
             # Hidden store for passing data between callbacks
             dcc.Store(id="ohlcv-store"),
             dcc.Store(id="signals-store", data=[]),
+
+            # Tracks which symbol is currently displayed — used by the
+            # interval callback for subscription management.
+            dcc.Store(id="active-symbol-store", data=None),
+
+            # Live-price polling interval.  Starts disabled; the load_chart
+            # callback enables it once a chart has been successfully loaded.
+            # 1 500 ms gives a smooth feel without hammering REST endpoints.
+            dcc.Interval(
+                id="price-interval",
+                interval=1500,   # milliseconds
+                n_intervals=0,
+                disabled=True,
+            ),
 
             # Top navigation bar
             _topbar(),
