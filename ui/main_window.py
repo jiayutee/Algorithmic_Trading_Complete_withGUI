@@ -43,6 +43,7 @@ except ImportError:
 from typing import Dict, List, Optional
 from core.news_scraper import scrape_and_analyze_finviz_news
 from core.logger import logger
+from core.chart_builder import build_candlestick_figure, overlay_signals
 
 
 class NewsWorker(QThread):
@@ -1470,26 +1471,9 @@ class MainWindow(QMainWindow):
             logger.error(traceback.format_exc())
 
     def plot_signals(self, signals):
-        # 'buy' = open long; 'buy_cover' = close short (both rendered as green up-triangles)
-        buy_signals = [s for s in signals if s.get('type') in ('buy', 'buy_cover')]
-        # 'sell' = close long; 'sell_short' = open short (both rendered as red down-triangles)
-        sell_signals = [s for s in signals if s.get('type') in ('sell', 'sell_short')]
-        if buy_signals:
-            self.fig.add_trace(go.Scatter(
-                x=[s['date'] for s in buy_signals],
-                y=[s['price'] for s in buy_signals],
-                mode='markers',
-                marker=dict(symbol='triangle-up', size=15, color='green'),
-                name='Buy Signal'
-            ))
-        if sell_signals:
-            self.fig.add_trace(go.Scatter(
-                x=[s['date'] for s in sell_signals],
-                y=[s['price'] for s in sell_signals],
-                mode='markers',
-                marker=dict(symbol='triangle-down', size=15, color='red'),
-                name='Sell Signal'
-            ))
+        # Delegate to the shared chart_builder so logic lives in one place.
+        # 'buy'/'buy_cover' → green up-triangles; 'sell'/'sell_short' → red down-triangles
+        overlay_signals(self.fig, signals)
         self.update_plotly_view()
 
     def on_order_type_changed(self, order_type):
@@ -1815,20 +1799,7 @@ class MainWindow(QMainWindow):
     def plot_candles(self):
         if not hasattr(self, 'df') or self.df.empty:
             return
-
-        self.fig = go.Figure(data=[go.Candlestick(
-            x=self.df.index,
-            open=self.df['Open'],
-            high=self.df['High'],
-            low=self.df['Low'],
-            close=self.df['Close'],
-            name='Price'
-        )])
-
-        self.fig.update_layout(
-            height=600,
-            xaxis=dict(type='date', rangeslider_visible=False),
-            yaxis=dict(title='Price'),
-            template='plotly_dark'
-        )
+        # Delegate to the shared chart_builder module (also used by the Dash app).
+        symbol = self.symbol_combo.currentText() if hasattr(self, 'symbol_combo') else ''
+        self.fig = build_candlestick_figure(self.df, symbol=symbol)
         self.update_plotly_view()
