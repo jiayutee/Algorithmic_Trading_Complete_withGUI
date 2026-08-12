@@ -40,7 +40,8 @@ jobs:
             requests python-dotenv \
             newsapi-python beautifulsoup4 \
             matplotlib plotly scipy statsmodels \
-            joblib pytest ccxt websocket-client
+            joblib pytest ccxt websocket-client \
+            "dash>=2.16,<3" "dash-bootstrap-components>=1.5,<2"
           # Optional packages — allowed to fail on CI
           pip install pandas-ta stable-baselines3 openbb openbb-yfinance || true
 
