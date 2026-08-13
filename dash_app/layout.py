@@ -184,6 +184,122 @@ def _chart_panel() -> dbc.Col:
     )
 
 
+def _order_entry_panel() -> html.Div:
+    """Order entry card: qty, order-type, optional price, buy/sell buttons, status feedback.
+
+    Mirrors the PyQt5 order panel in ui/main_window.py (on_order_type_changed +
+    place_order) — same UX flow, adapted for Dash.  Wired to
+    SimulatedBroker.submit_order() via callbacks.py.
+    """
+    _input_style = {
+        "backgroundColor": THEME["bg_dark"],
+        "color": THEME["text_main"],
+        "border": f"1px solid {THEME['border']}",
+        "borderRadius": "4px",
+        "fontSize": "12px",
+        "width": "100%",
+        "padding": "4px 6px",
+        "outline": "none",
+        "boxSizing": "border-box",
+    }
+    return html.Div(
+        style={**_PANEL_STYLE, "marginBottom": "10px"},
+        children=[
+            html.P("Order Entry", style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "6px"}),
+            # --- Quantity -------------------------------------------------------
+            html.P("Qty", style={**_LABEL_MUTED, "marginBottom": "2px"}),
+            dcc.Input(
+                id="order-qty-input",
+                type="number",
+                placeholder="Quantity",
+                min=0.000001,
+                step="any",
+                debounce=False,
+                style=_input_style,
+            ),
+            # --- Order Type ----------------------------------------------------
+            html.P("Order Type", style={**_LABEL_MUTED, "marginTop": "6px", "marginBottom": "2px"}),
+            dcc.Dropdown(
+                id="order-type-dropdown",
+                options=[
+                    {"label": "Market", "value": "market"},
+                    {"label": "Limit",  "value": "limit"},
+                    {"label": "Stop",   "value": "stop"},
+                ],
+                value="market",
+                clearable=False,
+                style=_DROPDOWN_STYLE,
+            ),
+            # --- Price input (hidden for Market, shown for Limit/Stop) ---------
+            html.Div(
+                id="order-price-wrapper",
+                style={"display": "none"},  # toggled by toggle_price_input callback
+                children=[
+                    html.P("Price", style={**_LABEL_MUTED, "marginTop": "6px", "marginBottom": "2px"}),
+                    dcc.Input(
+                        id="order-price-input",
+                        type="number",
+                        placeholder="Limit Price",
+                        min=0,
+                        step="any",
+                        debounce=False,
+                        style=_input_style,
+                    ),
+                ],
+            ),
+            # --- Buy / Sell buttons --------------------------------------------
+            html.Div(
+                style={"display": "flex", "gap": "4%", "marginTop": "8px"},
+                children=[
+                    html.Button(
+                        "Buy",
+                        id="buy-btn",
+                        n_clicks=0,
+                        style={
+                            "backgroundColor": THEME["green"],
+                            "color": "#0d1117",
+                            "border": "none",
+                            "borderRadius": "4px",
+                            "padding": "6px 0",
+                            "cursor": "pointer",
+                            "fontSize": "12px",
+                            "fontWeight": "bold",
+                            "width": "48%",
+                        },
+                    ),
+                    html.Button(
+                        "Sell",
+                        id="sell-btn",
+                        n_clicks=0,
+                        style={
+                            "backgroundColor": THEME["red"],
+                            "color": "#ffffff",
+                            "border": "none",
+                            "borderRadius": "4px",
+                            "padding": "6px 0",
+                            "cursor": "pointer",
+                            "fontSize": "12px",
+                            "fontWeight": "bold",
+                            "width": "48%",
+                        },
+                    ),
+                ],
+            ),
+            # --- Status / feedback text ----------------------------------------
+            html.Div(
+                id="order-status",
+                style={
+                    "color": THEME["text_muted"],
+                    "fontSize": "11px",
+                    "marginTop": "6px",
+                    "minHeight": "16px",
+                    "wordBreak": "break-word",
+                },
+            ),
+        ],
+    )
+
+
 def _metrics_panel() -> dbc.Col:
     """Right-side metrics / account panel."""
     return dbc.Col(
@@ -198,6 +314,8 @@ def _metrics_panel() -> dbc.Col:
                     html.P("$100,000.00", id="account-balance", style=_METRIC_VALUE_STYLE),
                 ],
             ),
+            # Order Entry card
+            _order_entry_panel(),
             # P&L card
             html.Div(
                 style={**_PANEL_STYLE, "marginBottom": "10px"},

@@ -44,6 +44,7 @@ from dash import Input, Output, Patch, State, no_update
 import dash
 
 from core.chart_builder import (
+    THEME,
     add_live_tick_trace,
     build_candlestick_figure,
     is_crypto_symbol,
@@ -84,6 +85,33 @@ def _get_equity_loader():
         logger.info("[Dash] Equity DataLoader singleton created")
     return _equity_loader
 
+
+# Lazy-initialised SimulatedBroker — created on first order submission so the
+# background price-simulation thread doesn't start until the user actually
+# places an order.
+_broker: Optional[object] = None
+
+
+def _get_broker():
+    """Return the module-level SimulatedBroker, creating it on first call."""
+    global _broker
+    if _broker is None:
+        from brokers.simulatedbroker import SimulatedBroker
+        _broker = SimulatedBroker()
+        logger.info("[Dash] SimulatedBroker singleton created")
+    return _broker
+
+
+# ---------------------------------------------------------------------------
+# Order-status text style (shared between the two order-entry callbacks)
+# ---------------------------------------------------------------------------
+
+_ORDER_STATUS_BASE_STYLE: dict = {
+    "fontSize": "11px",
+    "marginTop": "6px",
+    "minHeight": "16px",
+    "wordBreak": "break-word",
+}
 
 # ---------------------------------------------------------------------------
 # Interval-tick state (not thread-safe by design — Dash uses a single worker
@@ -307,8 +335,121 @@ def register_callbacks(app: dash.Dash) -> None:
         return p, badge
 
     # ------------------------------------------------------------------
-    # Placeholder wiring point for future phases
+    # Phase 1.3: order-type dropdown → toggle price input visibility
     # ------------------------------------------------------------------
-    # Phase 2: order entry callbacks (buy/sell buttons → broker)
+    @app.callback(
+        Output("order-price-wrapper", "style"),
+        Output("order-price-input", "placeholder"),
+        Input("order-type-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def toggle_price_input(order_type: str):
+        """Show or hide the price input depending on the selected order type.
+
+        Mirrors ``on_order_type_changed()`` in ui/main_window.py — pure UI,
+        no broker call.
+        """
+        if order_type == "limit":
+            return {"display": "block"}, "Limit Price"
+        if order_type == "stop":
+            return {"display": "block"}, "Stop Price"
+        # market (default)
+        return {"display": "none"}, "Price"
+
+    # ------------------------------------------------------------------
+    # Phase 1.3: buy/sell buttons → SimulatedBroker.submit_order
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("order-status", "children"),
+        Output("order-status", "style"),
+        Input("buy-btn", "n_clicks"),
+        Input("sell-btn", "n_clicks"),
+        State("order-qty-input", "value"),
+        State("order-type-dropdown", "value"),
+        State("order-price-input", "value"),
+        State("active-symbol-store", "data"),
+        prevent_initial_call=True,
+    )
+    def submit_order_callback(
+        buy_clicks: Optional[int],
+        sell_clicks: Optional[int],
+        qty: Optional[float],
+        order_type: str,
+        price: Optional[float],
+        symbol: Optional[str],
+    ):
+        """Submit a buy or sell order to the SimulatedBroker.
+
+        Mirrors ``place_order()`` in ui/main_window.py, adapted for Dash.
+        ``ctx.triggered_id`` identifies which button was clicked — both
+        buy-btn and sell-btn feed this single callback output.
+        """
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return no_update, no_update
+
+        triggered_id = ctx.triggered_id  # "buy-btn" or "sell-btn"
+        side = "buy" if triggered_id == "buy-btn" else "sell"
+
+        # Style helpers -------------------------------------------------------
+        def _err(msg: str):
+            return msg, {**_ORDER_STATUS_BASE_STYLE, "color": THEME["red"]}
+
+        def _ok(msg: str):
+            return msg, {**_ORDER_STATUS_BASE_STYLE, "color": THEME["green"]}
+
+        def _warn(msg: str):
+            return msg, {**_ORDER_STATUS_BASE_STYLE, "color": THEME["orange"]}
+
+        def _info(msg: str):
+            return msg, {**_ORDER_STATUS_BASE_STYLE, "color": THEME["text_muted"]}
+
+        # Validation ----------------------------------------------------------
+        if not symbol:
+            return _err("Load a chart first before placing an order.")
+
+        if qty is None or qty <= 0:
+            return _err("Qty must be greater than 0.")
+
+        limit_price: Optional[float] = None
+        stop_price: Optional[float] = None
+        if order_type == "limit":
+            if not price or price <= 0:
+                return _err("Limit Price is required for Limit orders.")
+            limit_price = float(price)
+        elif order_type == "stop":
+            if not price or price <= 0:
+                return _err("Stop Price is required for Stop orders.")
+            stop_price = float(price)
+
+        # Submit --------------------------------------------------------------
+        try:
+            order = _get_broker().submit_order(
+                symbol=symbol,
+                qty=float(qty),
+                side=side,
+                order_type=order_type,
+                limit_price=limit_price,
+                stop_price=stop_price,
+            )
+            status = order.status.value
+            if status == "filled":
+                return _ok(
+                    f"{side.upper()} order filled for {qty} {symbol}"
+                    f" @ ${order.filled_avg_price:.2f}"
+                )
+            if status == "pending":
+                return _warn(f"{side.upper()} order pending for {qty} {symbol}")
+            if status == "rejected":
+                return _err(f"Order rejected: {qty} {symbol}")
+            return _info(f"Order {status}: {qty} {symbol}")
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[Dash] submit_order error: %s", exc)
+            return _err(f"Order error: {exc}")
+
+    # ------------------------------------------------------------------
+    # Placeholder wiring points for future phases
+    # ------------------------------------------------------------------
     # Phase 3: backtest trigger → update bt-sharpe / bt-winrate / bt-maxdd
     # Phase 4: live P&L polling → account-balance / pnl-value
