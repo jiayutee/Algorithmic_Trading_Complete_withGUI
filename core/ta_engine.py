@@ -76,3 +76,39 @@ class TAEngine:
         k = 100 * (data['Close'] - low_k) / (high_k - low_k).replace(0, float('nan'))
         d = k.rolling(d_window).mean()
         return {'percent_k': k, 'percent_d': d}
+
+
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Add standard technical indicator columns to a copy of *df* and return it.
+
+    Columns added: MA20, MA50, MA200, EMA12, EMA26, MACD, Signal, RSI, K, D.
+
+    Requires columns: Close, High, Low.  Returns a copy — the input is not
+    modified.  Indicator values for rows with insufficient history will be
+    NaN; no exception is raised.  This is the pure-computation counterpart
+    to MainWindow.calculate_technical_indicators() and exists so that the
+    logic can be unit-tested without a Qt display.
+    """
+    df = df.copy()
+    # Moving Averages
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['MA50'] = df['Close'].rolling(window=50).mean()
+    df['MA200'] = df['Close'].rolling(window=200).mean()
+    # EMA
+    df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
+    df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
+    # MACD
+    df['MACD'] = df['EMA12'] - df['EMA26']
+    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    # RSI (pandas division by zero returns inf/nan — no exception)
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    # Stochastic
+    low14 = df['Low'].rolling(14).min()
+    high14 = df['High'].rolling(14).max()
+    df['K'] = 100 * ((df['Close'] - low14) / (high14 - low14))
+    df['D'] = df['K'].rolling(3).mean()
+    return df
