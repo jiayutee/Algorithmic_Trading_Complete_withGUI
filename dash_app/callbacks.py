@@ -36,11 +36,13 @@ Later phases will add order-entry, live P&L, backtest triggers, etc.
 
 from __future__ import annotations
 
+import calendar as calendar_mod
+import datetime as dt_mod
 import threading
 from typing import Optional
 
 import pandas as pd
-from dash import Input, Output, Patch, State, no_update
+from dash import Input, Output, Patch, State, html, no_update
 import dash
 
 from core.chart_builder import (
@@ -100,6 +102,177 @@ def _get_broker():
         _broker = SimulatedBroker()
         logger.info("[Dash] SimulatedBroker singleton created")
     return _broker
+
+
+def _broker_or_none():
+    """Return the existing SimulatedBroker singleton without creating one.
+
+    Unlike ``_get_broker()``, this never initialises the broker.  Used by
+    display-only callbacks (positions panel, PnL calendar) so the broker's
+    background price-simulation thread is not started on page load before
+    the user places any order.
+    """
+    return _broker
+
+
+# ---------------------------------------------------------------------------
+# PnL Calendar cell background colors (no THEME equivalent — matched directly
+# from the PyQt5 reference implementation in ui/main_window.py).
+# ---------------------------------------------------------------------------
+
+_CAL_GREEN_BG = "#1a4731"  # dark green cell bg for days with PnL >= 0
+_CAL_RED_BG   = "#3d1a1a"  # dark red cell bg for days with PnL < 0
+_CAL_DIMMED_FG = "#484f58"  # very muted text for out-of-month filler cells
+
+
+# ---------------------------------------------------------------------------
+# Positions and PnL Calendar component builders (pure helpers, no Dash context)
+# ---------------------------------------------------------------------------
+
+def _build_position_row(symbol: str, pos) -> html.Div:
+    """Build one row in the positions panel for a single open position.
+
+    Mirrors the per-symbol block in ``update_positions_display()``
+    (ui/main_window.py lines 1538-1545) — same data fields, adapted for Dash.
+    """
+    pnl = pos.pnl
+    sign = "+" if pnl >= 0 else ""
+    pnl_color = THEME["green"] if pnl >= 0 else THEME["red"]
+    return html.Div(
+        style={
+            "display": "flex",
+            "justifyContent": "space-between",
+            "alignItems": "center",
+            "padding": "4px 6px",
+            "borderRadius": "4px",
+            "backgroundColor": THEME["bg_dark"],
+            "marginBottom": "4px",
+            "fontSize": "11px",
+        },
+        children=[
+            html.Div([
+                html.Span(symbol, style={"color": THEME["text_main"], "fontWeight": "600"}),
+                html.Span(
+                    f"  {pos.qty:+.4f} @ ${pos.avg_price:.2f}",
+                    style={"color": THEME["text_muted"]},
+                ),
+            ]),
+            html.Span(f"{sign}${pnl:,.2f}", style={"color": pnl_color, "fontWeight": "600"}),
+        ],
+    )
+
+
+def _build_positions_content(broker) -> list:
+    """Build the ``children`` list for the ``positions-content`` Div.
+
+    Returns a list of Dash components: one row per open position, or a
+    single muted "No active positions" span when the portfolio is flat.
+    Safe to call with ``broker=None`` (returns the empty-state message).
+    """
+    _no_positions = [
+        html.Span(
+            "No active positions",
+            style={"color": THEME["text_muted"], "fontSize": "11px"},
+        )
+    ]
+
+    if broker is None:
+        return _no_positions
+
+    try:
+        rows = []
+        if hasattr(broker, "positions"):
+            for symbol, pos in broker.positions.items():
+                if pos.qty != 0:
+                    rows.append(_build_position_row(symbol, pos))
+        return rows if rows else _no_positions
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[Dash] positions display error: %s", exc)
+        return [
+            html.Span(
+                f"Error loading positions: {exc}",
+                style={"color": THEME["red"], "fontSize": "11px"},
+            )
+        ]
+
+
+def _build_pnl_calendar_grid(year: int, month: int, by_day: dict) -> list:
+    """Build the 42-cell calendar grid as a single-element list of Dash Divs.
+
+    Returns ``[html.Div(...)]`` — the outer CSS-grid div containing 42 day
+    cells.  Each cell is styled to match the PyQt5 reference implementation:
+    * in-month + PnL >= 0 : dark-green background, green text
+    * in-month + PnL < 0  : dark-red background, red text
+    * in-month + no PnL   : card background, muted text
+    * out-of-month filler  : page-dark background, very muted text
+    * today                : accent-color border (#58a6ff ≈ THEME["accent"])
+
+    Uses ``calendar.Calendar(firstweekday=0).itermonthdates()`` (Monday-first)
+    to match the weekday header row built in ``_bottom_tabs_panel()`` in
+    layout.py, and the PyQt5 ``_refresh_pnl_calendar()`` method.
+    """
+    today = dt_mod.date.today()
+    cal = calendar_mod.Calendar(firstweekday=0)
+    month_dates = list(cal.itermonthdates(year, month))[:42]
+
+    _cell_base: dict = {
+        "borderRadius": "3px",
+        "minHeight": "44px",
+        "padding": "3px",
+        "fontSize": "10px",
+        "fontWeight": "600",
+        "lineHeight": "1.4",
+        "overflow": "hidden",
+    }
+
+    cells = []
+    for cell_date in month_dates:
+        in_month = cell_date.month == month
+        pnl = by_day.get(cell_date)
+        is_today = cell_date == today
+
+        if not in_month:
+            cell_style = {
+                **_cell_base,
+                "backgroundColor": THEME["bg_dark"],
+                "border": f"1px solid {THEME['bg_card']}",
+                "color": _CAL_DIMMED_FG,
+            }
+            cell_children: object = str(cell_date.day)
+        elif pnl is not None:
+            bg = _CAL_GREEN_BG if pnl >= 0 else _CAL_RED_BG
+            fg = THEME["green"] if pnl >= 0 else THEME["red"]
+            border_color = THEME["accent"] if is_today else THEME["border_dim"]
+            sign = "+" if pnl >= 0 else ""
+            cell_style = {
+                **_cell_base,
+                "backgroundColor": bg,
+                "border": f"1px solid {border_color}",
+                "color": fg,
+            }
+            cell_children = [str(cell_date.day), html.Br(), f"{sign}${pnl:,.2f}"]
+        else:
+            border_color = THEME["accent"] if is_today else THEME["border_dim"]
+            cell_style = {
+                **_cell_base,
+                "backgroundColor": THEME["bg_card"],
+                "border": f"1px solid {border_color}",
+                "color": THEME["text_muted"],
+            }
+            cell_children = str(cell_date.day)
+
+        cells.append(html.Div(cell_children, style=cell_style))
+
+    return [
+        html.Div(
+            cells,
+            style={
+                "display": "grid",
+                "gridTemplateColumns": "repeat(7, 1fr)",
+                "gap": "2px",
+            },
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +660,122 @@ def register_callbacks(app: dash.Dash) -> None:
             price=price,
             symbol=symbol,
         )
+
+    # ------------------------------------------------------------------
+    # Phase 1.4: PnL Calendar month navigation → update pnl-calendar-store
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("pnl-calendar-store", "data"),
+        Input("pnl-prev-btn", "n_clicks"),
+        Input("pnl-next-btn", "n_clicks"),
+        Input("pnl-today-btn", "n_clicks"),
+        State("pnl-calendar-store", "data"),
+        prevent_initial_call=True,
+    )
+    def update_calendar_store(
+        prev_clicks: Optional[int],
+        next_clicks: Optional[int],
+        today_clicks: Optional[int],
+        store_data: dict,
+    ) -> dict:
+        """Advance or retreat the displayed calendar month in the store.
+
+        Mirrors ``_shift_pnl_calendar_month()`` and
+        ``_jump_pnl_calendar_to_today()`` from ui/main_window.py, adapted
+        for Dash's stateless callback model via a dcc.Store.
+        """
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return no_update
+
+        triggered_id = ctx.triggered_id
+
+        if triggered_id == "pnl-today-btn":
+            today = dt_mod.date.today()
+            return {"year": today.year, "month": today.month}
+
+        year: int = store_data["year"]
+        month: int = store_data["month"]
+
+        if triggered_id == "pnl-prev-btn":
+            month -= 1
+            if month < 1:
+                month = 12
+                year -= 1
+        elif triggered_id == "pnl-next-btn":
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
+
+        return {"year": year, "month": month}
+
+    # ------------------------------------------------------------------
+    # Phase 1.4: pnl-calendar-store + order-status → rebuild calendar display
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("pnl-calendar-title", "children"),
+        Output("pnl-calendar-total", "children"),
+        Output("pnl-calendar-total", "style"),
+        Output("pnl-calendar-grid", "children"),
+        Input("pnl-calendar-store", "data"),
+        Input("order-status", "children"),
+    )
+    def update_pnl_calendar_display(store_data: dict, order_status: object):
+        """Rebuild the PnL calendar grid for the year/month held in the store.
+
+        Triggered on page load (both inputs available immediately), on every
+        month-navigation click (store changes), and after every order placement
+        (order-status changes) — so the calendar always reflects the latest
+        broker data without a separate polling interval.
+
+        Mirrors ``_refresh_pnl_calendar()`` in ui/main_window.py.
+        """
+        year: int = store_data["year"]
+        month: int = store_data["month"]
+
+        by_day: dict = {}
+        broker = _broker_or_none()
+        if broker is not None and hasattr(broker, "get_pnl_by_day"):
+            try:
+                by_day = broker.get_pnl_by_day()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[Dash] get_pnl_by_day error: %s", exc)
+
+        title = f"{calendar_mod.month_name[month]} {year}"
+        grid_children = _build_pnl_calendar_grid(year, month, by_day)
+
+        month_total = sum(
+            pnl for d, pnl in by_day.items()
+            if d.year == year and d.month == month
+        )
+        sign = "+" if month_total >= 0 else ""
+        total_text = f"Month total: {sign}${month_total:,.2f}"
+        total_color = THEME["green"] if month_total >= 0 else THEME["red"]
+        total_style = {
+            "fontSize": "12px",
+            "fontWeight": "600",
+            "marginLeft": "8px",
+            "color": total_color,
+        }
+
+        return title, total_text, total_style, grid_children
+
+    # ------------------------------------------------------------------
+    # Phase 1.4: order-status → rebuild positions panel
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("positions-content", "children"),
+        Input("order-status", "children"),
+    )
+    def update_positions(order_status: object):
+        """Rebuild the open positions list after an order is placed or on page load.
+
+        Mirrors ``update_positions_display()`` in ui/main_window.py.
+        Listening to order-status children means this fires immediately after
+        every buy/sell submission — no separate polling interval needed.
+        """
+        return _build_positions_content(_broker_or_none())
 
     # ------------------------------------------------------------------
     # Placeholder wiring points for future phases

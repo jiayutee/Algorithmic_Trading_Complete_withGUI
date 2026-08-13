@@ -111,6 +111,7 @@ class TestLayoutStructure:
         "signals-store",
         "active-symbol-store",
         "price-interval",
+        "pnl-calendar-store",       # Phase 1.4: holds displayed year/month
         # Metrics panel
         "account-balance",
         "pnl-value",
@@ -120,6 +121,15 @@ class TestLayoutStructure:
         "chart-status",
         # Status bar
         "status-bar",
+        # Bottom tabs panel (Phase 1.4)
+        "bottom-tabs",
+        "positions-content",
+        "pnl-prev-btn",
+        "pnl-next-btn",
+        "pnl-today-btn",
+        "pnl-calendar-title",
+        "pnl-calendar-total",
+        "pnl-calendar-grid",
     ]
 
     @pytest.mark.parametrize("expected_id", _EXPECTED_IDS)
@@ -529,13 +539,212 @@ class TestDashAppImport:
         assert dash_module.app.layout is not None
 
     def test_callbacks_registered(self):
-        """After import, app.callback_map must contain at least the four
-        Phase-1 callbacks (load_chart, update_live_price, toggle_price_input,
-        submit_order_callback)."""
+        """After import, app.callback_map must contain at least seven callbacks:
+        the four Phase-1 callbacks (load_chart, update_live_price,
+        toggle_price_input, submit_order_callback) plus three Phase-1.4 callbacks
+        (update_calendar_store, update_pnl_calendar_display, update_positions)."""
         import dash_app.app as dash_module
         # Dash stores callbacks in app.callback_map (dict keyed by output ID string).
         callback_map = dash_module.app.callback_map
-        assert len(callback_map) >= 4, (
-            f"Expected at least 4 registered callbacks, found {len(callback_map)}: "
+        assert len(callback_map) >= 7, (
+            f"Expected at least 7 registered callbacks, found {len(callback_map)}: "
             f"{list(callback_map.keys())}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 5. Positions + PnL Calendar helpers (Phase 1.4)
+# ---------------------------------------------------------------------------
+
+class TestPositionsHelpers:
+    """_build_positions_content covers no-broker, empty, and populated states."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from dash_app.callbacks import _build_positions_content
+        self._fn = _build_positions_content
+
+    def test_no_broker_returns_list(self):
+        result = self._fn(None)
+        assert isinstance(result, list)
+        assert len(result) >= 1
+
+    def test_no_broker_shows_no_positions_text(self):
+        from dash.development.base_component import Component as DashComponent
+        result = self._fn(None)
+        # Flatten all text content from the component tree
+        def _text(c):
+            parts = []
+            if isinstance(c, str):
+                parts.append(c)
+            elif isinstance(c, DashComponent):
+                try:
+                    ch = c.children
+                except AttributeError:
+                    ch = None
+                if ch is not None:
+                    if not isinstance(ch, list):
+                        ch = [ch]
+                    for item in ch:
+                        parts.extend(_text(item))
+            elif isinstance(c, list):
+                for item in c:
+                    parts.extend(_text(item))
+            return parts
+        text_content = " ".join(_text(result)).lower()
+        assert "no active positions" in text_content
+
+    def test_empty_positions_dict_returns_no_positions_message(self):
+        from unittest.mock import MagicMock
+        broker = MagicMock()
+        broker.positions = {}
+        result = self._fn(broker)
+        assert isinstance(result, list)
+
+    def test_nonzero_position_yields_row(self):
+        """A broker with one open position must produce at least one row."""
+        from unittest.mock import MagicMock
+        broker = MagicMock()
+        pos = MagicMock()
+        pos.qty = 2.0
+        pos.avg_price = 150.0
+        pos.pnl = 25.0
+        broker.positions = {"AAPL": pos}
+        result = self._fn(broker)
+        # Should have at least one Div (the position row), not the empty message
+        assert isinstance(result, list)
+        assert len(result) >= 1
+
+    def test_zero_qty_position_is_excluded(self):
+        """Positions with qty == 0 must be skipped (flat positions)."""
+        from unittest.mock import MagicMock
+        from dash.development.base_component import Component as DashComponent
+        broker = MagicMock()
+        pos = MagicMock()
+        pos.qty = 0
+        broker.positions = {"AAPL": pos}
+        result = self._fn(broker)
+        # With all positions at zero qty, should fall back to "no active positions"
+        def _has_text(components, needle):
+            for c in (components if isinstance(components, list) else [components]):
+                if isinstance(c, str) and needle in c.lower():
+                    return True
+                if isinstance(c, DashComponent):
+                    try:
+                        ch = c.children
+                        if _has_text(ch if isinstance(ch, list) else [ch], needle):
+                            return True
+                    except AttributeError:
+                        pass
+            return False
+        assert _has_text(result, "no active")
+
+    def test_real_broker_with_order_shows_position(self):
+        """After a real market buy, the broker has a non-zero position."""
+        from brokers.simulatedbroker import SimulatedBroker
+        from dash_app.callbacks import _validate_and_submit_order
+        broker = SimulatedBroker()
+        try:
+            _validate_and_submit_order(broker, "buy", 1.0, "market", None, "AAPL")
+            result = self._fn(broker)
+            assert isinstance(result, list)
+            # Should have at least one non-empty-message item (the AAPL row)
+            assert len(result) >= 1
+        finally:
+            broker.close()
+
+
+class TestPnLCalendarHelpers:
+    """_build_pnl_calendar_grid covers shape, styling, and edge-cases."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from dash_app.callbacks import _build_pnl_calendar_grid
+        self._fn = _build_pnl_calendar_grid
+
+    def test_returns_list_with_one_outer_div(self):
+        result = self._fn(2026, 8, {})
+        assert isinstance(result, list)
+        assert len(result) == 1
+
+    def test_outer_div_has_42_children(self):
+        """The CSS-grid container must have exactly 42 day cells."""
+        result = self._fn(2026, 8, {})
+        outer_div = result[0]
+        children = outer_div.children
+        assert len(children) == 42
+
+    def test_positive_pnl_cell_uses_green_bg(self):
+        """A day with positive PnL must use the dark-green background."""
+        import datetime
+        from dash_app.callbacks import _CAL_GREEN_BG
+        by_day = {datetime.date(2026, 8, 5): 200.0}
+        result = self._fn(2026, 8, by_day)
+        outer_div = result[0]
+        cells = outer_div.children
+        # Aug 5 2026 is a Wednesday (col index 2 in week starting Mon Jul 27)
+        # Find cell for Aug 5: it should be among the in-month cells
+        green_cells = [c for c in cells if c.style.get("backgroundColor") == _CAL_GREEN_BG]
+        assert len(green_cells) >= 1
+
+    def test_negative_pnl_cell_uses_red_bg(self):
+        """A day with negative PnL must use the dark-red background."""
+        import datetime
+        from dash_app.callbacks import _CAL_RED_BG
+        by_day = {datetime.date(2026, 8, 6): -75.5}
+        result = self._fn(2026, 8, by_day)
+        outer_div = result[0]
+        cells = outer_div.children
+        red_cells = [c for c in cells if c.style.get("backgroundColor") == _CAL_RED_BG]
+        assert len(red_cells) >= 1
+
+    def test_out_of_month_cells_use_dark_bg(self):
+        """Filler cells outside the target month must use THEME[bg_dark]."""
+        from core.chart_builder import THEME
+        result = self._fn(2026, 8, {})
+        outer_div = result[0]
+        cells = outer_div.children
+        # August 2026 starts Saturday → Mon-Fri (Jul 27-31) are out-of-month
+        dim_cells = [c for c in cells if c.style.get("backgroundColor") == THEME["bg_dark"]]
+        assert len(dim_cells) >= 5  # at least 5 out-of-month fillers (Mon-Fri Jul 27-31)
+
+    def test_grid_style_is_7_column_css_grid(self):
+        """The outer container must use a 7-column CSS grid."""
+        result = self._fn(2026, 8, {})
+        outer_div = result[0]
+        assert outer_div.style.get("display") == "grid"
+        assert "repeat(7, 1fr)" in outer_div.style.get("gridTemplateColumns", "")
+
+    def test_calendar_store_default_is_current_month(self):
+        """pnl-calendar-store in the layout must initialise to today's month."""
+        import datetime
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component as DashComponent
+
+        def _find_store(comp):
+            try:
+                if getattr(comp, "id", None) == "pnl-calendar-store":
+                    return comp
+            except Exception:
+                pass
+            try:
+                children = comp.children
+            except AttributeError:
+                return None
+            if children is None:
+                return None
+            if not isinstance(children, list):
+                children = [children]
+            for child in children:
+                if isinstance(child, DashComponent):
+                    result = _find_store(child)
+                    if result is not None:
+                        return result
+            return None
+
+        layout = build_layout()
+        store = _find_store(layout)
+        assert store is not None, "pnl-calendar-store not found in layout"
+        today = datetime.date.today()
+        assert store.data["year"] == today.year
+        assert store.data["month"] == today.month

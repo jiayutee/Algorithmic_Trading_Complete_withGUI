@@ -14,6 +14,8 @@ lives in exactly one place.
 
 from __future__ import annotations
 
+import datetime
+
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
@@ -73,6 +75,36 @@ _DROPDOWN_STYLE = {
     "borderRadius": "4px",
     "fontSize": "12px",
     "minWidth": "110px",
+}
+
+# Month-navigation button style for the PnL Calendar panel
+_NAV_BTN_STYLE = {
+    "backgroundColor": THEME["bg_dark"],
+    "color": THEME["text_muted"],
+    "border": f"1px solid {THEME['border']}",
+    "borderRadius": "4px",
+    "padding": "2px 8px",
+    "cursor": "pointer",
+    "fontSize": "12px",
+    "minWidth": "28px",
+}
+
+# Tab label styles (header pill, not content area)
+_TAB_STYLE = {
+    "backgroundColor": THEME["bg_dark"],
+    "color": THEME["text_muted"],
+    "borderColor": THEME["border"],
+    "fontFamily": "'SF Mono', 'Consolas', 'Menlo', monospace",
+    "fontSize": "12px",
+    "padding": "6px 14px",
+}
+
+_TAB_SELECTED_STYLE = {
+    **_TAB_STYLE,
+    "backgroundColor": THEME["bg_card"],
+    "color": THEME["text_main"],
+    "borderTop": f"2px solid {THEME['accent']}",
+    "borderColor": THEME["border"],
 }
 
 # ---------------------------------------------------------------------------
@@ -357,6 +389,152 @@ def _metrics_panel() -> dbc.Col:
     )
 
 
+def _bottom_tabs_panel() -> html.Div:
+    """Positions + PnL Calendar tab panel, rendered full-width below the main row.
+
+    Two tabs mirror the PyQt5 bottom_tabs area (ui/main_window.py):
+    - "Positions" — open positions list, color-coded by PnL (populated via
+      the update_positions callback in callbacks.py).
+    - "PnL Calendar" — month-grid calendar (42-cell, 6-week × 7-day) showing
+      realized PnL per day (populated via update_pnl_calendar_display callback).
+
+    Month navigation (◀ / ▶ / Today) drives a dcc.Store which in turn triggers
+    the calendar display callback.  Both tabs also refresh after every order
+    placement because they listen to order-status children changes.
+    """
+    return html.Div(
+        style={"marginTop": "10px"},
+        children=[
+            dcc.Tabs(
+                id="bottom-tabs",
+                value="positions-tab",
+                colors={
+                    "border": THEME["border"],
+                    "primary": THEME["accent"],
+                    "background": THEME["bg_dark"],
+                },
+                children=[
+                    # ----------------------------------------------------------
+                    # Tab 1: Positions
+                    # ----------------------------------------------------------
+                    dcc.Tab(
+                        label="Positions",
+                        value="positions-tab",
+                        style=_TAB_STYLE,
+                        selected_style=_TAB_SELECTED_STYLE,
+                        children=[
+                            html.Div(
+                                style={**_PANEL_STYLE, "margin": "8px 0"},
+                                children=[
+                                    html.P(
+                                        "Open Positions",
+                                        style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "6px"},
+                                    ),
+                                    html.Div(
+                                        id="positions-content",
+                                        children=html.Span(
+                                            "No active positions",
+                                            style={"color": THEME["text_muted"], "fontSize": "11px"},
+                                        ),
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    # ----------------------------------------------------------
+                    # Tab 2: PnL Calendar
+                    # ----------------------------------------------------------
+                    dcc.Tab(
+                        label="PnL Calendar",
+                        value="pnl-calendar-tab",
+                        style=_TAB_STYLE,
+                        selected_style=_TAB_SELECTED_STYLE,
+                        children=[
+                            html.Div(
+                                style={**_PANEL_STYLE, "margin": "8px 0"},
+                                children=[
+                                    # Month navigation header row
+                                    html.Div(
+                                        style={
+                                            "display": "flex",
+                                            "alignItems": "center",
+                                            "gap": "8px",
+                                            "marginBottom": "8px",
+                                        },
+                                        children=[
+                                            html.Button(
+                                                "◀",
+                                                id="pnl-prev-btn",
+                                                n_clicks=0,
+                                                style=_NAV_BTN_STYLE,
+                                            ),
+                                            html.Div(
+                                                id="pnl-calendar-title",
+                                                style={
+                                                    "flex": "1",
+                                                    "textAlign": "center",
+                                                    "fontWeight": "600",
+                                                    "fontSize": "13px",
+                                                    "color": THEME["text_main"],
+                                                },
+                                            ),
+                                            html.Button(
+                                                "▶",
+                                                id="pnl-next-btn",
+                                                n_clicks=0,
+                                                style=_NAV_BTN_STYLE,
+                                            ),
+                                            html.Button(
+                                                "Today",
+                                                id="pnl-today-btn",
+                                                n_clicks=0,
+                                                style={**_NAV_BTN_STYLE, "minWidth": "50px"},
+                                            ),
+                                            html.Div(
+                                                id="pnl-calendar-total",
+                                                style={
+                                                    "fontSize": "12px",
+                                                    "fontWeight": "600",
+                                                    "marginLeft": "8px",
+                                                    "color": THEME["text_muted"],
+                                                },
+                                            ),
+                                        ],
+                                    ),
+                                    # Weekday header (Mon … Sun, matches PyQt5 Monday-first)
+                                    html.Div(
+                                        style={
+                                            "display": "grid",
+                                            "gridTemplateColumns": "repeat(7, 1fr)",
+                                            "gap": "2px",
+                                            "marginBottom": "2px",
+                                        },
+                                        children=[
+                                            html.Div(
+                                                day,
+                                                style={
+                                                    "textAlign": "center",
+                                                    "color": THEME["text_muted"],
+                                                    "fontSize": "10px",
+                                                    "fontWeight": "600",
+                                                    "padding": "2px",
+                                                },
+                                            )
+                                            for day in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                                        ],
+                                    ),
+                                    # 42-cell day grid (populated by update_pnl_calendar_display callback)
+                                    html.Div(id="pnl-calendar-grid"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
 def _status_bar() -> html.Div:
     return html.Div(
         id="status-bar",
@@ -380,16 +558,25 @@ def build_layout() -> html.Div:
 
     Called once from ``dash_app/app.py`` to set ``app.layout``.
     """
+    _today = datetime.date.today()
     return html.Div(
         style=_PAGE_STYLE,
         children=[
-            # Hidden store for passing data between callbacks
+            # Hidden stores for passing data between callbacks
             dcc.Store(id="ohlcv-store"),
             dcc.Store(id="signals-store", data=[]),
 
             # Tracks which symbol is currently displayed — used by the
             # interval callback for subscription management.
             dcc.Store(id="active-symbol-store", data=None),
+
+            # Holds the currently-displayed year/month for the PnL Calendar tab.
+            # Initialised to the current calendar month so the calendar shows
+            # today's month on first render without any user interaction.
+            dcc.Store(
+                id="pnl-calendar-store",
+                data={"year": _today.year, "month": _today.month},
+            ),
 
             # Live-price polling interval.  Starts disabled; the load_chart
             # callback enables it once a chart has been successfully loaded.
@@ -409,13 +596,16 @@ def build_layout() -> html.Div:
                 fluid=True,
                 style={"padding": "10px 8px"},
                 children=[
+                    # Primary chart + metrics row (unchanged from Phase 1.3)
                     dbc.Row(
                         style={"gap": "0"},
                         children=[
                             _chart_panel(),
                             _metrics_panel(),
                         ],
-                    )
+                    ),
+                    # Full-width bottom tab panel: Positions + PnL Calendar
+                    _bottom_tabs_panel(),
                 ],
             ),
 
