@@ -36,7 +36,7 @@ scripts/
 - Issue Tracker DB ID: `e575e816-cab1-4d24-8f40-89b1d5ca8f27`
 
 ## Orchestrator
-- Runs via macOS launchd overnight only: 23:30 (morning brief), 01:00 (EOD debrief) Berlin local time
+- Runs via Claude Code scheduled tasks (cron-based, defined under `~/.claude/scheduled-tasks/`) overnight only: 23:05 (morning brief), 23:20 + 00:20 (work-loop `algotrader-work-loop`: safety-first pass + safety-net retry), 01:00 (EOD debrief) — all Berlin local time
 - Schedule deliberately avoids: CariGaji orchestrator (02:00-16:00) and the owner's
   reserved manual-prompting window (19:30-23:00) — both share the same Claude token pool
 - Two-way Telegram bot (chat_id=51218456) — user can send instructions, orchestrator responds
