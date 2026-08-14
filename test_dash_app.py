@@ -119,6 +119,12 @@ class TestLayoutStructure:
         "bt-winrate",
         "bt-maxdd",
         "chart-status",
+        # Backtest controls + results (Phase 1.5)
+        "bt-cash-input",
+        "bt-run-btn",
+        "bt-alpha",
+        "bt-beta",
+        "bt-status",
         # Status bar
         "status-bar",
         # Bottom tabs panel (Phase 1.4)
@@ -130,6 +136,8 @@ class TestLayoutStructure:
         "pnl-calendar-title",
         "pnl-calendar-total",
         "pnl-calendar-grid",
+        # Equity Curve tab (Phase 1.5)
+        "equity-curve-chart",
     ]
 
     @pytest.mark.parametrize("expected_id", _EXPECTED_IDS)
@@ -539,15 +547,16 @@ class TestDashAppImport:
         assert dash_module.app.layout is not None
 
     def test_callbacks_registered(self):
-        """After import, app.callback_map must contain at least seven callbacks:
+        """After import, app.callback_map must contain at least eight callbacks:
         the four Phase-1 callbacks (load_chart, update_live_price,
         toggle_price_input, submit_order_callback) plus three Phase-1.4 callbacks
-        (update_calendar_store, update_pnl_calendar_display, update_positions)."""
+        (update_calendar_store, update_pnl_calendar_display, update_positions)
+        plus one Phase-1.5 callback (run_backtest_callback)."""
         import dash_app.app as dash_module
         # Dash stores callbacks in app.callback_map (dict keyed by output ID string).
         callback_map = dash_module.app.callback_map
-        assert len(callback_map) >= 7, (
-            f"Expected at least 7 registered callbacks, found {len(callback_map)}: "
+        assert len(callback_map) >= 8, (
+            f"Expected at least 8 registered callbacks, found {len(callback_map)}: "
             f"{list(callback_map.keys())}"
         )
 
@@ -748,3 +757,162 @@ class TestPnLCalendarHelpers:
         today = datetime.date.today()
         assert store.data["year"] == today.year
         assert store.data["month"] == today.month
+
+
+# ---------------------------------------------------------------------------
+# 6. Backtest helpers (Phase 1.5)
+# ---------------------------------------------------------------------------
+
+class TestExtractBacktestMetrics:
+    """_extract_backtest_metrics covers all branches of the metrics extractor."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from dash_app.callbacks import _extract_backtest_metrics
+        self._fn = _extract_backtest_metrics
+
+    # 6a. Degenerate inputs ---------------------------------------------------
+
+    def test_empty_dict_returns_na_tuple(self):
+        """Empty results dict → all display strings are 'N/A'."""
+        result = self._fn({})
+        # Empty dict is falsy → first guard branch
+        sharpe, winrate, maxdd, alpha, beta, status = result
+        assert sharpe == "N/A"
+        assert winrate == "N/A"
+        assert maxdd == "N/A"
+        assert alpha == "N/A"
+        assert beta == "N/A"
+
+    def test_none_like_returns_na(self):
+        """None-equivalent (falsy) results → all display strings are 'N/A'."""
+        # {} is the normal empty case; also verify None if passed accidentally
+        result = self._fn(None)
+        assert result[0] == "N/A"
+
+    def test_error_dict_returns_na_and_error_message(self):
+        results = {"error": "Cerebro crashed"}
+        sharpe, winrate, maxdd, alpha, beta, status = self._fn(results)
+        assert sharpe == "N/A"
+        assert "Cerebro crashed" in status
+
+    def test_returns_six_element_tuple(self):
+        result = self._fn({"sharpe": 1.5, "max_drawdown": 10.0, "win_rate": 55.0,
+                           "alpha": 0.02, "beta": 0.8})
+        assert isinstance(result, tuple)
+        assert len(result) == 6
+
+    # 6b. Shorthand top-level keys (no summary sub-dict) ---------------------
+
+    def test_sharpe_formatted_to_two_decimal_places(self):
+        result = self._fn({"sharpe": 1.23456, "max_drawdown": 0, "win_rate": 0,
+                           "alpha": 0, "beta": 0})
+        assert result[0] == "1.23"
+
+    def test_maxdd_formatted_with_percent_suffix(self):
+        result = self._fn({"sharpe": 0, "max_drawdown": 12.5, "win_rate": 0,
+                           "alpha": 0, "beta": 0})
+        assert result[2] == "12.50%"
+
+    def test_winrate_float_formatted_as_percent_string(self):
+        """win_rate as a float should be formatted 'XX.YY%'."""
+        result = self._fn({"sharpe": 0, "max_drawdown": 0, "win_rate": 62.5,
+                           "alpha": 0, "beta": 0})
+        assert result[1] == "62.50%"
+
+    def test_winrate_string_passed_through_unchanged(self):
+        """win_rate already as a string must not be double-formatted."""
+        result = self._fn({"sharpe": 0, "max_drawdown": 0, "win_rate": "55.00%",
+                           "alpha": 0, "beta": 0})
+        assert result[1] == "55.00%"
+
+    def test_alpha_formatted_to_four_decimal_places(self):
+        result = self._fn({"sharpe": 0, "max_drawdown": 0, "win_rate": 0,
+                           "alpha": 0.123456, "beta": 0})
+        assert result[3] == "0.1235"
+
+    def test_beta_formatted_to_four_decimal_places(self):
+        result = self._fn({"sharpe": 0, "max_drawdown": 0, "win_rate": 0,
+                           "alpha": 0, "beta": 1.234567})
+        assert result[4] == "1.2346"
+
+    # 6c. Summary sub-dict takes priority over shorthand keys ----------------
+
+    def test_summary_dict_sharpe_preferred_over_top_level(self):
+        """summary['Sharpe Ratio'] must shadow top-level 'sharpe' key."""
+        results = {
+            "sharpe": 0.0,
+            "max_drawdown": 0, "win_rate": 0, "alpha": 0, "beta": 0,
+            "summary": {"Sharpe Ratio": 2.5, "Max Drawdown (%)": 0,
+                        "Win Rate": "0.00%", "Alpha": 0, "Beta": 0,
+                        "Final Value": 110000, "P&L": 10000},
+        }
+        assert self._fn(results)[0] == "2.50"
+
+    def test_status_message_contains_final_and_pnl(self):
+        """status_msg must mention the final portfolio value and P&L."""
+        results = {
+            "sharpe": 1.0, "max_drawdown": 5.0, "win_rate": 50.0,
+            "alpha": 0.01, "beta": 0.9,
+            "summary": {
+                "Sharpe Ratio": 1.0, "Max Drawdown (%)": 5.0,
+                "Win Rate": "50.00%", "Alpha": 0.01, "Beta": 0.9,
+                "Final Value": 105000.0, "P&L": 5000.0,
+            },
+        }
+        status = self._fn(results)[5]
+        assert "105,000" in status or "105000" in status
+        assert "5,000" in status or "5000" in status
+
+    def test_status_message_contains_complete_keyword(self):
+        results = {
+            "sharpe": 1.0, "max_drawdown": 5.0, "win_rate": 50.0,
+            "alpha": 0.01, "beta": 0.9,
+        }
+        status = self._fn(results)[5]
+        assert "complete" in status.lower() or "Backtest" in status
+
+
+class TestBuildEquityCurveFigure:
+    """_build_equity_curve_figure must return a valid plotly Figure."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from dash_app.callbacks import _build_equity_curve_figure
+        self._fn = _build_equity_curve_figure
+
+    def test_empty_list_returns_figure(self):
+        """Empty asset-value list must still return a Figure (no crash)."""
+        import plotly.graph_objects as go
+        fig = self._fn([])
+        assert isinstance(fig, go.Figure)
+
+    def test_none_returns_figure(self):
+        import plotly.graph_objects as go
+        fig = self._fn(None)
+        assert isinstance(fig, go.Figure)
+
+    def test_non_empty_list_returns_figure_with_trace(self):
+        """Non-empty value list must produce a Figure with at least one trace."""
+        import plotly.graph_objects as go
+        values = [100000, 101000, 102500, 101800, 103000]
+        fig = self._fn(values)
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) >= 1
+
+    def test_trace_y_values_match_input(self):
+        """The Scatter trace y-values must equal the input list."""
+        values = [100000.0, 110000.0, 95000.0]
+        fig = self._fn(values)
+        assert list(fig.data[0].y) == values
+
+    def test_figure_uses_dark_theme_paper_bgcolor(self):
+        """paper_bgcolor must match THEME['bg_dark'] for visual consistency."""
+        from core.chart_builder import THEME
+        fig = self._fn([1, 2, 3])
+        assert fig.layout.paper_bgcolor == THEME["bg_dark"]
+
+    def test_figure_height_is_200(self):
+        """Equity curve must be 200 px tall to fit the bottom-tabs panel."""
+        fig = self._fn([1, 2, 3])
+        assert fig.layout.height == 200

@@ -360,11 +360,55 @@ def _metrics_panel() -> dbc.Col:
                     }),
                 ],
             ),
-            # Backtest results card
+            # Backtest results card (Phase 1.5)
             html.Div(
                 style={**_PANEL_STYLE, "marginBottom": "10px"},
                 children=[
                     html.P("Backtest Results", style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "6px"}),
+                    # -- Initial cash + run button row --------------------------
+                    html.Div(
+                        style={"display": "flex", "gap": "4px", "marginBottom": "6px", "alignItems": "center"},
+                        children=[
+                            dcc.Input(
+                                id="bt-cash-input",
+                                type="number",
+                                placeholder="Initial Cash",
+                                value=100000,
+                                min=1,
+                                step=1000,
+                                debounce=False,
+                                style={
+                                    "backgroundColor": THEME["bg_dark"],
+                                    "color": THEME["text_main"],
+                                    "border": f"1px solid {THEME['border']}",
+                                    "borderRadius": "4px",
+                                    "fontSize": "11px",
+                                    "flex": "1",
+                                    "minWidth": "0",
+                                    "padding": "4px 5px",
+                                    "outline": "none",
+                                    "boxSizing": "border-box",
+                                },
+                            ),
+                            html.Button(
+                                "Run Backtest",
+                                id="bt-run-btn",
+                                n_clicks=0,
+                                style={
+                                    "backgroundColor": THEME["accent"],
+                                    "color": "#0d1117",
+                                    "border": "none",
+                                    "borderRadius": "4px",
+                                    "padding": "4px 8px",
+                                    "cursor": "pointer",
+                                    "fontSize": "11px",
+                                    "fontWeight": "bold",
+                                    "whiteSpace": "nowrap",
+                                },
+                            ),
+                        ],
+                    ),
+                    # -- Metric rows (populated by run_backtest_callback) --------
                     html.Div([
                         html.Span("Sharpe: ", style=_LABEL_MUTED),
                         html.Span("—", id="bt-sharpe", style={"color": THEME["accent"]}),
@@ -376,7 +420,26 @@ def _metrics_panel() -> dbc.Col:
                     html.Div([
                         html.Span("Max DD: ", style=_LABEL_MUTED),
                         html.Span("—", id="bt-maxdd", style={"color": THEME["red"]}),
-                    ]),
+                    ], style={"marginBottom": "4px"}),
+                    html.Div([
+                        html.Span("Alpha: ", style=_LABEL_MUTED),
+                        html.Span("—", id="bt-alpha", style={"color": THEME["text_muted"]}),
+                    ], style={"marginBottom": "4px"}),
+                    html.Div([
+                        html.Span("Beta: ", style=_LABEL_MUTED),
+                        html.Span("—", id="bt-beta", style={"color": THEME["text_muted"]}),
+                    ], style={"marginBottom": "4px"}),
+                    # -- Status / feedback text ---------------------------------
+                    html.Div(
+                        id="bt-status",
+                        style={
+                            "color": THEME["text_muted"],
+                            "fontSize": "10px",
+                            "marginTop": "4px",
+                            "minHeight": "14px",
+                            "wordBreak": "break-word",
+                        },
+                    ),
                 ],
             ),
             # Chart status info
@@ -389,14 +452,45 @@ def _metrics_panel() -> dbc.Col:
     )
 
 
-def _bottom_tabs_panel() -> html.Div:
-    """Positions + PnL Calendar tab panel, rendered full-width below the main row.
+def _empty_equity_curve_figure():
+    """Return a dark-themed empty line-chart placeholder for the equity curve.
 
-    Two tabs mirror the PyQt5 bottom_tabs area (ui/main_window.py):
-    - "Positions" — open positions list, color-coded by PnL (populated via
-      the update_positions callback in callbacks.py).
+    Returned as the initial ``figure`` for the ``equity-curve-chart`` dcc.Graph.
+    The ``run_backtest_callback`` in callbacks.py replaces it with actual data.
+    """
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    fig.update_layout(
+        paper_bgcolor=THEME["bg_dark"],
+        plot_bgcolor=THEME["bg_card"],
+        font=dict(color=THEME["text_muted"], size=11),
+        margin=dict(l=50, r=10, t=10, b=30),
+        height=200,
+        xaxis=dict(showgrid=False, color=THEME["text_muted"], zeroline=False),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor=THEME["border"],
+            color=THEME["text_muted"],
+            zeroline=False,
+            tickformat="$,.0f",
+        ),
+        showlegend=False,
+    )
+    return fig
+
+
+def _bottom_tabs_panel() -> html.Div:
+    """Positions + PnL Calendar + Equity Curve tab panel, rendered full-width below the main row.
+
+    Three tabs mirror the PyQt5 bottom_tabs area (ui/main_window.py):
+    - "Positions"    — open positions list, color-coded by PnL (populated via
+                       the update_positions callback in callbacks.py).
     - "PnL Calendar" — month-grid calendar (42-cell, 6-week × 7-day) showing
-      realized PnL per day (populated via update_pnl_calendar_display callback).
+                       realized PnL per day (populated via
+                       update_pnl_calendar_display callback).
+    - "Equity Curve" — portfolio value over time, populated by run_backtest_callback
+                       after a backtest is run (Phase 1.5).
 
     Month navigation (◀ / ▶ / Today) drives a dcc.Store which in turn triggers
     the calendar display callback.  Both tabs also refresh after every order
@@ -525,6 +619,35 @@ def _bottom_tabs_panel() -> html.Div:
                                     ),
                                     # 42-cell day grid (populated by update_pnl_calendar_display callback)
                                     html.Div(id="pnl-calendar-grid"),
+                                ],
+                            ),
+                        ],
+                    ),
+                    # ----------------------------------------------------------
+                    # Tab 3: Equity Curve (Phase 1.5)
+                    # ----------------------------------------------------------
+                    dcc.Tab(
+                        label="Equity Curve",
+                        value="equity-curve-tab",
+                        style=_TAB_STYLE,
+                        selected_style=_TAB_SELECTED_STYLE,
+                        children=[
+                            html.Div(
+                                style={**_PANEL_STYLE, "margin": "8px 0"},
+                                children=[
+                                    html.P(
+                                        "Portfolio Equity Curve",
+                                        style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "4px"},
+                                    ),
+                                    dcc.Graph(
+                                        id="equity-curve-chart",
+                                        figure=_empty_equity_curve_figure(),
+                                        config={
+                                            "displayModeBar": False,
+                                            "displaylogo": False,
+                                        },
+                                        style={"height": "200px"},
+                                    ),
                                 ],
                             ),
                         ],

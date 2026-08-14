@@ -446,6 +446,98 @@ def _validate_and_submit_order(
         return _err(f"Order error: {exc}")
 
 
+def _extract_backtest_metrics(results: dict) -> tuple:
+    """Extract display strings from a Backtester results dict.
+
+    Returns a 6-tuple:
+        ``(sharpe_str, winrate_str, maxdd_str, alpha_str, beta_str, status_msg)``
+
+    All values are formatted strings suitable for populating the backtest-results
+    card spans (``bt-sharpe``, ``bt-winrate``, ``bt-maxdd``, ``bt-alpha``,
+    ``bt-beta``) and the ``bt-status`` feedback div.
+
+    Pure function — no Dash callback context required.  Extracted for testability.
+    Mirrors the display-field extraction pattern in ``run_backtest()``
+    (ui/main_window.py ~line 1435-1458), using the same fallback chain:
+    ``summary.get(key, results.get(shorthand, default))``.
+    """
+    if not results:
+        return "N/A", "N/A", "N/A", "N/A", "N/A", "Backtest returned no results."
+    if "error" in results:
+        return "N/A", "N/A", "N/A", "N/A", "N/A", f"Backtest error: {results['error']}"
+
+    summary   = results.get("summary", {})
+    sharpe    = summary.get("Sharpe Ratio",    results.get("sharpe",       0))
+    max_dd    = summary.get("Max Drawdown (%)", results.get("max_drawdown", 0))
+    # NOTE: unlike the other fields, the "Win Rate" default must NOT be built with an
+    # eager f-string (`f"{results.get('win_rate', 0):.2f}%"` as a dict.get() default) —
+    # Python evaluates default-argument expressions unconditionally even when the key
+    # IS present, so a non-numeric results['win_rate'] (e.g. already a formatted string
+    # like "55.00%") would raise ValueError before .get() ever got to ignore the default.
+    if "Win Rate" in summary:
+        win_rate = summary["Win Rate"]
+    else:
+        raw_win_rate = results.get("win_rate", 0)
+        win_rate = (
+            f"{raw_win_rate:.2f}%" if isinstance(raw_win_rate, (int, float)) else raw_win_rate
+        )
+    alpha     = summary.get("Alpha",           results.get("alpha",        0))
+    beta      = summary.get("Beta",            results.get("beta",         0))
+    final_val = summary.get("Final Value", 0)
+    total_pnl = summary.get("P&L",        0)
+
+    sharpe_str  = f"{sharpe:.2f}"  if isinstance(sharpe,   (int, float)) else "N/A"
+    maxdd_str   = f"{max_dd:.2f}%" if isinstance(max_dd,   (int, float)) else "N/A"
+    winrate_str = win_rate         if isinstance(win_rate, str)          else f"{win_rate:.2f}%"
+    alpha_str   = f"{alpha:.4f}"   if isinstance(alpha,    (int, float)) else "N/A"
+    beta_str    = f"{beta:.4f}"    if isinstance(beta,     (int, float)) else "N/A"
+
+    status_msg = (
+        f"Backtest complete | Final: ${final_val:,.2f} | "
+        f"P&L: ${total_pnl:+,.2f} | Sharpe: {sharpe_str} | "
+        f"MaxDD: {maxdd_str} | Win Rate: {winrate_str}"
+    )
+    return sharpe_str, winrate_str, maxdd_str, alpha_str, beta_str, status_msg
+
+
+def _build_equity_curve_figure(total_asset_value: list):
+    """Build a dark-themed equity-curve line chart from *total_asset_value*.
+
+    Called by ``run_backtest_callback`` in ``register_callbacks``.  Returns an
+    empty placeholder figure when *total_asset_value* is falsy (empty list or
+    None) so the chart area never shows a broken layout.
+    """
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    if total_asset_value:
+        fig.add_trace(go.Scatter(
+            y=total_asset_value,
+            mode="lines",
+            line=dict(color=THEME["accent"], width=2),
+            name="Portfolio Value",
+            fill="tozeroy",
+            fillcolor="rgba(88, 166, 255, 0.08)",  # THEME["accent"] @ 8% opacity
+        ))
+    fig.update_layout(
+        paper_bgcolor=THEME["bg_dark"],
+        plot_bgcolor=THEME["bg_card"],
+        font=dict(color=THEME["text_muted"], size=11),
+        margin=dict(l=50, r=10, t=10, b=30),
+        height=200,
+        xaxis=dict(showgrid=False, color=THEME["text_muted"], zeroline=False),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor=THEME["border"],
+            color=THEME["text_muted"],
+            zeroline=False,
+            tickformat="$,.0f",
+        ),
+        showlegend=False,
+    )
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Callback registration
 # ---------------------------------------------------------------------------
@@ -778,7 +870,153 @@ def register_callbacks(app: dash.Dash) -> None:
         return _build_positions_content(_broker_or_none())
 
     # ------------------------------------------------------------------
+    # Phase 1.5: bt-run-btn → run backtest + update results panel
+    # (Supersedes the forward-reference "Phase 3" placeholder that was here.)
+    # ------------------------------------------------------------------
+
+    #: Strategy dropdown label → (module, class) for importlib.import_module
+    _STRATEGY_CLASS_MAP = {
+        "MACD/RSI":      ("strategies.simple_strategies", "MACD_RSI_Strategy"),
+        "EMA Crossover": ("strategies.simple_strategies", "EMACrossoverStrategy"),
+        "Stochastic":    ("strategies.simple_strategies", "StochasticStrategy"),
+    }
+
+    @app.callback(
+        Output("bt-sharpe", "children"),
+        Output("bt-winrate", "children"),
+        Output("bt-maxdd", "children"),
+        Output("bt-alpha", "children"),
+        Output("bt-beta", "children"),
+        Output("bt-status", "children"),
+        Output("bt-status", "style"),
+        Output("equity-curve-chart", "figure"),
+        Output("main-chart", "figure", allow_duplicate=True),
+        Input("bt-run-btn", "n_clicks"),
+        State("active-symbol-store", "data"),
+        State("strategy-dropdown", "value"),
+        State("bt-cash-input", "value"),
+        prevent_initial_call=True,
+    )
+    def run_backtest_callback(
+        n_clicks: Optional[int],
+        symbol: Optional[str],
+        strategy_name: Optional[str],
+        cash: Optional[float],
+    ):
+        """Run a backtest and update the Backtest Results panel + Equity Curve tab.
+
+        Phase 1.5 — supersedes the "Phase 3" forward-reference placeholder.
+
+        Flow:
+        1. Validate: symbol must be loaded, a strategy must be selected.
+        2. Load OHLCV data fresh via DataLoader (same path as load_chart).
+        3. Map strategy-dropdown value → backtrader strategy class via
+           _STRATEGY_CLASS_MAP (avoids a circular import with ui/).
+        4. Run Backtester; extract metrics via _extract_backtest_metrics().
+        5. Build equity-curve-chart figure from total_asset_value list.
+        6. Rebuild main-chart with signal markers via overlay_signals()
+           (allow_duplicate=True since load_chart also writes to main-chart).
+
+        Mirrors ``run_backtest()`` in ui/main_window.py, adapted for Dash's
+        stateless callback model.
+        """
+        _err_style = {**_ORDER_STATUS_BASE_STYLE, "color": THEME["red"]}
+        _ok_style  = {**_ORDER_STATUS_BASE_STYLE, "color": THEME["green"]}
+        _info_style = {**_ORDER_STATUS_BASE_STYLE, "color": THEME["text_muted"]}
+
+        # 9-output no-op for the defensive early-exit guard
+        _noop9 = (no_update,) * 9
+
+        def _err(msg: str):
+            return (
+                no_update, no_update, no_update, no_update, no_update,
+                msg, _err_style,
+                no_update, no_update,
+            )
+
+        def _info(msg: str):
+            return (
+                no_update, no_update, no_update, no_update, no_update,
+                msg, _info_style,
+                no_update, no_update,
+            )
+
+        if not n_clicks:
+            return _noop9
+
+        # -- Input validation -----------------------------------------------
+        if not symbol:
+            return _err("Load a chart first before running a backtest.")
+
+        if not strategy_name or strategy_name == "None":
+            return _err("Select a strategy in the top bar before running a backtest.")
+
+        if strategy_name not in _STRATEGY_CLASS_MAP:
+            return _err(f"Unknown strategy: {strategy_name!r}")
+
+        initial_cash = float(cash) if (cash and cash > 0) else 100_000.0
+
+        # -- Data + backtest ------------------------------------------------
+        try:
+            from core.data_loader import DataLoader
+            loader = DataLoader()
+            df = loader.load_data(
+                symbol=symbol,
+                source="Historical",
+                live=False,
+                days=365,
+            )
+            if df is None or df.empty:
+                return _err(f"No data available for {symbol}. Load the chart first.")
+
+            mod_name, cls_name = _STRATEGY_CLASS_MAP[strategy_name]
+            import importlib
+            strategy_cls = getattr(importlib.import_module(mod_name), cls_name)
+
+            from core.backtester import Backtester
+            backtester = Backtester()
+            backtester.add_data(df.copy())
+            backtester.add_strategy(strategy_cls)
+            results = backtester.run_backtest(cash=initial_cash)
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[Dash] run_backtest error: %s", exc)
+            return _err(f"Backtest error: {exc}")
+
+        # -- Extract metrics ------------------------------------------------
+        sharpe_str, winrate_str, maxdd_str, alpha_str, beta_str, status_msg = (
+            _extract_backtest_metrics(results)
+        )
+
+        # -- Equity curve figure --------------------------------------------
+        equity_fig = _build_equity_curve_figure(results.get("total_asset_value", []))
+
+        # -- Rebuild main chart with signal markers -------------------------
+        signals = results.get("signals", [])
+        try:
+            chart_fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False)
+            add_live_tick_trace(chart_fig)
+            if signals:
+                overlay_signals(chart_fig, signals)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[Dash] signal overlay failed: %s", exc)
+            chart_fig = no_update
+
+        logger.info("[Dash] backtest complete: sharpe=%s winrate=%s maxdd=%s", sharpe_str, winrate_str, maxdd_str)
+
+        return (
+            sharpe_str,
+            winrate_str,
+            maxdd_str,
+            alpha_str,
+            beta_str,
+            status_msg,
+            _ok_style,
+            equity_fig,
+            chart_fig,
+        )
+
+    # ------------------------------------------------------------------
     # Placeholder wiring points for future phases
     # ------------------------------------------------------------------
-    # Phase 3: backtest trigger → update bt-sharpe / bt-winrate / bt-maxdd
     # Phase 4: live P&L polling → account-balance / pnl-value
