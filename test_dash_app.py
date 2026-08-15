@@ -138,6 +138,9 @@ class TestLayoutStructure:
         "pnl-calendar-grid",
         # Equity Curve tab (Phase 1.5)
         "equity-curve-chart",
+        # Orders tab (Phase 1.6)
+        "orders-table",
+        "orders-status",
     ]
 
     @pytest.mark.parametrize("expected_id", _EXPECTED_IDS)
@@ -547,16 +550,17 @@ class TestDashAppImport:
         assert dash_module.app.layout is not None
 
     def test_callbacks_registered(self):
-        """After import, app.callback_map must contain at least eight callbacks:
+        """After import, app.callback_map must contain at least nine callbacks:
         the four Phase-1 callbacks (load_chart, update_live_price,
         toggle_price_input, submit_order_callback) plus three Phase-1.4 callbacks
         (update_calendar_store, update_pnl_calendar_display, update_positions)
-        plus one Phase-1.5 callback (run_backtest_callback)."""
+        plus one Phase-1.5 callback (run_backtest_callback) plus one Phase-1.6
+        callback (update_orders_table)."""
         import dash_app.app as dash_module
         # Dash stores callbacks in app.callback_map (dict keyed by output ID string).
         callback_map = dash_module.app.callback_map
-        assert len(callback_map) >= 8, (
-            f"Expected at least 8 registered callbacks, found {len(callback_map)}: "
+        assert len(callback_map) >= 9, (
+            f"Expected at least 9 registered callbacks, found {len(callback_map)}: "
             f"{list(callback_map.keys())}"
         )
 
@@ -916,3 +920,433 @@ class TestBuildEquityCurveFigure:
         """Equity curve must be 200 px tall to fit the bottom-tabs panel."""
         fig = self._fn([1, 2, 3])
         assert fig.layout.height == 200
+
+
+# ---------------------------------------------------------------------------
+# 7. Orders / trade-blotter tab (Phase 1.6)
+# ---------------------------------------------------------------------------
+
+class TestOrdersTableHelper:
+    """_build_orders_table_data covers no-broker, empty, and populated states."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from dash_app.callbacks import _build_orders_table_data
+        self._fn = _build_orders_table_data
+
+    # 7a. Degenerate inputs --------------------------------------------------
+
+    def test_no_broker_returns_two_tuple(self):
+        data, status = self._fn(None)
+        assert isinstance(data, list)
+        assert isinstance(status, str)
+
+    def test_no_broker_returns_empty_data(self):
+        data, _ = self._fn(None)
+        assert data == []
+
+    def test_no_broker_status_text(self):
+        _, status = self._fn(None)
+        assert "none yet" in status.lower() or "orders" in status.lower()
+
+    def test_broker_without_order_history_attr_returns_empty(self):
+        from unittest.mock import MagicMock
+        broker = MagicMock(spec=[])  # no 'order_history' attribute
+        data, status = self._fn(broker)
+        assert data == []
+        assert "none yet" in status.lower() or "orders" in status.lower()
+
+    def test_empty_order_history_returns_empty_data(self):
+        from unittest.mock import MagicMock
+        broker = MagicMock()
+        broker.order_history = []
+        data, status = self._fn(broker)
+        assert data == []
+
+    # 7b. Populated order history --------------------------------------------
+
+    def test_single_filled_buy_order_produces_one_row(self):
+        """A broker with one filled buy produces exactly one data row."""
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "AAPL"
+        order.side.value = "buy"
+        order.order_type.value = "market"
+        order.status.value = "filled"
+        order.filled_qty = 1.0
+        order.filled_avg_price = 150.0
+        broker.order_history = [order]
+
+        data, status = self._fn(broker)
+        assert len(data) == 1
+
+    def test_row_keys_match_datatable_columns(self):
+        """Every row dict must contain exactly the 7 column IDs."""
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "BTCUSDT"
+        order.side.value = "buy"
+        order.order_type.value = "market"
+        order.status.value = "filled"
+        order.filled_qty = 0.5
+        order.filled_avg_price = 45000.0
+        broker.order_history = [order]
+
+        data, _ = self._fn(broker)
+        expected_keys = {"time", "symbol", "side", "type", "qty", "fill_price", "status"}
+        assert set(data[0].keys()) == expected_keys
+
+    def test_side_is_uppercased(self):
+        """PyQt5 displays side as uppercase (BUY / SELL)."""
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "AAPL"
+        order.side.value = "buy"
+        order.order_type.value = "market"
+        order.status.value = "filled"
+        order.filled_qty = 1.0
+        order.filled_avg_price = 150.0
+        broker.order_history = [order]
+
+        data, _ = self._fn(broker)
+        assert data[0]["side"] == "BUY"
+
+    def test_sell_side_is_uppercased(self):
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "AAPL"
+        order.side.value = "sell"
+        order.order_type.value = "market"
+        order.status.value = "filled"
+        order.filled_qty = 1.0
+        order.filled_avg_price = 150.0
+        broker.order_history = [order]
+
+        data, _ = self._fn(broker)
+        assert data[0]["side"] == "SELL"
+
+    def test_type_is_capitalized(self):
+        """Order type must be title-cased (Market / Limit / Stop)."""
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "AAPL"
+        order.side.value = "buy"
+        order.order_type.value = "limit"
+        order.status.value = "pending"
+        order.filled_qty = 0.0
+        order.filled_avg_price = 0.0
+        broker.order_history = [order]
+
+        data, _ = self._fn(broker)
+        assert data[0]["type"] == "Limit"
+
+    def test_status_is_capitalized(self):
+        """Status must be title-cased (Filled / Pending / Rejected / Canceled)."""
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "AAPL"
+        order.side.value = "buy"
+        order.order_type.value = "market"
+        order.status.value = "filled"
+        order.filled_qty = 1.0
+        order.filled_avg_price = 150.0
+        broker.order_history = [order]
+
+        data, _ = self._fn(broker)
+        assert data[0]["status"] == "Filled"
+
+    def test_fill_price_formatted_with_dollar_sign(self):
+        """Filled orders must show price as '$NNN.NNNN'."""
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "AAPL"
+        order.side.value = "buy"
+        order.order_type.value = "market"
+        order.status.value = "filled"
+        order.filled_qty = 1.0
+        order.filled_avg_price = 150.25
+        broker.order_history = [order]
+
+        data, _ = self._fn(broker)
+        assert data[0]["fill_price"].startswith("$")
+        assert "150.2500" in data[0]["fill_price"]
+
+    def test_zero_fill_price_shows_dash(self):
+        """Unfilled orders (fill_price == 0 / falsy) must show '—'."""
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "AAPL"
+        order.side.value = "buy"
+        order.order_type.value = "limit"
+        order.status.value = "pending"
+        order.filled_qty = 0.0
+        order.filled_avg_price = 0.0  # not yet filled
+        broker.order_history = [order]
+
+        data, _ = self._fn(broker)
+        assert data[0]["fill_price"] == "—"
+
+    def test_symbol_preserved_as_is(self):
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "BTCUSDT"
+        order.side.value = "buy"
+        order.order_type.value = "market"
+        order.status.value = "filled"
+        order.filled_qty = 0.001
+        order.filled_avg_price = 45000.0
+        broker.order_history = [order]
+
+        data, _ = self._fn(broker)
+        assert data[0]["symbol"] == "BTCUSDT"
+
+    def test_multiple_orders_produce_correct_count(self):
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        orders = []
+        for i in range(5):
+            o = MagicMock()
+            o.created_at = time.time()
+            o.symbol = "AAPL"
+            o.side.value = "buy"
+            o.order_type.value = "market"
+            o.status.value = "filled"
+            o.filled_qty = float(i + 1)
+            o.filled_avg_price = 150.0
+            orders.append(o)
+        broker.order_history = orders
+
+        data, status = self._fn(broker)
+        assert len(data) == 5
+
+    def test_status_text_contains_total_count(self):
+        """status_text must mention the total order count."""
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        order = MagicMock()
+        order.created_at = time.time()
+        order.symbol = "AAPL"
+        order.side.value = "buy"
+        order.order_type.value = "market"
+        order.status.value = "filled"
+        order.filled_qty = 1.0
+        order.filled_avg_price = 150.0
+        broker.order_history = [order]
+
+        _, status = self._fn(broker)
+        assert "1" in status
+
+    def test_status_text_shows_filled_count(self):
+        """status_text must distinguish total vs filled count."""
+        from unittest.mock import MagicMock
+        import time
+
+        broker = MagicMock()
+        # 2 orders: 1 filled, 1 pending
+        orders = []
+        for status_val in ("filled", "pending"):
+            o = MagicMock()
+            o.created_at = time.time()
+            o.symbol = "AAPL"
+            o.side.value = "buy"
+            o.order_type.value = "market"
+            o.status.value = status_val
+            o.filled_qty = 1.0
+            o.filled_avg_price = 150.0 if status_val == "filled" else 0.0
+            orders.append(o)
+        broker.order_history = orders
+
+        _, status_text = self._fn(broker)
+        # "Orders: 2 total, 1 filled"
+        assert "2" in status_text
+        assert "1" in status_text
+        assert "filled" in status_text.lower()
+
+    # 7c. Real SimulatedBroker integration ----------------------------------
+
+    def test_real_broker_after_buy_shows_one_row(self):
+        """After a real market buy via SimulatedBroker, the blotter has 1 row."""
+        from brokers.simulatedbroker import SimulatedBroker
+        from dash_app.callbacks import _validate_and_submit_order
+        broker = SimulatedBroker()
+        try:
+            _validate_and_submit_order(broker, "buy", 1.0, "market", None, "AAPL")
+            data, status = self._fn(broker)
+            assert len(data) >= 1
+            # The row must reference AAPL
+            assert any(row["symbol"] == "AAPL" for row in data)
+        finally:
+            broker.close()
+
+    def test_real_broker_filled_order_status_text(self):
+        """After a filled buy, status_text must say '1 total, 1 filled'."""
+        from brokers.simulatedbroker import SimulatedBroker
+        from dash_app.callbacks import _validate_and_submit_order
+        broker = SimulatedBroker()
+        try:
+            _validate_and_submit_order(broker, "buy", 1.0, "market", None, "AAPL")
+            _, status = self._fn(broker)
+            assert "total" in status.lower()
+            assert "filled" in status.lower()
+        finally:
+            broker.close()
+
+
+class TestOrdersTabLayout:
+    """Layout-level tests for the Orders tab component IDs and initial state."""
+
+    @pytest.fixture(scope="class")
+    def layout(self):
+        from dash_app.layout import build_layout
+        return build_layout()
+
+    def test_orders_table_in_layout(self, layout):
+        """orders-table must appear in the layout component tree."""
+        from dash_app.layout import build_layout
+        all_ids = _collect_ids(build_layout())
+        assert "orders-table" in all_ids
+
+    def test_orders_status_in_layout(self, layout):
+        """orders-status must appear in the layout component tree."""
+        from dash_app.layout import build_layout
+        all_ids = _collect_ids(build_layout())
+        assert "orders-status" in all_ids
+
+    def test_orders_table_has_seven_columns(self, layout):
+        """orders-table must declare exactly 7 columns matching the PyQt5 blotter."""
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component as DashComponent
+
+        def _find_by_id(component, target_id):
+            try:
+                if getattr(component, "id", None) == target_id:
+                    return component
+            except Exception:
+                pass
+            try:
+                children = component.children
+            except AttributeError:
+                return None
+            if children is None:
+                return None
+            if not isinstance(children, list):
+                children = [children]
+            for child in children:
+                if isinstance(child, DashComponent):
+                    result = _find_by_id(child, target_id)
+                    if result is not None:
+                        return result
+            return None
+
+        layout = build_layout()
+        table = _find_by_id(layout, "orders-table")
+        assert table is not None, "orders-table not found in layout"
+        assert len(table.columns) == 7, (
+            f"Expected 7 columns, found {len(table.columns)}: {table.columns}"
+        )
+
+    def test_orders_table_column_ids_match_pyqt5(self, layout):
+        """Column IDs must match the 7 PyQt5 _orders_table columns."""
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component as DashComponent
+
+        def _find_by_id(component, target_id):
+            try:
+                if getattr(component, "id", None) == target_id:
+                    return component
+            except Exception:
+                pass
+            try:
+                children = component.children
+            except AttributeError:
+                return None
+            if children is None:
+                return None
+            if not isinstance(children, list):
+                children = [children]
+            for child in children:
+                if isinstance(child, DashComponent):
+                    result = _find_by_id(child, target_id)
+                    if result is not None:
+                        return result
+            return None
+
+        layout = build_layout()
+        table = _find_by_id(layout, "orders-table")
+        assert table is not None
+        col_ids = [c["id"] for c in table.columns]
+        expected = ["time", "symbol", "side", "type", "qty", "fill_price", "status"]
+        assert col_ids == expected, f"Expected {expected}, got {col_ids}"
+
+    def test_orders_table_starts_with_empty_data(self, layout):
+        """orders-table must start with data=[] (no rows before any order)."""
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component as DashComponent
+
+        def _find_by_id(component, target_id):
+            try:
+                if getattr(component, "id", None) == target_id:
+                    return component
+            except Exception:
+                pass
+            try:
+                children = component.children
+            except AttributeError:
+                return None
+            if children is None:
+                return None
+            if not isinstance(children, list):
+                children = [children]
+            for child in children:
+                if isinstance(child, DashComponent):
+                    result = _find_by_id(child, target_id)
+                    if result is not None:
+                        return result
+            return None
+
+        layout = build_layout()
+        table = _find_by_id(layout, "orders-table")
+        assert table is not None
+        assert table.data == [] or table.data is None, (
+            f"orders-table should start empty, found: {table.data}"
+        )

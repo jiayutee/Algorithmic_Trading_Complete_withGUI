@@ -129,6 +129,69 @@ _CAL_DIMMED_FG = "#484f58"  # very muted text for out-of-month filler cells
 # Positions and PnL Calendar component builders (pure helpers, no Dash context)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Orders / trade-blotter helper (pure helper, no Dash context)
+# ---------------------------------------------------------------------------
+
+def _build_orders_table_data(broker) -> tuple:
+    """Build ``(data, status_text)`` for the ``orders-table`` DataTable.
+
+    ``data``        — list of row dicts, one per order in
+                      ``broker.order_history``.
+    ``status_text`` — summary string matching the PyQt5 label format:
+                      "Orders: N total, M filled".
+
+    Column keys and formatting mirror ``_refresh_orders_tab()`` in
+    ``ui/main_window.py`` exactly:
+    ======= ====== ==== ==== ==== =========== ======
+    time    symbol side type qty  fill_price  status
+    ======= ====== ==== ==== ==== =========== ======
+
+    Safe to call with ``broker=None`` — returns empty data and
+    "Orders: none yet".
+    """
+    _EMPTY: tuple = ([], "Orders: none yet")
+
+    if broker is None or not hasattr(broker, "order_history"):
+        return _EMPTY
+
+    try:
+        history = broker.order_history
+        if not history:
+            return _EMPTY
+
+        data = []
+        for order in history:
+            ts = dt_mod.datetime.fromtimestamp(order.created_at).strftime("%H:%M:%S")
+            side_str   = order.side.value       if hasattr(order.side,       "value") else str(order.side)
+            type_str   = order.order_type.value if hasattr(order.order_type, "value") else str(order.order_type)
+            status_str = order.status.value     if hasattr(order.status,     "value") else str(order.status)
+            fill_price = (
+                f"${order.filled_avg_price:,.4f}" if order.filled_avg_price else "—"
+            )
+
+            data.append({
+                "time":       ts,
+                "symbol":     order.symbol,
+                "side":       side_str.upper(),
+                "type":       type_str.capitalize(),
+                "qty":        f"{order.filled_qty:.4f}",
+                "fill_price": fill_price,
+                "status":     status_str.capitalize(),
+            })
+
+        count  = len(history)
+        filled = sum(
+            1 for o in history
+            if (o.status.value if hasattr(o.status, "value") else str(o.status)) == "filled"
+        )
+        status_text = f"Orders: {count} total, {filled} filled"
+        return data, status_text
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[Dash] orders table build error: %s", exc)
+        return [], f"Orders: error — {exc}"
+
 def _build_position_row(symbol: str, pos) -> html.Div:
     """Build one row in the positions panel for a single open position.
 
@@ -1015,6 +1078,28 @@ def register_callbacks(app: dash.Dash) -> None:
             equity_fig,
             chart_fig,
         )
+
+    # ------------------------------------------------------------------
+    # Phase 1.6: order-status → rebuild orders table
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("orders-table", "data"),
+        Output("orders-status", "children"),
+        Input("order-status", "children"),
+    )
+    def update_orders_table(order_status: object):
+        """Rebuild the Orders trade-blotter table after every order placement.
+
+        Triggered by changes to ``order-status`` children — the same pattern
+        used by ``update_positions`` and ``update_pnl_calendar_display`` so
+        the blotter is always up-to-date without a separate polling interval.
+
+        Mirrors ``_refresh_orders_tab()`` in ui/main_window.py: reads
+        ``broker.order_history``, formats each row, and emits a summary
+        string ("Orders: N total, M filled") to the status label.
+        """
+        data, status_text = _build_orders_table_data(_broker_or_none())
+        return data, status_text
 
     # ------------------------------------------------------------------
     # Placeholder wiring points for future phases

@@ -17,7 +17,7 @@ from __future__ import annotations
 import datetime
 
 import dash_bootstrap_components as dbc
-from dash import dcc, html
+from dash import dcc, html, dash_table
 
 from core.chart_builder import THEME, build_candlestick_figure
 
@@ -647,6 +647,160 @@ def _bottom_tabs_panel() -> html.Div:
                                             "displaylogo": False,
                                         },
                                         style={"height": "200px"},
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    # ----------------------------------------------------------
+                    # Tab 4: Orders / Trade Blotter (Phase 1.6)
+                    # Mirrors the PyQt5 _orders_table (7 cols):
+                    #   Time | Symbol | Side | Type | Qty | Fill Price | Status
+                    # Populated by the update_orders_table callback in
+                    # callbacks.py after every order placement.
+                    # ----------------------------------------------------------
+                    dcc.Tab(
+                        label="Orders",
+                        value="orders-tab",
+                        style=_TAB_STYLE,
+                        selected_style=_TAB_SELECTED_STYLE,
+                        children=[
+                            html.Div(
+                                style={**_PANEL_STYLE, "margin": "8px 0"},
+                                children=[
+                                    # Header row: title + status summary
+                                    html.Div(
+                                        style={
+                                            "display": "flex",
+                                            "alignItems": "center",
+                                            "marginBottom": "6px",
+                                        },
+                                        children=[
+                                            html.P(
+                                                "Order History",
+                                                style={
+                                                    **_LABEL_MUTED,
+                                                    "fontWeight": "600",
+                                                    "marginBottom": "0",
+                                                    "flex": "1",
+                                                },
+                                            ),
+                                            html.Div(
+                                                id="orders-status",
+                                                style={
+                                                    "color": THEME["text_muted"],
+                                                    "fontSize": "11px",
+                                                },
+                                                children="Orders: none yet",
+                                            ),
+                                        ],
+                                    ),
+                                    # Trade-blotter DataTable — dark-themed to match
+                                    # the PyQt5 QTableWidget style.
+                                    dash_table.DataTable(
+                                        id="orders-table",
+                                        columns=[
+                                            {"name": "Time",       "id": "time"},
+                                            {"name": "Symbol",     "id": "symbol"},
+                                            {"name": "Side",       "id": "side"},
+                                            {"name": "Type",       "id": "type"},
+                                            {"name": "Qty",        "id": "qty"},
+                                            {"name": "Fill Price", "id": "fill_price"},
+                                            {"name": "Status",     "id": "status"},
+                                        ],
+                                        data=[],
+                                        page_action="none",   # show all rows
+                                        sort_action="native", # client-side sort
+                                        sort_mode="single",
+                                        style_table={
+                                            "overflowX": "auto",
+                                            "overflowY": "auto",
+                                            "maxHeight": "200px",
+                                            "backgroundColor": THEME["bg_dark"],
+                                            "border": f"1px solid {THEME['border']}",
+                                            "borderRadius": "4px",
+                                        },
+                                        style_cell={
+                                            "backgroundColor": THEME["bg_dark"],
+                                            "color": THEME["text_main"],
+                                            "border": f"1px solid {THEME['border']}",
+                                            "fontSize": "11px",
+                                            "fontFamily": "'SF Mono', 'Consolas', 'Menlo', monospace",
+                                            "textAlign": "center",
+                                            "padding": "4px 8px",
+                                            "minWidth": "60px",
+                                        },
+                                        style_header={
+                                            "backgroundColor": THEME["bg_card"],
+                                            "color": THEME["text_muted"],
+                                            "fontWeight": "600",
+                                            "fontSize": "10px",
+                                            "border": f"1px solid {THEME['border']}",
+                                            "textTransform": "uppercase",
+                                            "letterSpacing": "0.5px",
+                                            "padding": "4px 8px",
+                                        },
+                                        # Color-coding rows by side + status —
+                                        # mirrors PyQt5's _SIDE_COLORS / _STATUS_COLORS.
+                                        style_data_conditional=[
+                                            # Side: BUY → dark-green bg + green text
+                                            {
+                                                "if": {
+                                                    "filter_query": "{side} = 'BUY'",
+                                                    "column_id": "side",
+                                                },
+                                                "backgroundColor": "#1a4731",
+                                                "color": "#3fb950",
+                                                "fontWeight": "600",
+                                            },
+                                            # Side: SELL → dark-red bg + red text
+                                            {
+                                                "if": {
+                                                    "filter_query": "{side} = 'SELL'",
+                                                    "column_id": "side",
+                                                },
+                                                "backgroundColor": "#3d1a1a",
+                                                "color": "#f85149",
+                                                "fontWeight": "600",
+                                            },
+                                            # Status: Filled → green
+                                            {
+                                                "if": {
+                                                    "filter_query": "{status} = 'Filled'",
+                                                    "column_id": "status",
+                                                },
+                                                "color": "#3fb950",
+                                            },
+                                            # Status: Pending → orange
+                                            {
+                                                "if": {
+                                                    "filter_query": "{status} = 'Pending'",
+                                                    "column_id": "status",
+                                                },
+                                                "color": "#f0883e",
+                                            },
+                                            # Status: Rejected → red
+                                            {
+                                                "if": {
+                                                    "filter_query": "{status} = 'Rejected'",
+                                                    "column_id": "status",
+                                                },
+                                                "color": "#f85149",
+                                            },
+                                            # Status: Canceled → muted
+                                            {
+                                                "if": {
+                                                    "filter_query": "{status} = 'Canceled'",
+                                                    "column_id": "status",
+                                                },
+                                                "color": "#8b949e",
+                                            },
+                                            # Alternating row shading
+                                            {
+                                                "if": {"row_index": "odd"},
+                                                "backgroundColor": "#0f1419",
+                                            },
+                                        ],
                                     ),
                                 ],
                             ),
