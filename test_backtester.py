@@ -934,6 +934,29 @@ class TestAlphaBetaComputation:
             f"'beta' must be numeric; got {type(results['beta'])}"
         )
 
+    def test_negative_beta_inverse_correlated_strategy(self):
+        """When strategy returns are exactly the inverse of benchmark returns,
+        beta must be -1 and alpha must be 0.
+
+        For strat = -bench:
+          cov(-bench, bench) = -var(bench)  → beta = -1
+          alpha = mean(-bench)*252 - (-1)*mean(bench)*252
+                = -mean(bench)*252 + mean(bench)*252 = 0  (exact cancellation)
+        """
+        rng = np.random.default_rng(7)
+        bench = rng.normal(0.0, 0.01, 200)   # 200 daily returns, zero-mean
+        strat = -bench
+
+        alpha, beta = Backtester.compute_alpha_beta(strat, bench)
+
+        assert beta == pytest.approx(-1.0, abs=1e-9), (
+            f"Expected beta=-1.0 for inverse-correlated strategy; got beta={beta}"
+        )
+        # alpha cancels exactly for any sample mean: alpha = 0
+        assert alpha == pytest.approx(0.0, abs=1e-9), (
+            f"Expected alpha=0.0 for inverse strategy; got alpha={alpha}"
+        )
+
     def test_report_unchanged_when_no_benchmark_supplied(self):
         """Passing benchmark_ticker=None must not break the report — all
         required keys must still be present and alpha/beta must default to 0.0."""

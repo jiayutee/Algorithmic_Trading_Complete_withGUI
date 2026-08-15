@@ -1513,6 +1513,174 @@ class TestLivePriceService:
             assert service.subscribed_symbols() == ["ETHUSDT"]
             service.stop()
 
+    def test_empty_bids_in_message_leaves_price_unchanged(self, service):
+        """A depth update with empty bids must not update the price cache.
+
+        The _on_update closure inside subscribe() only processes a message when
+        both bids and asks are non-empty ('if bids and asks').  An empty bids
+        list should short-circuit silently, leaving get_price() as None.
+        """
+        ws_instances = []
+
+        class EmptyBidsFakeWSApp:
+            def __init__(self_, url, on_open=None, on_close=None,
+                         on_message=None, on_error=None, **kw):
+                self_._on_open = on_open
+                self_._on_close = on_close
+                self_._on_message = on_message
+                self_._release = threading.Event()
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                # Depth update with an empty bid book
+                msg = json.dumps({
+                    "e": "depthUpdate",
+                    "E": int(time.time() * 1000),
+                    "s": "BTCUSDT",
+                    "b": [],                        # empty bids
+                    "a": [["50001.0", "0.5"]],
+                })
+                if self_._on_message:
+                    self_._on_message(self_, msg)
+                self_._release.wait(timeout=5.0)
+                if self_._on_close:
+                    self_._on_close(self_, None, None)
+
+            def close(self_):
+                self_._release.set()
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: EmptyBidsFakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT")
+            time.sleep(0.1)
+            price = service.get_price("BTCUSDT")
+            service.stop()
+
+        assert price is None, (
+            "get_price() must remain None when the order-book message has empty bids"
+        )
+
+    def test_malformed_bid_price_leaves_price_cache_unchanged(self, service):
+        """A non-numeric bid price must be caught gracefully and leave the cache at
+        its last valid value.
+
+        After one valid message sets the mid-price, a second message with a
+        non-parseable bid string triggers ValueError inside _on_update's
+        try/except, leaving get_price() at the first valid mid-price.
+        """
+        ws_instances = []
+
+        class TwoMessageFakeWSApp:
+            def __init__(self_, url, on_open=None, on_close=None,
+                         on_message=None, on_error=None, **kw):
+                self_._on_open = on_open
+                self_._on_close = on_close
+                self_._on_message = on_message
+                self_._release = threading.Event()
+                ws_instances.append(self_)
+
+            def run_forever(self_, ping_interval=None, ping_timeout=None):
+                if self_._on_open:
+                    self_._on_open(self_)
+                # First: valid message → mid = (50000+50001)/2 = 50000.5
+                valid_msg = json.dumps({
+                    "e": "depthUpdate",
+                    "E": int(time.time() * 1000),
+                    "s": "BTCUSDT",
+                    "b": [["50000.0", "1.0"]],
+                    "a": [["50001.0", "0.5"]],
+                })
+                if self_._on_message:
+                    self_._on_message(self_, valid_msg)
+                # Second: malformed bid string → ValueError → cache unchanged
+                bad_msg = json.dumps({
+                    "e": "depthUpdate",
+                    "E": int(time.time() * 1000),
+                    "s": "BTCUSDT",
+                    "b": [["not-a-number", "1.0"]],
+                    "a": [["50001.0", "0.5"]],
+                })
+                if self_._on_message:
+                    self_._on_message(self_, bad_msg)
+                self_._release.wait(timeout=5.0)
+                if self_._on_close:
+                    self_._on_close(self_, None, None)
+
+            def close(self_):
+                self_._release.set()
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: TwoMessageFakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT")
+            time.sleep(0.1)
+            price = service.get_price("BTCUSDT")
+            service.stop()
+
+        expected_mid = (50000.0 + 50001.0) / 2.0
+        assert price == pytest.approx(expected_mid), (
+            f"Price must retain the valid mid-price after a malformed message; got {price}"
+        )
+
+    def test_resubscribe_after_unsubscribe_delivers_fresh_prices(self, service):
+        """Unsubscribing then re-subscribing to the same symbol must work like a
+        fresh subscribe — the cache is reset to None after unsubscribe and then
+        populated again after a new message arrives.
+        """
+        ws_instances = []
+        bid, ask = 55000.0, 55002.0
+        FakeWSApp = self._make_message_ws_class("BTCUSDT", bid, ask, ws_instances)
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            # First subscription cycle
+            service.subscribe("BTCUSDT")
+            time.sleep(0.1)
+            assert service.get_price("BTCUSDT") is not None
+
+            service.unsubscribe("BTCUSDT")
+            assert service.get_price("BTCUSDT") is None
+            assert "BTCUSDT" not in service.subscribed_symbols()
+
+            # Re-subscribe — must not raise and must receive new messages
+            service.subscribe("BTCUSDT")
+            time.sleep(0.1)
+            price = service.get_price("BTCUSDT")
+            service.stop()
+
+        expected_mid = (bid + ask) / 2.0
+        assert price == pytest.approx(expected_mid), (
+            f"Expected mid-price {expected_mid} on re-subscribe; got {price}"
+        )
+        # subscribed_symbols() must have reported the symbol during the second cycle
+        # (verified implicitly: if subscribe raised, stop() above would have failed)
+
+    def test_crashing_callback_does_not_block_price_update(self, service):
+        """A user callback that raises must not prevent the price cache from being
+        updated.  LivePriceService._on_update updates _price_cache *before* calling
+        the user callback, and wraps the callback call in try/except, so the price
+        should be correct even when the callback always raises RuntimeError.
+        """
+        ws_instances = []
+        bid, ask = 49000.0, 49002.0
+        FakeWSApp = self._make_message_ws_class("BTCUSDT", bid, ask, ws_instances)
+
+        def crashing_callback(update):
+            raise RuntimeError("intentional callback error for test")
+
+        with patch("websocket.WebSocketApp",
+                   side_effect=lambda url, **kw: FakeWSApp(url, **kw)):
+            service.subscribe("BTCUSDT", callback=crashing_callback)
+            time.sleep(0.1)
+            price = service.get_price("BTCUSDT")
+            service.stop()
+
+        expected_mid = (bid + ask) / 2.0
+        assert price == pytest.approx(expected_mid), (
+            f"Price must be updated to {expected_mid} even when the callback raises; got {price}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: DataLoader.get_earnings_calendar (Phase 0.3)

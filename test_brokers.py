@@ -701,6 +701,75 @@ class TestRealizedUnrealizedPnL:
         )
         b.close()
 
+    # --- short positions (sell before owning → negative qty position) ---
+
+    def test_short_sell_cover_realized_pnl_profit(self):
+        """
+        Sell short 2 units @ $100, buy to cover 2 @ $80 (zero fee).
+        Exercises the 'elif order.side == OrderSide.BUY and old_qty < 0' code
+        path in _fill_order — previously untested.
+        Realized PnL = 2 * ($100 − $80) = +$40.
+        """
+        b = self._broker()
+        b.market_data["SH"] = 100.0
+        b.submit_order("SH", qty=2.0, side="sell",
+                       order_type="market", execution_price=100.0)
+        pos = b.get_position("SH")
+        assert pos is not None
+        assert abs(pos.qty - (-2.0)) < 1e-9, (
+            f"Expected short position qty=-2.0; got {pos.qty}"
+        )
+
+        b.submit_order("SH", qty=2.0, side="buy",
+                       order_type="market", execution_price=80.0)
+
+        assert b.get_position("SH") is None, "Position must be closed after full cover"
+        assert abs(b.get_realized_pnl() - 40.0) < 1e-9, (
+            f"Expected realized PnL +40.0 on profitable short cover; got {b.get_realized_pnl()}"
+        )
+        b.close()
+
+    def test_short_sell_cover_realized_pnl_loss(self):
+        """
+        Sell short 1 unit @ $100, buy to cover 1 @ $120 (zero fee).
+        Realized PnL = 1 * ($100 − $120) = -$20.
+        """
+        b = self._broker()
+        b.market_data["SHL"] = 100.0
+        b.submit_order("SHL", qty=1.0, side="sell",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("SHL", qty=1.0, side="buy",
+                       order_type="market", execution_price=120.0)
+
+        assert b.get_position("SHL") is None
+        assert abs(b.get_realized_pnl() - (-20.0)) < 1e-9, (
+            f"Expected realized PnL -20.0 on loss-making short cover; got {b.get_realized_pnl()}"
+        )
+        b.close()
+
+    def test_partial_cover_of_short_position(self):
+        """
+        Sell short 4 units @ $100, partially cover 2 @ $80 (zero fee).
+        Realized PnL = 2 * ($100 − $80) = +$40.
+        Residual position: -2 units still short.
+        """
+        b = self._broker()
+        b.market_data["SHP"] = 100.0
+        b.submit_order("SHP", qty=4.0, side="sell",
+                       order_type="market", execution_price=100.0)
+        b.submit_order("SHP", qty=2.0, side="buy",
+                       order_type="market", execution_price=80.0)
+
+        pos = b.get_position("SHP")
+        assert pos is not None, "Residual short position must remain after partial cover"
+        assert abs(pos.qty - (-2.0)) < 1e-9, (
+            f"Expected residual position qty=-2.0; got {pos.qty}"
+        )
+        assert abs(b.get_realized_pnl() - 40.0) < 1e-9, (
+            f"Expected realized PnL +40.0 for partial cover; got {b.get_realized_pnl()}"
+        )
+        b.close()
+
 
 class TestAccountInfoReflectsRealMarketPrice:
     """
