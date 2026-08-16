@@ -1350,3 +1350,608 @@ class TestOrdersTabLayout:
         assert table.data == [] or table.data is None, (
             f"orders-table should start empty, found: {table.data}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 8. News & Earnings panel (Phase 1.7)
+# ---------------------------------------------------------------------------
+
+class TestNewsEarningsLayout:
+    """Layout-level tests for the News & Earnings tab component IDs."""
+
+    _NEW_IDS = [
+        "news-refresh-btn",
+        "news-content",
+        "earnings-table",
+        "earnings-status",
+    ]
+
+    @pytest.fixture(scope="class")
+    def all_ids(self):
+        from dash_app.layout import build_layout
+        return _collect_ids(build_layout())
+
+    @pytest.mark.parametrize("expected_id", _NEW_IDS)
+    def test_news_earnings_ids_present(self, all_ids, expected_id):
+        """Every new Phase-1.7 component ID must appear in the layout tree."""
+        assert expected_id in all_ids, (
+            f"Expected id {expected_id!r} not found. IDs: {sorted(all_ids)}"
+        )
+
+    def test_earnings_table_has_five_columns(self):
+        """earnings-table must have exactly 5 columns."""
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component as DashComponent
+
+        def _find_by_id(component, target_id):
+            try:
+                if getattr(component, "id", None) == target_id:
+                    return component
+            except Exception:
+                pass
+            try:
+                children = component.children
+            except AttributeError:
+                return None
+            if children is None:
+                return None
+            if not isinstance(children, list):
+                children = [children]
+            for child in children:
+                if isinstance(child, DashComponent):
+                    result = _find_by_id(child, target_id)
+                    if result is not None:
+                        return result
+            return None
+
+        layout = build_layout()
+        table = _find_by_id(layout, "earnings-table")
+        assert table is not None, "earnings-table not found in layout"
+        assert len(table.columns) == 5, (
+            f"Expected 5 columns, found {len(table.columns)}: {table.columns}"
+        )
+
+    def test_earnings_table_column_ids(self):
+        """earnings-table column IDs must match the defined schema."""
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component as DashComponent
+
+        def _find_by_id(component, target_id):
+            try:
+                if getattr(component, "id", None) == target_id:
+                    return component
+            except Exception:
+                pass
+            try:
+                children = component.children
+            except AttributeError:
+                return None
+            if children is None:
+                return None
+            if not isinstance(children, list):
+                children = [children]
+            for child in children:
+                if isinstance(child, DashComponent):
+                    result = _find_by_id(child, target_id)
+                    if result is not None:
+                        return result
+            return None
+
+        layout = build_layout()
+        table = _find_by_id(layout, "earnings-table")
+        assert table is not None
+        col_ids = [c["id"] for c in table.columns]
+        expected = ["date", "eps_estimate", "eps_actual", "revenue_estimate", "revenue_actual"]
+        assert col_ids == expected, f"Expected {expected}, got {col_ids}"
+
+    def test_earnings_table_starts_empty(self):
+        """earnings-table must start with data=[] before any refresh."""
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component as DashComponent
+
+        def _find_by_id(component, target_id):
+            try:
+                if getattr(component, "id", None) == target_id:
+                    return component
+            except Exception:
+                pass
+            try:
+                children = component.children
+            except AttributeError:
+                return None
+            if children is None:
+                return None
+            if not isinstance(children, list):
+                children = [children]
+            for child in children:
+                if isinstance(child, DashComponent):
+                    result = _find_by_id(child, target_id)
+                    if result is not None:
+                        return result
+            return None
+
+        layout = build_layout()
+        table = _find_by_id(layout, "earnings-table")
+        assert table is not None
+        assert table.data == [] or table.data is None
+
+    def test_news_refresh_btn_starts_with_zero_clicks(self):
+        """news-refresh-btn must start with n_clicks=0."""
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component as DashComponent
+
+        def _find_by_id(component, target_id):
+            try:
+                if getattr(component, "id", None) == target_id:
+                    return component
+            except Exception:
+                pass
+            try:
+                children = component.children
+            except AttributeError:
+                return None
+            if children is None:
+                return None
+            if not isinstance(children, list):
+                children = [children]
+            for child in children:
+                if isinstance(child, DashComponent):
+                    result = _find_by_id(child, target_id)
+                    if result is not None:
+                        return result
+            return None
+
+        layout = build_layout()
+        btn = _find_by_id(layout, "news-refresh-btn")
+        assert btn is not None, "news-refresh-btn not found"
+        assert btn.n_clicks == 0
+
+
+class TestBuildNewsContent:
+    """_build_news_content covers no-symbol, no-items, items, and exception paths."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from dash_app.callbacks import _build_news_content
+        self._fn = _build_news_content
+
+    def test_no_symbol_returns_list(self):
+        result = self._fn(None)
+        assert isinstance(result, list)
+        assert len(result) >= 1
+
+    def test_no_symbol_returns_prompt_message(self):
+        from dash.development.base_component import Component as DashComponent
+        result = self._fn(None)
+        def _flatten_text(c):
+            parts = []
+            if isinstance(c, str):
+                parts.append(c)
+            elif isinstance(c, DashComponent):
+                try:
+                    ch = c.children
+                except AttributeError:
+                    ch = None
+                if ch is not None:
+                    if not isinstance(ch, list):
+                        ch = [ch]
+                    for item in ch:
+                        parts.extend(_flatten_text(item))
+            elif isinstance(c, list):
+                for item in c:
+                    parts.extend(_flatten_text(item))
+            return parts
+        text = " ".join(_flatten_text(result)).lower()
+        assert "select" in text or "refresh" in text or "symbol" in text
+
+    def test_empty_symbol_string_returns_prompt(self):
+        result = self._fn("")
+        assert isinstance(result, list)
+        assert len(result) >= 1
+
+    def test_no_news_items_returns_no_news_message(self):
+        """When pipeline returns an empty list, show 'No news found' message."""
+        from unittest.mock import MagicMock, patch
+        mock_pipeline = MagicMock()
+        mock_pipeline.fetch_news_items.return_value = []
+        with patch("core.news_pipeline.get_default_news_pipeline", return_value=mock_pipeline):
+            result = self._fn("AAPL")
+        assert isinstance(result, list)
+        assert len(result) >= 1
+        # Verify some "no news" text is present
+        from dash.development.base_component import Component as DashComponent
+        def _flatten_text(c):
+            parts = []
+            if isinstance(c, str):
+                parts.append(c)
+            elif isinstance(c, DashComponent):
+                try:
+                    ch = c.children
+                except AttributeError:
+                    ch = None
+                if ch is not None:
+                    if not isinstance(ch, list):
+                        ch = [ch]
+                    for item in ch:
+                        parts.extend(_flatten_text(item))
+            elif isinstance(c, list):
+                for item in c:
+                    parts.extend(_flatten_text(item))
+            return parts
+        text = " ".join(_flatten_text(result)).lower()
+        assert "no news" in text or "not found" in text or "no " in text
+
+    def test_news_items_returned_as_list_of_divs(self):
+        """When pipeline returns items, _build_news_content returns one Div per item."""
+        from unittest.mock import MagicMock, patch
+        import datetime
+
+        mock_item = MagicMock()
+        mock_item.headline = "AAPL hits all-time high"
+        mock_item.url = "https://example.com/news/aapl"
+        mock_item.source = "Reuters"
+        mock_item.datetime_utc = datetime.datetime(2026, 8, 15, 10, 30)
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.fetch_news_items.return_value = [mock_item, mock_item]
+
+        with patch("core.news_pipeline.get_default_news_pipeline", return_value=mock_pipeline):
+            result = self._fn("AAPL")
+
+        assert isinstance(result, list)
+        assert len(result) == 2
+
+    def test_item_with_url_produces_anchor(self):
+        """News items with a URL must include a clickable link in the output."""
+        from unittest.mock import MagicMock, patch
+        from dash import html as dash_html
+        import datetime
+
+        mock_item = MagicMock()
+        mock_item.headline = "Apple reports record revenue"
+        mock_item.url = "https://example.com/apple-revenue"
+        mock_item.source = "Bloomberg"
+        mock_item.datetime_utc = datetime.datetime(2026, 8, 14, 9, 0)
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.fetch_news_items.return_value = [mock_item]
+
+        with patch("core.news_pipeline.get_default_news_pipeline", return_value=mock_pipeline):
+            result = self._fn("AAPL")
+
+        assert len(result) == 1
+        # The row Div's children should contain an html.A link
+        from dash.development.base_component import Component as DashComponent
+        def _has_anchor(comp):
+            if isinstance(comp, dash_html.A):
+                return True
+            try:
+                ch = comp.children
+            except AttributeError:
+                return False
+            if ch is None:
+                return False
+            if not isinstance(ch, list):
+                ch = [ch]
+            return any(_has_anchor(c) for c in ch if isinstance(c, DashComponent))
+        assert _has_anchor(result[0]), "Expected an html.A anchor in the news row"
+
+    def test_item_without_url_produces_no_anchor(self):
+        """News items with no URL must not include an anchor element."""
+        from unittest.mock import MagicMock, patch
+        from dash import html as dash_html
+        import datetime
+
+        mock_item = MagicMock()
+        mock_item.headline = "Market update"
+        mock_item.url = ""
+        mock_item.source = "Internal"
+        mock_item.datetime_utc = datetime.datetime(2026, 8, 14, 9, 0)
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.fetch_news_items.return_value = [mock_item]
+
+        with patch("core.news_pipeline.get_default_news_pipeline", return_value=mock_pipeline):
+            result = self._fn("AAPL")
+
+        assert len(result) == 1
+        from dash.development.base_component import Component as DashComponent
+        def _has_anchor(comp):
+            if isinstance(comp, dash_html.A):
+                return True
+            try:
+                ch = comp.children
+            except AttributeError:
+                return False
+            if ch is None:
+                return False
+            if not isinstance(ch, list):
+                ch = [ch]
+            return any(_has_anchor(c) for c in ch if isinstance(c, DashComponent))
+        assert not _has_anchor(result[0]), "Expected no anchor for item without URL"
+
+    def test_fetch_exception_returns_error_message(self):
+        """If the news pipeline raises, an error message must be returned, not an exception."""
+        from unittest.mock import MagicMock, patch
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.fetch_news_items.side_effect = RuntimeError("Network timeout")
+
+        with patch("core.news_pipeline.get_default_news_pipeline", return_value=mock_pipeline):
+            result = self._fn("AAPL")
+
+        assert isinstance(result, list)
+        assert len(result) >= 1
+        # Result must mention "error" somewhere
+        from dash.development.base_component import Component as DashComponent
+        def _flatten_text(c):
+            parts = []
+            if isinstance(c, str):
+                parts.append(c)
+            elif isinstance(c, DashComponent):
+                try:
+                    ch = c.children
+                except AttributeError:
+                    ch = None
+                if ch is not None:
+                    if not isinstance(ch, list):
+                        ch = [ch]
+                    for item in ch:
+                        parts.extend(_flatten_text(item))
+            elif isinstance(c, list):
+                for item in c:
+                    parts.extend(_flatten_text(item))
+            return parts
+        text = " ".join(_flatten_text(result)).lower()
+        assert "error" in text
+
+    def test_fetch_exception_does_not_propagate(self):
+        """_build_news_content must never raise to the caller."""
+        from unittest.mock import MagicMock, patch
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.fetch_news_items.side_effect = Exception("Unexpected crash")
+
+        with patch("core.news_pipeline.get_default_news_pipeline", return_value=mock_pipeline):
+            result = self._fn("AAPL")  # must not raise
+
+        assert isinstance(result, list)
+
+    def test_timestamp_none_renders_dash(self):
+        """Items with datetime_utc=None must not crash — use '—' as fallback."""
+        from unittest.mock import MagicMock, patch
+
+        mock_item = MagicMock()
+        mock_item.headline = "Breaking news"
+        mock_item.url = ""
+        mock_item.source = "Test"
+        mock_item.datetime_utc = None
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.fetch_news_items.return_value = [mock_item]
+
+        with patch("core.news_pipeline.get_default_news_pipeline", return_value=mock_pipeline):
+            result = self._fn("AAPL")
+
+        assert isinstance(result, list)
+        assert len(result) == 1  # still one row, not a crash
+
+
+class TestBuildEarningsTableData:
+    """_build_earnings_table_data covers no-symbol, crypto, empty, populated, error paths."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from dash_app.callbacks import _build_earnings_table_data
+        self._fn = _build_earnings_table_data
+
+    # 8a. Degenerate inputs --------------------------------------------------
+
+    def test_no_symbol_returns_two_tuple(self):
+        data, status = self._fn(None)
+        assert isinstance(data, list)
+        assert isinstance(status, str)
+
+    def test_no_symbol_returns_empty_data(self):
+        data, _ = self._fn(None)
+        assert data == []
+
+    def test_empty_string_symbol_returns_empty_data(self):
+        data, _ = self._fn("")
+        assert data == []
+
+    # 8b. Crypto symbols — fast-path, no DataLoader call needed ----------------
+
+    def test_crypto_symbol_returns_empty_data(self):
+        """Crypto symbols (contains 'USDT') must return empty data immediately."""
+        data, status = self._fn("BTCUSDT")
+        assert data == []
+
+    def test_crypto_symbol_status_mentions_crypto(self):
+        _, status = self._fn("ETHUSDT")
+        assert "crypto" in status.lower()
+
+    def test_crypto_symbol_no_dataloader_called(self):
+        """DataLoader must never be instantiated for crypto symbols."""
+        from unittest.mock import patch, MagicMock
+        with patch("core.data_loader.DataLoader") as mock_cls:
+            self._fn("SOLUSDT")
+            mock_cls.assert_not_called()
+
+    # 8c. Empty earnings list ------------------------------------------------
+
+    def test_empty_earnings_returns_empty_data(self):
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = []
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            data, status = self._fn("AAPL")
+        assert data == []
+
+    def test_empty_earnings_status_mentions_symbol(self):
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = []
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            _, status = self._fn("AAPL")
+        assert "AAPL" in status
+
+    # 8d. Populated earnings -------------------------------------------------
+
+    def test_single_entry_produces_one_row(self):
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = [
+            {"date": "2026-10-28", "eps_estimate": 1.43, "eps_actual": 1.52,
+             "revenue_estimate": 94_500_000_000.0, "revenue_actual": 96_100_000_000.0}
+        ]
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            data, status = self._fn("AAPL")
+        assert len(data) == 1
+
+    def test_row_keys_match_datatable_columns(self):
+        """Row dicts must contain exactly the 5 earnings-table column IDs."""
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = [
+            {"date": "2026-10-28", "eps_estimate": 1.43, "eps_actual": None,
+             "revenue_estimate": None, "revenue_actual": None}
+        ]
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            data, _ = self._fn("AAPL")
+        expected_keys = {"date", "eps_estimate", "eps_actual", "revenue_estimate", "revenue_actual"}
+        assert set(data[0].keys()) == expected_keys
+
+    def test_none_eps_shows_dash(self):
+        """None EPS estimate/actual values must render as '—'."""
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = [
+            {"date": "2026-10-28", "eps_estimate": None, "eps_actual": None,
+             "revenue_estimate": None, "revenue_actual": None}
+        ]
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            data, _ = self._fn("AAPL")
+        assert data[0]["eps_estimate"] == "—"
+        assert data[0]["eps_actual"] == "—"
+
+    def test_none_revenue_shows_dash(self):
+        """None revenue values must render as '—'."""
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = [
+            {"date": "2026-10-28", "eps_estimate": 1.0, "eps_actual": 1.1,
+             "revenue_estimate": None, "revenue_actual": None}
+        ]
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            data, _ = self._fn("AAPL")
+        assert data[0]["revenue_estimate"] == "—"
+        assert data[0]["revenue_actual"] == "—"
+
+    def test_eps_formatted_to_four_decimal_places(self):
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = [
+            {"date": "2026-10-28", "eps_estimate": 1.4321, "eps_actual": 1.5678,
+             "revenue_estimate": None, "revenue_actual": None}
+        ]
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            data, _ = self._fn("AAPL")
+        assert data[0]["eps_estimate"] == "1.4321"
+        assert data[0]["eps_actual"] == "1.5678"
+
+    def test_revenue_converted_to_millions(self):
+        """Revenue values must be divided by 1,000,000 and shown with one decimal."""
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = [
+            {"date": "2026-10-28", "eps_estimate": None, "eps_actual": None,
+             "revenue_estimate": 94_500_000_000.0, "revenue_actual": 96_000_000_000.0}
+        ]
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            data, _ = self._fn("AAPL")
+        assert data[0]["revenue_estimate"] == "94500.0"
+        assert data[0]["revenue_actual"] == "96000.0"
+
+    def test_multiple_entries_produce_correct_count(self):
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = [
+            {"date": f"2026-{m:02d}-28", "eps_estimate": 1.0, "eps_actual": None,
+             "revenue_estimate": None, "revenue_actual": None}
+            for m in range(1, 5)
+        ]
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            data, status = self._fn("AAPL")
+        assert len(data) == 4
+        assert "4" in status
+
+    def test_status_text_mentions_count_and_symbol(self):
+        from unittest.mock import MagicMock, patch
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.return_value = [
+            {"date": "2026-10-28", "eps_estimate": 1.0, "eps_actual": None,
+             "revenue_estimate": None, "revenue_actual": None}
+        ]
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            _, status = self._fn("TSLA")
+        assert "TSLA" in status
+        assert "1" in status
+
+    # 8e. Exception handling -------------------------------------------------
+
+    def test_dataloader_exception_returns_empty_data(self):
+        """If DataLoader raises, the function must return empty data, not propagate."""
+        from unittest.mock import patch, MagicMock
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.side_effect = RuntimeError("API down")
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            data, status = self._fn("AAPL")
+        assert data == []
+        assert "error" in status.lower()
+
+    def test_dataloader_exception_does_not_propagate(self):
+        """_build_earnings_table_data must never raise to the caller."""
+        from unittest.mock import patch, MagicMock
+        mock_loader = MagicMock()
+        mock_loader.get_earnings_calendar.side_effect = Exception("Unexpected")
+        with patch("core.data_loader.DataLoader", return_value=mock_loader):
+            result = self._fn("AAPL")  # must not raise
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_return_value_is_always_two_tuple(self):
+        """All code paths must return a (list, str) 2-tuple."""
+        from unittest.mock import patch, MagicMock
+        test_cases = [
+            (None, None, None),
+            ("", None, None),
+            ("BTCUSDT", None, None),
+            ("AAPL", [], None),
+            ("AAPL", [{"date": "2026-10-01", "eps_estimate": 1.0, "eps_actual": None,
+                       "revenue_estimate": None, "revenue_actual": None}], None),
+        ]
+        for symbol, return_val, exc in test_cases:
+            mock_loader = MagicMock()
+            if exc:
+                mock_loader.get_earnings_calendar.side_effect = exc
+            else:
+                mock_loader.get_earnings_calendar.return_value = return_val or []
+            with patch("core.data_loader.DataLoader", return_value=mock_loader):
+                result = self._fn(symbol)
+            assert isinstance(result, tuple) and len(result) == 2, (
+                f"Expected 2-tuple for symbol={symbol!r}, got {result!r}"
+            )
+
+
+class TestCallbackCountPhase17:
+    """After Phase 1.7, app must have at least 10 registered callbacks."""
+
+    def test_callback_count_at_least_ten(self):
+        """app.callback_map must have >= 10 entries after Phase-1.7 registration."""
+        import dash_app.app as dash_module
+        callback_map = dash_module.app.callback_map
+        assert len(callback_map) >= 10, (
+            f"Expected at least 10 registered callbacks, found {len(callback_map)}: "
+            f"{list(callback_map.keys())}"
+        )

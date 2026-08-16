@@ -806,6 +806,168 @@ def _bottom_tabs_panel() -> html.Div:
                             ),
                         ],
                     ),
+                    # ----------------------------------------------------------
+                    # Tab 5: News & Earnings (Phase 1.7)
+                    # Reuses core.news_pipeline (DuckDuckGo → OpenBB → GDELT)
+                    # and core.data_loader.DataLoader.get_earnings_calendar().
+                    # Populated by the update_news_earnings_panel callback in
+                    # callbacks.py when user clicks Refresh or loads a chart.
+                    # ----------------------------------------------------------
+                    dcc.Tab(
+                        label="News & Earnings",
+                        value="news-earnings-tab",
+                        style=_TAB_STYLE,
+                        selected_style=_TAB_SELECTED_STYLE,
+                        children=[
+                            html.Div(
+                                style={**_PANEL_STYLE, "margin": "8px 0"},
+                                children=[
+                                    # Header row: title + refresh button
+                                    html.Div(
+                                        style={
+                                            "display": "flex",
+                                            "alignItems": "center",
+                                            "marginBottom": "8px",
+                                        },
+                                        children=[
+                                            html.P(
+                                                "News & Earnings",
+                                                style={
+                                                    **_LABEL_MUTED,
+                                                    "fontWeight": "600",
+                                                    "marginBottom": "0",
+                                                    "flex": "1",
+                                                },
+                                            ),
+                                            html.Button(
+                                                "Refresh",
+                                                id="news-refresh-btn",
+                                                n_clicks=0,
+                                                style={
+                                                    "backgroundColor": THEME["bg_dark"],
+                                                    "color": THEME["accent"],
+                                                    "border": f"1px solid {THEME['accent']}",
+                                                    "borderRadius": "4px",
+                                                    "padding": "3px 10px",
+                                                    "cursor": "pointer",
+                                                    "fontSize": "11px",
+                                                },
+                                            ),
+                                        ],
+                                    ),
+                                    # Two-column body: news (left 55%) + earnings (right 45%)
+                                    html.Div(
+                                        style={
+                                            "display": "grid",
+                                            "gridTemplateColumns": "55fr 45fr",
+                                            "gap": "12px",
+                                            "alignItems": "start",
+                                        },
+                                        children=[
+                                            # --- News section -----------------------------------------
+                                            html.Div(
+                                                children=[
+                                                    html.P(
+                                                        "Recent News",
+                                                        style={
+                                                            **_LABEL_MUTED,
+                                                            "fontWeight": "600",
+                                                            "marginBottom": "6px",
+                                                        },
+                                                    ),
+                                                    html.Div(
+                                                        id="news-content",
+                                                        style={
+                                                            "maxHeight": "240px",
+                                                            "overflowY": "auto",
+                                                        },
+                                                        children=html.Span(
+                                                            "Select a symbol and click Refresh to load news.",
+                                                            style={
+                                                                "color": THEME["text_muted"],
+                                                                "fontSize": "11px",
+                                                            },
+                                                        ),
+                                                    ),
+                                                ],
+                                            ),
+                                            # --- Earnings section --------------------------------------
+                                            html.Div(
+                                                children=[
+                                                    html.P(
+                                                        "Earnings Calendar",
+                                                        style={
+                                                            **_LABEL_MUTED,
+                                                            "fontWeight": "600",
+                                                            "marginBottom": "4px",
+                                                        },
+                                                    ),
+                                                    html.Div(
+                                                        id="earnings-status",
+                                                        style={
+                                                            "color": THEME["text_muted"],
+                                                            "fontSize": "10px",
+                                                            "marginBottom": "4px",
+                                                            "minHeight": "14px",
+                                                        },
+                                                        children="",
+                                                    ),
+                                                    dash_table.DataTable(
+                                                        id="earnings-table",
+                                                        columns=[
+                                                            {"name": "Date",          "id": "date"},
+                                                            {"name": "EPS Est",       "id": "eps_estimate"},
+                                                            {"name": "EPS Actual",    "id": "eps_actual"},
+                                                            {"name": "Rev Est ($M)",  "id": "revenue_estimate"},
+                                                            {"name": "Rev Act ($M)",  "id": "revenue_actual"},
+                                                        ],
+                                                        data=[],
+                                                        page_action="none",
+                                                        sort_action="native",
+                                                        sort_mode="single",
+                                                        style_table={
+                                                            "overflowX": "auto",
+                                                            "overflowY": "auto",
+                                                            "maxHeight": "220px",
+                                                            "backgroundColor": THEME["bg_dark"],
+                                                            "border": f"1px solid {THEME['border']}",
+                                                            "borderRadius": "4px",
+                                                        },
+                                                        style_cell={
+                                                            "backgroundColor": THEME["bg_dark"],
+                                                            "color": THEME["text_main"],
+                                                            "border": f"1px solid {THEME['border']}",
+                                                            "fontSize": "11px",
+                                                            "fontFamily": "'SF Mono', 'Consolas', 'Menlo', monospace",
+                                                            "textAlign": "center",
+                                                            "padding": "4px 6px",
+                                                            "minWidth": "50px",
+                                                        },
+                                                        style_header={
+                                                            "backgroundColor": THEME["bg_card"],
+                                                            "color": THEME["text_muted"],
+                                                            "fontWeight": "600",
+                                                            "fontSize": "10px",
+                                                            "border": f"1px solid {THEME['border']}",
+                                                            "textTransform": "uppercase",
+                                                            "letterSpacing": "0.5px",
+                                                            "padding": "4px 6px",
+                                                        },
+                                                        style_data_conditional=[
+                                                            {
+                                                                "if": {"row_index": "odd"},
+                                                                "backgroundColor": "#0f1419",
+                                                            },
+                                                        ],
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
                 ],
             ),
         ],

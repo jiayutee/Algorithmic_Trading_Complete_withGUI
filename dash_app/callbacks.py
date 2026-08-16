@@ -339,6 +339,161 @@ def _build_pnl_calendar_grid(year: int, month: int, by_day: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
+# News & Earnings panel helpers (Phase 1.7)
+# ---------------------------------------------------------------------------
+
+def _build_news_content(symbol: Optional[str]) -> list:
+    """Build the ``children`` list for the ``news-content`` Div.
+
+    Fetches up to 20 recent news items via ``get_default_news_pipeline()``
+    (DuckDuckGo → OpenBB → GDELT).  Returns a list of Dash components:
+    one row per news item showing the headline (as a link when a URL is
+    available), source name, and publish timestamp.
+
+    Safe to call with ``symbol=None`` — returns a prompt to select a symbol.
+    All exceptions are caught and returned as an error message so the
+    callback never crashes the app.
+    """
+    _muted_span = lambda text: [  # noqa: E731
+        html.Span(text, style={"color": THEME["text_muted"], "fontSize": "11px"})
+    ]
+
+    if not symbol:
+        return _muted_span("Select a symbol and click Refresh to load news.")
+
+    try:
+        from core.news_pipeline import get_default_news_pipeline
+        pipeline = get_default_news_pipeline()
+        items = pipeline.fetch_news_items(symbol, limit=20)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[Dash] news fetch error for %s: %s", symbol, exc)
+        return [
+            html.Span(
+                f"News fetch error: {exc}",
+                style={"color": THEME["red"], "fontSize": "11px"},
+            )
+        ]
+
+    if not items:
+        return _muted_span(f"No news found for {symbol}.")
+
+    rows = []
+    for item in items[:20]:
+        # Format publish timestamp
+        try:
+            ts = item.datetime_utc.strftime("%Y-%m-%d %H:%M") if item.datetime_utc else "—"
+        except Exception:
+            ts = "—"
+
+        # Headline — wrapped in an anchor when a URL is available
+        headline_text = item.headline or "(no headline)"
+        if item.url:
+            headline_el = html.A(
+                headline_text,
+                href=item.url,
+                target="_blank",
+                rel="noopener noreferrer",
+                style={
+                    "color": THEME["accent"],
+                    "textDecoration": "none",
+                    "fontSize": "11px",
+                    "lineHeight": "1.4",
+                },
+            )
+        else:
+            headline_el = html.Span(
+                headline_text,
+                style={"color": THEME["text_main"], "fontSize": "11px", "lineHeight": "1.4"},
+            )
+
+        rows.append(
+            html.Div(
+                style={
+                    "borderBottom": f"1px solid {THEME['border_dim']}",
+                    "padding": "5px 0",
+                },
+                children=[
+                    headline_el,
+                    html.Div(
+                        f"{item.source or '—'}  ·  {ts}",
+                        style={
+                            "color": THEME["text_muted"],
+                            "fontSize": "10px",
+                            "marginTop": "2px",
+                        },
+                    ),
+                ],
+            )
+        )
+
+    return rows
+
+
+def _fmt_eps(val: Optional[float]) -> str:
+    """Format an EPS value (float or None) for display."""
+    if val is None:
+        return "—"
+    return f"{val:.4f}"
+
+
+def _fmt_revenue_millions(val: Optional[float]) -> str:
+    """Format a revenue value in dollars to millions for display."""
+    if val is None:
+        return "—"
+    return f"{val / 1_000_000:.1f}"
+
+
+def _build_earnings_table_data(symbol: Optional[str]) -> tuple:
+    """Build ``(data, status_text)`` for the ``earnings-table`` DataTable.
+
+    Fetches earnings via ``DataLoader.get_earnings_calendar(symbol)``.
+
+    Returns:
+        data        — list of row dicts for the DataTable (may be empty).
+        status_text — short summary string for the ``earnings-status`` Div.
+
+    Handles gracefully:
+    * ``symbol=None``     → empty data + prompt message.
+    * Crypto symbols      → empty data + "No earnings data — crypto symbol".
+    * Empty result list   → empty data + "No upcoming earnings found for {symbol}".
+    * Any exception       → empty data + error description.
+
+    Never raises — all exceptions are caught internally so the callback
+    that calls this cannot crash the Dash server.
+    """
+    if not symbol:
+        return [], "Select a symbol and click Refresh."
+
+    # Crypto symbols have no earnings — fast path without a DataLoader call
+    if "USDT" in symbol.upper():
+        return [], "No earnings data — crypto symbol"
+
+    try:
+        from core.data_loader import DataLoader
+        loader = DataLoader()
+        entries = loader.get_earnings_calendar(symbol)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[Dash] earnings fetch error for %s: %s", symbol, exc)
+        return [], f"Earnings fetch error: {exc}"
+
+    if not entries:
+        return [], f"No upcoming earnings found for {symbol}"
+
+    data = [
+        {
+            "date":             entry.get("date") or "—",
+            "eps_estimate":     _fmt_eps(entry.get("eps_estimate")),
+            "eps_actual":       _fmt_eps(entry.get("eps_actual")),
+            "revenue_estimate": _fmt_revenue_millions(entry.get("revenue_estimate")),
+            "revenue_actual":   _fmt_revenue_millions(entry.get("revenue_actual")),
+        }
+        for entry in entries
+    ]
+    status_text = f"Earnings: {len(data)} record(s) for {symbol}"
+    return data, status_text
+
+
+# ---------------------------------------------------------------------------
 # Order-status text style (shared between the two order-entry callbacks)
 # ---------------------------------------------------------------------------
 
@@ -1100,6 +1255,49 @@ def register_callbacks(app: dash.Dash) -> None:
         """
         data, status_text = _build_orders_table_data(_broker_or_none())
         return data, status_text
+
+    # ------------------------------------------------------------------
+    # Phase 1.7: news-refresh-btn / active-symbol-store → news + earnings
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("news-content", "children"),
+        Output("earnings-table", "data"),
+        Output("earnings-status", "children"),
+        Input("news-refresh-btn", "n_clicks"),
+        Input("active-symbol-store", "data"),
+        State("symbol-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def update_news_earnings_panel(
+        n_clicks: Optional[int],
+        active_symbol: Optional[str],
+        symbol_dropdown: Optional[str],
+    ):
+        """Fetch news and earnings for the currently-selected symbol.
+
+        Triggered by two inputs:
+        * Explicit "Refresh" button click (``news-refresh-btn``) — uses the
+          current ``symbol-dropdown`` value so news is fetched for whichever
+          symbol the user currently sees, even before a chart is loaded.
+        * ``active-symbol-store`` change — auto-refreshes whenever the user
+          clicks "Load Chart", keeping the panel in sync with the chart.
+
+        Reuses backend singletons where possible:
+        * ``get_default_news_pipeline()`` — ``@lru_cache`` singleton, DuckDuckGo
+          → OpenBB → GDELT.
+        * ``DataLoader().get_earnings_calendar(symbol)`` — yfinance / FMP,
+          returns [] for crypto, never raises.
+
+        All exceptions are caught inside the helper functions so this callback
+        can never crash the Dash server regardless of network conditions.
+        """
+        # Prefer the chart-loaded symbol; fall back to whatever the dropdown shows
+        symbol = active_symbol or symbol_dropdown
+
+        news_children = _build_news_content(symbol)
+        earnings_data, earnings_status = _build_earnings_table_data(symbol)
+
+        return news_children, earnings_data, earnings_status
 
     # ------------------------------------------------------------------
     # Placeholder wiring points for future phases
