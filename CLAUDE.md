@@ -6,8 +6,18 @@ Repo: `jiayutee/Algorithmic_Trading_Complete_withGUI`
 Stack: Python 3.11, PyQt5, backtrader, OpenBB, Binance/Alpaca/KuCoin/SimulatedBroker, SQLite news store.
 
 ## Architecture
+
+> **GUI entrypoint decision (Phase 3.1, 2026-08-17):** PyQt5 (`app.py`) is the primary/canonical
+> entrypoint. Dash (`dash_app/app.py`) is an optional web interface — feature-parity review found
+> 5 critical gaps (dynamic P&L/account, live trading, simulation mode, broker switching, agent
+> monitor) that block Dash from replacing PyQt5. Full checklist: `docs/PHASE_3_1_FEATURE_PARITY.md`.
+
 ```
-app.py                    # Entry point — QtWebEngineWidgets imported first
+app.py                    # Entry point — QtWebEngineWidgets imported first (PyQt5 primary)
+dash_app/
+  app.py                  # Dash web entry point — serve on http://127.0.0.1:8050
+  layout.py               # Full dark-themed layout; mirrors PyQt5 color palette
+  callbacks.py            # All Dash callbacks (chart load, live price, orders, backtest, news)
 core/
   data_loader.py          # OpenBB first, Yahoo/Binance fallback
   news_pipeline.py        # DuckDuckGo → OpenBB → GDELT
@@ -21,7 +31,7 @@ strategies/
   macd_rsi_strategy.py
   ema_crossover_strategy.py
   stochastic_strategy.py
-ui/main_window.py         # MainWindow — all PyQt5 widgets
+ui/main_window.py         # MainWindow — all PyQt5 widgets (primary desktop UI)
 scripts/
   orchestrator-local.sh   # launchd entry point (8 slots/day Berlin time)
   telegram-listener.py    # Two-way Telegram bot (polls every 3s)
@@ -65,7 +75,7 @@ scripts/
 | strategies/*.py | Strategy Agent |
 | brokers/*.py | Execution Broker Agent |
 | core/backtesting.py, metrics | Backtest and Metrics Agent |
-| ui/main_window.py, app.py | UI Agent |
+| ui/main_window.py, app.py, dash_app/*.py | UI Agent |
 | test_*.py, scripts/, smoke tests | QA Test Agent |
 | .github/workflows/, CI, packaging | Reliability Release Agent |
 
