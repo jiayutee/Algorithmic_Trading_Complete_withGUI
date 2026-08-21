@@ -22,15 +22,20 @@ core/
   data_loader.py          # OpenBB first, Yahoo/Binance fallback
   news_pipeline.py        # DuckDuckGo → OpenBB → GDELT
   news_sources.py         # OpenBBNewsSource, RSSSource, GDELTSource
-  backtesting.py          # backtrader engine, pyfolio reports
+  backtester.py           # backtrader engine, pyfolio reports
+  broker_manager.py       # Broker routing/switching
 brokers/
   simulatedbroker.py      # Paper trading, order history, positions
-  binancebroker.py        # Live Binance (paper flag)
-  alpacabroker.py         # Alpaca live
+  binance_connector.py    # Live Binance (paper flag)
+  alpaca_connector.py     # Alpaca live
+  kucoin_connector.py     # KuCoin live
+  ib_connector.py         # Interactive Brokers (Phase 4.1, not yet wired into broker_manager)
 strategies/
-  macd_rsi_strategy.py
-  ema_crossover_strategy.py
-  stochastic_strategy.py
+  simple_strategies.py    # MACD/RSI, EMA crossover, Stochastic
+  ml_strategies.py
+  FinRL_strategy.py
+  TD3_strategy.py
+  ddpg_strategy.py
 ui/main_window.py         # MainWindow — all PyQt5 widgets (primary desktop UI)
 scripts/
   orchestrator-local.sh   # launchd entry point (8 slots/day Berlin time)
@@ -74,7 +79,7 @@ scripts/
 | core/data_loader.py, news_sources.py, news_pipeline.py | Data Pipeline Agent |
 | strategies/*.py | Strategy Agent |
 | brokers/*.py | Execution Broker Agent |
-| core/backtesting.py, metrics | Backtest and Metrics Agent |
+| core/backtester.py, metrics | Backtest and Metrics Agent |
 | ui/main_window.py, app.py, dash_app/*.py | UI Agent |
 | test_*.py, scripts/, smoke tests | QA Test Agent |
 | .github/workflows/, CI, packaging | Reliability Release Agent |
