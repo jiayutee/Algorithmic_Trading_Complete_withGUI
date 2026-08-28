@@ -829,7 +829,7 @@ def register_callbacks(app: dash.Dash) -> None:
                 badge = _badge_connecting(symbol)
                 return fig, status_msg, f"Warning: {status_msg}", False, symbol, badge
 
-            fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False)
+            fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False, interval=interval)
             add_live_tick_trace(fig)
             n_candles = len(df)
             status_msg = f"Loaded {n_candles:,} candles for {symbol} ({interval})"
@@ -1212,7 +1212,9 @@ def register_callbacks(app: dash.Dash) -> None:
         # -- Rebuild main chart with signal markers -------------------------
         signals = results.get("signals", [])
         try:
-            chart_fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False)
+            # interval='1d': the loader.load_data() call above this try-block
+            # doesn't pass interval either, so it defaults to '1d' too.
+            chart_fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False, interval='1d')
             add_live_tick_trace(chart_fig)
             if signals:
                 overlay_signals(chart_fig, signals)

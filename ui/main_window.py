@@ -1835,5 +1835,6 @@ class MainWindow(QMainWindow):
             return
         # Delegate to the shared chart_builder module (also used by the Dash app).
         symbol = self.symbol_combo.currentText() if hasattr(self, 'symbol_combo') else ''
-        self.fig = build_candlestick_figure(self.df, symbol=symbol)
+        interval = self.interval_combo.currentText() if hasattr(self, 'interval_combo') else '1d'
+        self.fig = build_candlestick_figure(self.df, symbol=symbol, interval=interval)
         self.update_plotly_view()
