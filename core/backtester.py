@@ -206,6 +206,16 @@ class Backtester:
             "P&L": round(final_value - initial_cash, 2),
         }
 
+        # Expose the per-bar dates and returns aligned with total_asset_value so
+        # research_lab.py analytics functions (rolling Sharpe, monthly heatmap,
+        # year-by-year table) can work without re-running the strategy.
+        if len(returns) > 0:
+            dates_list = [d.strftime('%Y-%m-%d') for d in returns.index]
+            returns_list = [float(v) for v in returns.values]
+        else:
+            dates_list = []
+            returns_list = []
+
         return {
             # Top-level shorthand keys used by tests and UI
             "sharpe": sharpe,
@@ -220,7 +230,11 @@ class Backtester:
             "cumulative_pnl": np.cumsum(pnl_per_trade).tolist() if pnl_per_trade else [],
             "total_asset_value": portfolio_values.tolist(),
             "profit_per_trade": pnl_per_trade,
-            "signals": getattr(strategy, 'signals', [])
+            "signals": getattr(strategy, 'signals', []),
+            # Per-bar dates (ISO 'YYYY-MM-DD') and returns aligned with
+            # total_asset_value — consumed by research_lab analytics.
+            "dates": dates_list,
+            "returns": returns_list,
         }
 
     def _calculate_alpha_beta(self, returns, benchmark_ticker):

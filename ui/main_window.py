@@ -540,6 +540,7 @@ class MainWindow(QMainWindow):
         self._setup_pnl_calendar_tab()
         self._setup_news_tab()
         self._setup_agent_monitor_tab()
+        self._setup_research_lab_tab()
 
         if self._missing_deps:
             self._setup_missing_deps_tab()
@@ -1035,6 +1036,25 @@ class MainWindow(QMainWindow):
         layout.addStretch()
         self.bottom_tabs.addTab(tab, "⚠ Deps")
 
+    def _setup_research_lab_tab(self):
+        """Instantiate the Research Lab panel and add it to the bottom tabs.
+
+        The import is local to avoid a circular-import hazard (research_lab_panel
+        imports from core modules that are already loaded by the time this runs).
+        """
+        try:
+            from ui.research_lab_panel import ResearchLabPanel  # noqa: PLC0415
+            self._research_lab_panel = ResearchLabPanel(
+                data_loader=self.data_loader,
+                strategy_manager=self.strategy_manager,
+                parent_window=self,
+                parent=self.bottom_tabs,
+            )
+            self.bottom_tabs.addTab(self._research_lab_panel, "Research Lab")
+        except Exception as exc:
+            logger.warning("Research Lab panel failed to load: %s", exc)
+            self._research_lab_panel = None
+
     def closeEvent(self, event):
         if self._supervisor:
             self._supervisor.stop()
@@ -1325,6 +1345,10 @@ class MainWindow(QMainWindow):
             self.plot_candles()
             self.statusBar().showMessage(f"Loaded {len(self.df)} candles for {symbol}")
 
+            # Forward data snapshot to Research Lab panel (does not trigger reanalysis)
+            if getattr(self, '_research_lab_panel', None) is not None:
+                self._research_lab_panel.update_data(self.df)
+
         except Exception as e:
             self.statusBar().showMessage(f"Error: {str(e)}")
             import traceback
@@ -1468,6 +1492,11 @@ class MainWindow(QMainWindow):
             self.refresh_account_info()
 
             logger.info("BACKTEST RESULTS: %s", summary)
+
+            # Forward the full report to the Research Lab panel so it can
+            # run its analytics automatically after each backtest.
+            if getattr(self, '_research_lab_panel', None) is not None:
+                self._research_lab_panel.update_report(results)
 
         except Exception as e:
             self.statusBar().showMessage(f"Backtest error: {str(e)}")

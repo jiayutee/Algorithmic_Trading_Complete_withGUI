@@ -452,6 +452,384 @@ def _metrics_panel() -> dbc.Col:
     )
 
 
+def _empty_rl_figure(height: int = 220) -> "go.Figure":
+    """Return a dark-themed empty placeholder figure for Research Lab charts.
+
+    Identical visual language to ``_empty_equity_curve_figure`` but
+    parameterised on *height* so the various Research Lab panels can choose
+    an appropriate vertical size without duplicating boilerplate.
+    """
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    fig.update_layout(
+        paper_bgcolor=THEME["bg_dark"],
+        plot_bgcolor=THEME["bg_card"],
+        font=dict(color=THEME["text_muted"], size=11),
+        margin=dict(l=50, r=10, t=24, b=30),
+        height=height,
+        xaxis=dict(showgrid=False, color=THEME["text_muted"], zeroline=False),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor=THEME["border"],
+            color=THEME["text_muted"],
+            zeroline=False,
+        ),
+        showlegend=False,
+    )
+    return fig
+
+
+def _rl_datatable(table_id: str, columns: list) -> "dash_table.DataTable":
+    """Return a dark-themed DataTable configured for Research Lab sections.
+
+    Reuses the same style tokens as the orders-table in ``_bottom_tabs_panel``
+    so all blotter-style tables have a consistent look.
+    """
+    return dash_table.DataTable(
+        id=table_id,
+        columns=columns,
+        data=[],
+        page_action="none",
+        sort_action="native",
+        sort_mode="single",
+        style_table={
+            "overflowX": "auto",
+            "overflowY": "auto",
+            "maxHeight": "200px",
+            "backgroundColor": THEME["bg_dark"],
+            "border": f"1px solid {THEME['border']}",
+            "borderRadius": "4px",
+        },
+        style_cell={
+            "backgroundColor": THEME["bg_dark"],
+            "color": THEME["text_main"],
+            "border": f"1px solid {THEME['border']}",
+            "fontSize": "11px",
+            "fontFamily": "'SF Mono', 'Consolas', 'Menlo', monospace",
+            "textAlign": "center",
+            "padding": "4px 8px",
+            "minWidth": "60px",
+        },
+        style_header={
+            "backgroundColor": THEME["bg_card"],
+            "color": THEME["text_muted"],
+            "fontWeight": "600",
+            "fontSize": "10px",
+            "border": f"1px solid {THEME['border']}",
+            "textTransform": "uppercase",
+            "letterSpacing": "0.5px",
+            "padding": "4px 8px",
+        },
+        style_data_conditional=[
+            {"if": {"row_index": "odd"}, "backgroundColor": "#0f1419"},
+        ],
+    )
+
+
+def _research_lab_tab_content() -> html.Div:
+    """Build the full content area for the Research Lab bottom tab.
+
+    Three nested sub-tabs mirror the PyQt5 Research Lab panel:
+
+    * **Strategy Lab** — strategy-book ranking table, drawdown series,
+      rolling Sharpe, per-trade P&L histogram, monthly-returns heatmap,
+      year-by-year performance table.
+    * **Volatility Lab** — real-vs-shuffled rolling-vol chart, kurtosis /
+      ACF / Ljung-Box stats block, regime tape chart, permutation-test
+      result, suggested tail-risk position size.
+    * **Signal & Gate** — pass/fail gate verdict with per-check detail rows.
+
+    All chart slots start as empty placeholder figures (``_empty_rl_figure``).
+    The "Run Analysis" button above the sub-tabs triggers the
+    ``run_research_lab`` callback in callbacks.py, which populates every slot.
+    """
+    _sub_tab_style = {**_TAB_STYLE, "fontSize": "11px", "padding": "5px 12px"}
+    _sub_tab_selected_style = {**_TAB_SELECTED_STYLE, "fontSize": "11px", "padding": "5px 12px"}
+
+    # -----------------------------------------------------------------
+    # Sub-tab 1: Strategy Lab
+    # -----------------------------------------------------------------
+    strategy_lab = dcc.Tab(
+        label="Strategy Lab",
+        value="rl-strategy-lab-subtab",
+        style=_sub_tab_style,
+        selected_style=_sub_tab_selected_style,
+        children=[
+            html.Div(
+                style={"padding": "8px 0"},
+                children=[
+                    # Strategy book ranking table
+                    html.P(
+                        "Strategy Book (ranked by Sharpe)",
+                        style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "4px"},
+                    ),
+                    _rl_datatable(
+                        "rl-strategy-book-table",
+                        columns=[
+                            {"name": "Strategy",     "id": "name"},
+                            {"name": "Sharpe",       "id": "sharpe"},
+                            {"name": "Max DD (%)",   "id": "max_drawdown"},
+                            {"name": "Win Rate (%)", "id": "win_rate"},
+                            {"name": "Error",        "id": "error"},
+                        ],
+                    ),
+                    # Drawdown + Rolling Sharpe side by side
+                    html.Div(
+                        style={
+                            "display": "grid",
+                            "gridTemplateColumns": "1fr 1fr",
+                            "gap": "8px",
+                            "marginTop": "8px",
+                        },
+                        children=[
+                            html.Div([
+                                html.P("Drawdown Series", style={**_LABEL_MUTED, "marginBottom": "2px"}),
+                                dcc.Graph(
+                                    id="rl-drawdown-chart",
+                                    figure=_empty_rl_figure(height=180),
+                                    config={"displayModeBar": False, "displaylogo": False},
+                                    style={"height": "180px"},
+                                ),
+                            ]),
+                            html.Div([
+                                html.P("Rolling Sharpe (63-bar)", style={**_LABEL_MUTED, "marginBottom": "2px"}),
+                                dcc.Graph(
+                                    id="rl-rolling-sharpe-chart",
+                                    figure=_empty_rl_figure(height=180),
+                                    config={"displayModeBar": False, "displaylogo": False},
+                                    style={"height": "180px"},
+                                ),
+                            ]),
+                        ],
+                    ),
+                    # P&L distribution histogram
+                    html.P(
+                        "Trade P&L Distribution",
+                        style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "2px", "marginTop": "6px"},
+                    ),
+                    dcc.Graph(
+                        id="rl-pnl-dist-chart",
+                        figure=_empty_rl_figure(height=160),
+                        config={"displayModeBar": False, "displaylogo": False},
+                        style={"height": "160px"},
+                    ),
+                    # Monthly returns heatmap
+                    html.P(
+                        "Monthly Returns Heatmap (%)",
+                        style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "2px", "marginTop": "6px"},
+                    ),
+                    dcc.Graph(
+                        id="rl-monthly-heatmap",
+                        figure=_empty_rl_figure(height=180),
+                        config={"displayModeBar": False, "displaylogo": False},
+                        style={"height": "180px"},
+                    ),
+                    # Year-by-year table
+                    html.P(
+                        "Year-by-Year Performance",
+                        style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "4px", "marginTop": "6px"},
+                    ),
+                    _rl_datatable(
+                        "rl-year-by-year-table",
+                        columns=[
+                            {"name": "Year",          "id": "year"},
+                            {"name": "Return (%)",    "id": "return_pct"},
+                            {"name": "Benchmark (%)", "id": "benchmark_pct"},
+                            {"name": "Sharpe",        "id": "sharpe"},
+                            {"name": "Max DD (%)",    "id": "max_drawdown_pct"},
+                        ],
+                    ),
+                ],
+            )
+        ],
+    )
+
+    # -----------------------------------------------------------------
+    # Sub-tab 2: Volatility Lab
+    # -----------------------------------------------------------------
+    volatility_lab = dcc.Tab(
+        label="Volatility Lab",
+        value="rl-volatility-lab-subtab",
+        style=_sub_tab_style,
+        selected_style=_sub_tab_selected_style,
+        children=[
+            html.Div(
+                style={"padding": "8px 0"},
+                children=[
+                    # Real vs shuffled rolling volatility
+                    html.P(
+                        "Rolling Annualised Volatility — Real vs Shuffled",
+                        style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "2px"},
+                    ),
+                    dcc.Graph(
+                        id="rl-vol-chart",
+                        figure=_empty_rl_figure(height=200),
+                        config={"displayModeBar": False, "displaylogo": False},
+                        style={"height": "200px"},
+                    ),
+                    # Stats text block (kurtosis, ACF, Ljung-Box, same-sign rate)
+                    html.Div(
+                        id="rl-vol-stats",
+                        style={
+                            "backgroundColor": THEME["bg_card"],
+                            "border": f"1px solid {THEME['border']}",
+                            "borderRadius": "4px",
+                            "padding": "8px 10px",
+                            "marginTop": "6px",
+                            "fontSize": "11px",
+                            "color": THEME["text_muted"],
+                        },
+                        children="Run analysis to populate volatility statistics.",
+                    ),
+                    # Regime tape chart
+                    html.P(
+                        "Volatility Regime Tape",
+                        style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "2px", "marginTop": "6px"},
+                    ),
+                    dcc.Graph(
+                        id="rl-regime-tape-chart",
+                        figure=_empty_rl_figure(height=120),
+                        config={"displayModeBar": False, "displaylogo": False},
+                        style={"height": "120px"},
+                    ),
+                    # Permutation test + position size side by side
+                    html.Div(
+                        style={
+                            "display": "grid",
+                            "gridTemplateColumns": "1fr 1fr",
+                            "gap": "8px",
+                            "marginTop": "6px",
+                        },
+                        children=[
+                            html.Div(
+                                id="rl-permtest-result",
+                                style={
+                                    "backgroundColor": THEME["bg_card"],
+                                    "border": f"1px solid {THEME['border']}",
+                                    "borderRadius": "4px",
+                                    "padding": "8px 10px",
+                                    "fontSize": "11px",
+                                    "color": THEME["text_muted"],
+                                },
+                                children="Permutation test result will appear here.",
+                            ),
+                            html.Div(
+                                id="rl-position-size",
+                                style={
+                                    "backgroundColor": THEME["bg_card"],
+                                    "border": f"1px solid {THEME['border']}",
+                                    "borderRadius": "4px",
+                                    "padding": "8px 10px",
+                                    "fontSize": "11px",
+                                    "color": THEME["text_muted"],
+                                },
+                                children="Tail-risk position sizing will appear here.",
+                            ),
+                        ],
+                    ),
+                ],
+            )
+        ],
+    )
+
+    # -----------------------------------------------------------------
+    # Sub-tab 3: Signal & Gate
+    # -----------------------------------------------------------------
+    signal_gate = dcc.Tab(
+        label="Signal & Gate",
+        value="rl-signal-gate-subtab",
+        style=_sub_tab_style,
+        selected_style=_sub_tab_selected_style,
+        children=[
+            html.Div(
+                style={"padding": "8px 0"},
+                children=[
+                    html.P(
+                        "Quant-Research Gate Verdict",
+                        style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "6px"},
+                    ),
+                    html.Div(
+                        id="rl-gate-verdict",
+                        style={
+                            "backgroundColor": THEME["bg_card"],
+                            "border": f"1px solid {THEME['border']}",
+                            "borderRadius": "6px",
+                            "padding": "12px 14px",
+                            "fontSize": "12px",
+                            "color": THEME["text_muted"],
+                            "lineHeight": "1.6",
+                        },
+                        children="Click 'Run Analysis' to evaluate the strategy against the go/no-go gate.",
+                    ),
+                ],
+            )
+        ],
+    )
+
+    return html.Div(
+        style={**_PANEL_STYLE, "margin": "8px 0"},
+        children=[
+            # Header row: title + Run Analysis button + status text
+            html.Div(
+                style={
+                    "display": "flex",
+                    "alignItems": "center",
+                    "gap": "10px",
+                    "marginBottom": "8px",
+                },
+                children=[
+                    html.P(
+                        "Research Lab",
+                        style={
+                            **_LABEL_MUTED,
+                            "fontWeight": "600",
+                            "marginBottom": "0",
+                            "flex": "1",
+                        },
+                    ),
+                    html.Div(
+                        id="rl-status",
+                        style={
+                            "color": THEME["text_muted"],
+                            "fontSize": "11px",
+                            "flex": "1",
+                            "textAlign": "right",
+                        },
+                        children="Select a symbol, load the chart, then click Run Analysis.",
+                    ),
+                    html.Button(
+                        "Run Analysis",
+                        id="rl-run-btn",
+                        n_clicks=0,
+                        style={
+                            "backgroundColor": THEME["bg_dark"],
+                            "color": THEME["accent"],
+                            "border": f"1px solid {THEME['accent']}",
+                            "borderRadius": "4px",
+                            "padding": "3px 10px",
+                            "cursor": "pointer",
+                            "fontSize": "11px",
+                            "whiteSpace": "nowrap",
+                        },
+                    ),
+                ],
+            ),
+            # Nested sub-tabs
+            dcc.Tabs(
+                id="rl-sub-tabs",
+                value="rl-strategy-lab-subtab",
+                colors={
+                    "border": THEME["border"],
+                    "primary": THEME["accent"],
+                    "background": THEME["bg_dark"],
+                },
+                children=[strategy_lab, volatility_lab, signal_gate],
+            ),
+        ],
+    )
+
+
 def _empty_equity_curve_figure():
     """Return a dark-themed empty line-chart placeholder for the equity curve.
 
@@ -807,6 +1185,19 @@ def _bottom_tabs_panel() -> html.Div:
                         ],
                     ),
                     # ----------------------------------------------------------
+                    # Tab 6: Research Lab (Phase 2)
+                    # Three nested sub-tabs: Strategy Lab, Volatility Lab,
+                    # Signal & Gate.  Populated by run_research_lab callback
+                    # in callbacks.py when "Run Analysis" is clicked.
+                    # ----------------------------------------------------------
+                    dcc.Tab(
+                        label="Research Lab",
+                        value="research-lab-tab",
+                        style=_TAB_STYLE,
+                        selected_style=_TAB_SELECTED_STYLE,
+                        children=[_research_lab_tab_content()],
+                    ),
+                    # ----------------------------------------------------------
                     # Tab 5: News & Earnings (Phase 1.7)
                     # Reuses core.news_pipeline (DuckDuckGo → OpenBB → GDELT)
                     # and core.data_loader.DataLoader.get_earnings_calendar().
@@ -1004,6 +1395,11 @@ def build_layout() -> html.Div:
             # Hidden stores for passing data between callbacks
             dcc.Store(id="ohlcv-store"),
             dcc.Store(id="signals-store", data=[]),
+
+            # Holds the last backtest report's serialisable subset so the
+            # Research Lab callback can re-run analytics without re-running
+            # the full backtest on every sub-tab switch.
+            dcc.Store(id="backtest-report-store", data={}),
 
             # Tracks which symbol is currently displayed — used by the
             # interval callback for subscription management.
