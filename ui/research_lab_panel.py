@@ -661,7 +661,7 @@ class ResearchLabPanel(QWidget):
         self._inner_tabs = QTabWidget()
         self._inner_tabs.addTab(self._build_strategy_lab(),  "Strategy Lab")
         self._inner_tabs.addTab(self._build_volatility_lab(), "Volatility Lab")
-        self._inner_tabs.addTab(self._build_signal_gate(),   "Signal & Gate")
+        self._inner_tabs.addTab(self._build_signal_gate(),   "Signal && Gate")
         root.addWidget(self._inner_tabs)
 
     # ------------------------------------------------------------------
@@ -679,8 +679,8 @@ class ResearchLabPanel(QWidget):
 
         # ---- Left sidebar: strategy book --------------------------------
         sidebar = QWidget()
-        sidebar.setMinimumWidth(130)
-        sidebar.setMaximumWidth(190)
+        sidebar.setMinimumWidth(170)
+        sidebar.setMaximumWidth(230)
         sb_layout = QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(0, 0, 0, 0)
         sb_layout.setSpacing(2)
@@ -705,6 +705,13 @@ class ResearchLabPanel(QWidget):
         self._strategy_book_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._strategy_book_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._strategy_book_table.setAlternatingRowColors(True)
+        # The global QTableWidget stylesheet in main_window.py doesn't set
+        # alternate-background-color, so Qt's Fusion style falls back to its
+        # default light-gray alternate row — unreadable against this dark
+        # theme's muted text colors. Pin it to the dark palette explicitly.
+        self._strategy_book_table.setStyleSheet(
+            f"QTableWidget {{ alternate-background-color: {_BG_MID}; }}"
+        )
         self._strategy_book_table.verticalHeader().setVisible(False)
         sb_layout.addWidget(self._strategy_book_table)
 
@@ -769,6 +776,9 @@ class ResearchLabPanel(QWidget):
         self._sl_year_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._sl_year_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._sl_year_table.setAlternatingRowColors(True)
+        self._sl_year_table.setStyleSheet(
+            f"QTableWidget {{ alternate-background-color: {_BG_MID}; }}"
+        )
         self._sl_year_table.verticalHeader().setVisible(False)
         self._sl_stack.addWidget(self._sl_year_table)  # index 1
 
@@ -869,6 +879,9 @@ class ResearchLabPanel(QWidget):
         self._gate_check_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._gate_check_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._gate_check_table.setAlternatingRowColors(True)
+        self._gate_check_table.setStyleSheet(
+            f"QTableWidget {{ alternate-background-color: {_BG_MID}; }}"
+        )
         self._gate_check_table.verticalHeader().setVisible(False)
         self._gate_check_table.setMaximumWidth(560)
         content.addWidget(self._gate_check_table)
