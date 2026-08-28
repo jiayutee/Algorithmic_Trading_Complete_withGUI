@@ -1,11 +1,11 @@
 import backtrader as bt
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import os
 import json
 import csv
 from core.logger import logger
+from core.yf_session import download_with_retry
 
 class CustomPandasData(bt.feeds.PandasData):
     lines = (
@@ -238,7 +238,10 @@ class Backtester:
             else:
                 logger.info(f"Downloading benchmark data ({benchmark_ticker})...")
                 # Suppress yfinance progress
-                benchmark_data = yf.download(benchmark_ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
+                benchmark_data = download_with_retry(
+                    benchmark_ticker, start=start_date, end=end_date,
+                    progress=False, auto_adjust=True,
+                )
                 if benchmark_data.empty:
                     logger.warning(f"Benchmark data for {benchmark_ticker} is empty.")
                     return 0, 0

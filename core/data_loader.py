@@ -1,4 +1,3 @@
-import yfinance as yf
 import pandas as pd
 import ccxt
 import websocket
@@ -11,6 +10,7 @@ from queue import Queue
 import requests
 from core.news_pipeline import get_default_news_pipeline
 from core.logger import logger
+from core.yf_session import download_with_retry, fetch_earnings_dates_with_retry
 
 
 def _to_float_or_none(value):
@@ -333,7 +333,7 @@ class DataLoader:
             interval = '1d'
 
         logger.info(f"Downloading Yahoo Finance data: {symbol}, period={capped_days}d, interval={interval}")
-        df = yf.download(symbol, period=f"{capped_days}d", interval=interval, progress=False)
+        df = download_with_retry(symbol, period=f"{capped_days}d", interval=interval, progress=False)
 
         # Drop the extra level when Yahoo returns a MultiIndex (Adj Close level)
         if isinstance(df.columns, pd.MultiIndex):
@@ -835,8 +835,7 @@ class DataLoader:
         """Fallback path: yfinance's Ticker.earnings_dates. No revenue figures
         available from this source (see get_earnings_calendar()'s docstring)."""
         try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.earnings_dates
+            df = fetch_earnings_dates_with_retry(symbol)
             if df is None or df.empty:
                 return []
 
