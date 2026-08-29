@@ -1,4 +1,4 @@
-"""Unit tests for SimulatedBroker, BinanceConnector, and KuCoinConnector paper trading."""
+"""Unit tests for SimulatedBroker, BinanceConnector, KuCoinConnector, and MexcConnector paper trading."""
 import time
 import threading
 import pytest
@@ -7,6 +7,8 @@ from unittest.mock import patch
 from brokers.simulatedbroker import SimulatedBroker, OrderStatus, OrderSide, OrderType
 from brokers.binance_connector import BinanceConnector
 from brokers.kucoin_connector import KuCoinConnector
+from brokers.mexc_connector import MexcConnector
+from core.broker_manager import BrokerManager
 
 
 @pytest.fixture
@@ -1369,4 +1371,229 @@ class TestKuCoinHistoricalData:
             candles = kc.get_historical_klines("BTC/USDT", timeframe="1d", limit=3)
         except Exception as e:
             pytest.skip(f"KuCoin public API unreachable from this environment: {e}")
+
+
+# ---------------------------------------------------------------------------
+# MexcConnector — paper trading
+# ---------------------------------------------------------------------------
+
+class TestMexcPaperTrading:
+    """Verify MexcConnector paper_mode: order -> fill -> P&L round-trip.
+
+    No network credentials or a dedicated MEXC SDK package are required
+    because paper_mode=True runs entirely in local memory, mirroring
+    BinanceConnector/KuCoinConnector's paper trading ledger exactly.
+    """
+
+    @pytest.fixture
+    def mc(self):
+        """Fresh MexcConnector in paper mode."""
+        return MexcConnector(paper_mode=True)
+
+    def test_paper_mode_flag(self, mc):
+        """Connector must report paper_mode=True."""
+        assert mc.paper_mode is True
+
+    def test_initial_portfolio_empty(self, mc):
+        """No positions and full cash on a fresh paper connector."""
+        portfolio = mc.get_portfolio()
+        assert portfolio["positions"] == {}
+        assert portfolio["realized_pnl"] == 0.0
+        assert portfolio["cash"] > 0
+
+    def test_buy_order_fills_immediately(self, mc):
+        """A BUY order in paper mode must return status FILLED."""
+        receipt = mc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        assert receipt["status"] == "FILLED"
+        assert receipt["symbol"] == "BTC/USDT"
+        assert receipt["side"] == "BUY"
+
+    def test_buy_creates_position(self, mc):
+        """After a BUY the position must appear with correct qty and avg entry price."""
+        mc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        pos = mc.get_position("BTC/USDT")
+        assert pos is not None
+        assert abs(pos["qty"] - 0.001) < 1e-9
+        assert abs(pos["avg_entry_price"] - 50_000.0) < 1e-6
+
+    def test_buy_deducts_cash(self, mc):
+        """Cash balance must decrease by qty x price after a BUY."""
+        initial_cash = mc.get_portfolio()["cash"]
+        mc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        expected_cash = initial_cash - 0.001 * 50_000.0
+        assert abs(mc.get_portfolio()["cash"] - expected_cash) < 1e-6
+
+    def test_sell_closes_position(self, mc):
+        """Selling the full position must remove it from the portfolio."""
+        mc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        mc.place_order("BTC/USDT", side="SELL", qty=0.001, price=51_000.0)
+        assert mc.get_position("BTC/USDT") is None
+
+    def test_btc_round_trip_pnl(self, mc):
+        """Core round-trip: buy 0.001 BTC @ $50,000 then sell @ $51,000 -> P&L ~= $1.
+
+        0.001 BTC x ($51,000 - $50,000) = $1.00
+        """
+        mc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        mc.place_order("BTC/USDT", side="SELL", qty=0.001, price=51_000.0)
+
+        portfolio = mc.get_portfolio()
+        expected_pnl = 0.001 * (51_000.0 - 50_000.0)  # = $1.00
+        assert abs(portfolio["realized_pnl"] - expected_pnl) < 1e-6, (
+            f"Expected P&L ~= {expected_pnl}, got {portfolio['realized_pnl']}"
+        )
+        assert portfolio["positions"] == {}
+
+    def test_multiple_round_trips_accumulate_pnl(self, mc):
+        """Ten round-trips of 0.001 BTC buy@50k / sell@51k -> P&L ~= $10."""
+        for _ in range(10):
+            mc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+            mc.place_order("BTC/USDT", side="SELL", qty=0.001, price=51_000.0)
+
+        portfolio = mc.get_portfolio()
+        expected_pnl = 10 * 0.001 * 1_000.0  # $10.00
+        assert abs(portfolio["realized_pnl"] - expected_pnl) < 1e-5, (
+            f"Expected cumulative P&L ${expected_pnl:.2f}, got ${portfolio['realized_pnl']:.6f}"
+        )
+        assert portfolio["positions"] == {}
+
+    def test_case_insensitive_side(self, mc):
+        """place_order() must accept lowercase 'buy'/'sell'."""
+        mc.place_order("BTC/USDT", side="buy", qty=0.001, price=50_000.0)
+        receipt = mc.place_order("BTC/USDT", side="sell", qty=0.001, price=51_000.0)
+        assert receipt["status"] == "FILLED"
+
+    def test_no_position_before_any_order(self, mc):
+        """get_position() must return None when no order placed."""
+        assert mc.get_position("BTC/USDT") is None
+
+    def test_invalid_side_raises_value_error(self, mc):
+        """place_order() must raise ValueError for an unknown side."""
+        with pytest.raises(ValueError):
+            mc.place_order("BTC/USDT", side="HOLD", qty=0.001, price=50_000.0)
+
+    def test_get_portfolio_not_available_in_live_mode(self):
+        """get_portfolio() must raise RuntimeError when paper_mode=False."""
+        mc = MexcConnector(paper_mode=True)
+        mc.paper_mode = False  # force non-paper mode without a real client
+        with pytest.raises(RuntimeError):
+            mc.get_portfolio()
+
+    def test_place_order_not_available_in_live_mode(self):
+        """place_order() must raise RuntimeError when paper_mode=False."""
+        mc = MexcConnector(paper_mode=True)
+        mc.paper_mode = False
+        with pytest.raises(RuntimeError):
+            mc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+
+    def test_partial_sell_leaves_remaining_position(self, mc):
+        """Selling less than the full position must leave a residual position."""
+        mc.place_order("BTC/USDT", side="BUY", qty=0.01, price=50_000.0)
+        mc.place_order("BTC/USDT", side="SELL", qty=0.005, price=51_000.0)
+        pos = mc.get_position("BTC/USDT")
+        assert pos is not None
+        assert abs(pos["qty"] - 0.005) < 1e-9
+
+    def test_average_entry_price_after_two_buys(self, mc):
+        """Average entry price must be quantity-weighted after multiple buys."""
+        mc.place_order("BTC/USDT", side="BUY", qty=0.001, price=50_000.0)
+        mc.place_order("BTC/USDT", side="BUY", qty=0.001, price=52_000.0)
+        pos = mc.get_position("BTC/USDT")
+        assert pos is not None
+        expected_avg = (0.001 * 50_000.0 + 0.001 * 52_000.0) / 0.002  # 51_000
+        assert abs(pos["avg_entry_price"] - expected_avg) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# MexcConnector — historical OHLCV data fetch
+# ---------------------------------------------------------------------------
+
+class TestMexcHistoricalData:
+    """Verify MexcConnector.get_historical_klines() against MEXC's public API.
+
+    This hits MEXC's live public market-data endpoint via ccxt (no API
+    credentials required). If the sandbox/CI runner has no outbound network
+    access to MEXC, the test is skipped rather than failed — this mirrors
+    how TestKuCoinHistoricalData treats optional/unreachable external
+    providers.
+    """
+
+    def test_fetch_historical_ohlcv_btcusdt(self):
+        mc = MexcConnector(paper_mode=True)
+        try:
+            candles = mc.get_historical_klines("BTC/USDT", timeframe="1h", limit=5)
+        except Exception as e:
+            pytest.skip(f"MEXC public API unreachable from this environment: {e}")
+
         assert isinstance(candles, list)
+        assert len(candles) > 0, "Expected at least one OHLCV candle from MEXC"
+        # Each candle: [timestamp, open, high, low, close, volume]
+        first = candles[0]
+        assert len(first) == 6
+        timestamp, open_, high, low, close, volume = first
+        assert timestamp > 0
+        assert high >= low
+        assert volume >= 0
+
+    def test_historical_klines_available_regardless_of_paper_mode(self):
+        """Unlike BinanceConnector, MEXC historical data needs no credentials,
+        so it must not raise merely because paper_mode=True."""
+        mc = MexcConnector(paper_mode=True)
+        try:
+            candles = mc.get_historical_klines("BTC/USDT", timeframe="1d", limit=3)
+        except Exception as e:
+            pytest.skip(f"MEXC public API unreachable from this environment: {e}")
+
+
+# ---------------------------------------------------------------------------
+# BrokerManager — MEXC wiring
+# ---------------------------------------------------------------------------
+
+class TestBrokerManagerMexcWiring:
+    """Verify BrokerManager correctly wires up MexcConnector.
+
+    ccxt exchange constructors (ccxt.mexc({...})) never touch the network —
+    they just build a client object — so fake credentials are safe here and
+    require no real MEXC account or outbound network access.
+    """
+
+    def test_mexc_not_configured_without_keys(self):
+        bm = BrokerManager()
+        assert bm.brokers["MEXC"] is None
+        assert "MEXC" not in bm.get_available_brokers()
+
+    def test_mexc_configured_with_keys(self):
+        bm = BrokerManager(mexc_key="fake_key", mexc_secret="fake_secret")
+        assert isinstance(bm.brokers["MEXC"], MexcConnector)
+        assert bm.brokers["MEXC"].paper_mode is False
+        assert "MEXC" in bm.get_available_brokers()
+
+    def test_get_broker_returns_mexc_connector(self):
+        bm = BrokerManager(mexc_key="fake_key", mexc_secret="fake_secret")
+        broker = bm.get_broker("MEXC")
+        assert isinstance(broker, MexcConnector)
+
+    def test_get_broker_raises_when_mexc_not_configured(self):
+        bm = BrokerManager()
+        with pytest.raises(ValueError):
+            bm.get_broker("MEXC")
+
+    def test_get_portfolio_includes_mexc_via_ccxt_fetch_balance(self, monkeypatch):
+        """get_portfolio() must use the generic ccxt fetch_balance() path for
+        MEXC (same path added for KuCoin) rather than falling through to the
+        'no_portfolio_method' fallback."""
+        bm = BrokerManager(mexc_key="fake_key", mexc_secret="fake_secret")
+
+        fake_balance = {
+            "total": {"USDT": 1000.0, "BTC": 0.01},
+            "free": {"USDT": 900.0, "BTC": 0.01},
+            "used": {"USDT": 100.0, "BTC": 0.0},
+        }
+        monkeypatch.setattr(
+            bm.brokers["MEXC"].client, "fetch_balance", lambda: fake_balance
+        )
+
+        portfolio = bm.get_portfolio()
+        assert "error" not in portfolio["MEXC"]
+        assert portfolio["MEXC"]["cash"] == 900.0
+        assert portfolio["MEXC"]["positions"]["BTC"]["free"] == 0.01

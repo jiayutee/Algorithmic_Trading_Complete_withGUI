@@ -357,7 +357,7 @@ class MainWindow(QMainWindow):
         # Broker
         layout.addWidget(self._muted_label("Broker"))
         self.broker_combo = QComboBox()
-        self.broker_combo.addItems(["Simulator", "Alpaca", "Interactive Brokers", "Binance"])
+        self.broker_combo.addItems(["Simulator", "Alpaca", "Interactive Brokers", "Binance", "MEXC"])
         self.broker_combo.setFixedWidth(130)
         layout.addWidget(self.broker_combo)
 

@@ -21,6 +21,13 @@ except ImportError:
     KuCoinConnector = None
     _KUCOIN_AVAILABLE = False
 
+try:
+    from brokers.mexc_connector import MexcConnector
+    _MEXC_AVAILABLE = True
+except ImportError:
+    MexcConnector = None
+    _MEXC_AVAILABLE = False
+
 from brokers.simulatedbroker import SimulatedBroker
 
 logger = logging.getLogger(__name__)
@@ -29,7 +36,8 @@ logger = logging.getLogger(__name__)
 class BrokerManager:
     def __init__(self, alpaca_key=None, alpaca_secret=None,
                  binance_key=None, binance_secret=None, binance_testnet_key=None, binance_testnet_secret=None,
-                 kucoin_key=None, kucoin_secret=None, kucoin_password=None):
+                 kucoin_key=None, kucoin_secret=None, kucoin_password=None,
+                 mexc_key=None, mexc_secret=None):
         self.brokers = {
             "Simulator": SimulatedBroker(),
         }
@@ -74,6 +82,16 @@ class BrokerManager:
         except Exception as e:
             logger.warning("Failed to connect to KuCoin: %s", e)
             self.brokers["KuCoin"] = None
+
+        # Initialize MEXC with error handling
+        try:
+            if _MEXC_AVAILABLE and mexc_key and mexc_secret:
+                self.brokers["MEXC"] = MexcConnector(mexc_key, mexc_secret, paper_mode=False)
+            else:
+                self.brokers["MEXC"] = None
+        except Exception as e:
+            logger.warning("Failed to connect to MEXC: %s", e)
+            self.brokers["MEXC"] = None
 
     def get_broker(self, name):
         broker = self.brokers.get(name)
@@ -134,6 +152,7 @@ def _extract_portfolio(broker_name: str, broker) -> dict:
     - SimulatedBroker  → get_account_info() + .positions dict
     - AlpacaConnector  → TradingClient; no account-level helper yet
     - BinanceConnector → no account-level helper yet
+    - KuCoinConnector / MexcConnector → ccxt client; unified fetch_balance()
     - IBKRConnector    → get_account_info() (not currently wired into BrokerManager)
 
     For connectors that don't expose an account method we return what we can
@@ -211,6 +230,28 @@ def _extract_portfolio(broker_name: str, broker) -> dict:
             entry["cash"] = usdt.get("free", 0.0)
         except Exception as exc:
             logger.warning("get_portfolio: %s get_account failed: %s", broker_name, exc)
+            entry["error"] = str(exc)
+        return entry
+
+    # --- KuCoinConnector / MexcConnector (ccxt-based; unified fetch_balance) ---
+    if hasattr(broker, "client") and hasattr(broker.client, "fetch_balance"):
+        try:
+            bal = broker.client.fetch_balance()
+            totals = bal.get("total", {}) or {}
+            frees = bal.get("free", {}) or {}
+            useds = bal.get("used", {}) or {}
+            non_zero = {
+                asset: {
+                    "free": float(frees.get(asset, 0.0) or 0.0),
+                    "locked": float(useds.get(asset, 0.0) or 0.0),
+                }
+                for asset, total in totals.items()
+                if (total or 0.0) > 0
+            }
+            entry["positions"] = non_zero
+            entry["cash"] = float(frees.get("USDT", 0.0) or 0.0)
+        except Exception as exc:
+            logger.warning("get_portfolio: %s fetch_balance failed: %s", broker_name, exc)
             entry["error"] = str(exc)
         return entry
 
