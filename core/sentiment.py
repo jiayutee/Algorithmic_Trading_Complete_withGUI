@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 import re
 from typing import Iterable
+
+import requests
 
 from core.logger import logger
 
@@ -12,6 +15,18 @@ from core.logger import logger
 torch = None
 AutoModelForSequenceClassification = None
 AutoTokenizer = None
+
+_DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+_LLM_SYSTEM_PROMPT = (
+    "You are a financial headline sentiment classifier. For each headline, "
+    "score how positive, negative, and neutral it is for the mentioned "
+    "company/asset's near-term stock price (three floats summing to 1.0), "
+    "and give a one-word label (positive/negative/neutral) with a confidence "
+    "0-1. Respond with ONLY a JSON object: "
+    '{"results": [{"positive": 0.0, "negative": 0.0, "neutral": 0.0, '
+    '"label": "...", "confidence": 0.0}, ...]}, one entry per headline, '
+    "in the same order as the input."
+)
 
 
 @dataclass
@@ -69,6 +84,7 @@ class SentimentAnalyzer:
         self._tokenizer = None
         self._model = None
         self._loaded_model_name = None
+        self._deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 
     def _load_model(self) -> bool:
         if self.force_rule_based:
@@ -110,6 +126,11 @@ class SentimentAnalyzer:
         texts = [text or "" for text in texts]
         if not texts:
             return []
+
+        if not self.force_rule_based and self._deepseek_api_key:
+            llm_results = self._analyze_with_llm(texts)
+            if llm_results is not None:
+                return llm_results
 
         if self._load_model():
             return self._analyze_with_model(texts)
@@ -154,6 +175,62 @@ class SentimentAnalyzer:
                     model_name=self._loaded_model_name or self.model_name,
                 )
             )
+        return results
+
+    def _analyze_with_llm(self, texts: list[str]) -> list[SentimentResult] | None:
+        """Hosted LLM sentiment path (DeepSeek). Returns None on any failure
+        so the caller falls through to FinBERT/rule-based instead of crashing
+        or silently returning wrong-length results."""
+        prompt = "\n".join(f"{i + 1}. {text}" for i, text in enumerate(texts))
+        try:
+            resp = requests.post(
+                _DEEPSEEK_URL,
+                headers={
+                    "Authorization": f"Bearer {self._deepseek_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [
+                        {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.0,
+                },
+                timeout=20,
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+            rows = json.loads(content)["results"]
+        except Exception as exc:  # pragma: no cover - network/API failures
+            logger.warning("DeepSeek sentiment call failed, falling back: %s", exc)
+            return None
+
+        if not isinstance(rows, list) or len(rows) != len(texts):
+            logger.warning(
+                "DeepSeek sentiment response shape mismatch (%d rows for %d texts), falling back.",
+                len(rows) if isinstance(rows, list) else -1,
+                len(texts),
+            )
+            return None
+
+        results: list[SentimentResult] = []
+        for row in rows:
+            try:
+                results.append(
+                    SentimentResult(
+                        positive=float(row["positive"]),
+                        negative=float(row["negative"]),
+                        neutral=float(row["neutral"]),
+                        label=str(row["label"]).lower(),
+                        confidence=float(row["confidence"]),
+                        model_name="deepseek-chat",
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("DeepSeek sentiment row malformed (%s), falling back.", exc)
+                return None
         return results
 
     def _analyze_rule_based(self, text: str) -> SentimentResult:

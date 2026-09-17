@@ -58,9 +58,7 @@ class NewsWorker(QThread):
     def run(self):
         try:
             from core.news_pipeline import NewsPipeline
-            from core.sentiment import SentimentAnalyzer
             pipeline = NewsPipeline.from_env()
-            pipeline.sentiment_analyzer = SentimentAnalyzer(force_rule_based=True)
             df = pipeline.fetch_news_dataframe(self.symbol, limit=25)
             self.results_ready.emit(df)
         except Exception as e:
