@@ -145,6 +145,14 @@ def overlay_signals(
     buy_signals  = [s for s in signals if s.get("type") in ("buy", "buy_cover")]
     sell_signals = [s for s in signals if s.get("type") in ("sell", "sell_short")]
 
+    def _hover(s: Dict) -> str:
+        # Marker hover = the recorded "why" (Phase 11.1), wrapped for readability.
+        from core.trade_rationale import format_rationale_detail
+        label = {"buy": "BUY (open long)", "buy_cover": "BUY (cover short)",
+                 "sell": "SELL (close long)", "sell_short": "SELL (open short)"}.get(s.get("type"), "")
+        why = format_rationale_detail(s.get("rationale")).replace("\n", "<br>")
+        return f"<b>{label}</b> @ {s.get('price', 0):,.2f}<br>{why}"
+
     if buy_signals:
         fig.add_trace(go.Scatter(
             x=[s["date"] for s in buy_signals],
@@ -152,6 +160,8 @@ def overlay_signals(
             mode="markers",
             marker=dict(symbol="triangle-up", size=15, color=THEME["green"]),
             name="Buy Signal",
+            text=[_hover(s) for s in buy_signals],
+            hovertemplate="%{text}<extra></extra>",
         ))
 
     if sell_signals:
@@ -161,6 +171,8 @@ def overlay_signals(
             mode="markers",
             marker=dict(symbol="triangle-down", size=15, color=THEME["red"]),
             name="Sell Signal",
+            text=[_hover(s) for s in sell_signals],
+            hovertemplate="%{text}<extra></extra>",
         ))
 
     return fig

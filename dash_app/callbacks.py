@@ -53,6 +53,7 @@ from core.chart_builder import (
     overlay_signals,
 )
 from core.logger import logger
+from core.trade_rationale import format_rationale, manual_rationale, submit_with_rationale
 
 # ---------------------------------------------------------------------------
 # Module-level singletons (shared across all callback invocations)
@@ -178,6 +179,7 @@ def _build_orders_table_data(broker) -> tuple:
                 "qty":        f"{order.filled_qty:.4f}",
                 "fill_price": fill_price,
                 "status":     status_str.capitalize(),
+                "why":        format_rationale(getattr(order, "rationale", None)),
             })
 
         count  = len(history)
@@ -671,6 +673,39 @@ def _price_input_style_and_placeholder(order_type: str) -> tuple:
     return {"display": "none"}, "Price"
 
 
+def _latest_price(symbol: Optional[str]) -> Optional[float]:
+    """Best current real price for *symbol*, or None if none is available.
+
+    Crypto reads the WebSocket cache (non-blocking); equities use the last
+    price cached by the interval callback. Never raises.
+    """
+    if not symbol:
+        return None
+    try:
+        if is_crypto_symbol(symbol):
+            price = _get_live_svc().get_price(symbol)
+        else:
+            price = _equity_last_price
+        return float(price) if price else None
+    except Exception:  # noqa: BLE001 -- price feed problems must not block order entry
+        return None
+
+
+def _sync_broker_price(broker, symbol: Optional[str], price: Optional[float]) -> None:
+    """Mark the simulated broker to a real price so fills and P&L use it.
+
+    Without this, SimulatedBroker.market_data falls back to its fake $100
+    default and every paper trade fills at that price.
+    """
+    if broker is None or not symbol or not price:
+        return
+    try:
+        with broker._lock:
+            broker.market_data[symbol] = float(price)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[Dash] broker price sync failed for %s: %s", symbol, exc)
+
+
 def _validate_and_submit_order(
     broker,
     side: str,
@@ -678,6 +713,7 @@ def _validate_and_submit_order(
     order_type: str,
     price: Optional[float],
     symbol: Optional[str],
+    market_price: Optional[float] = None,
 ) -> tuple:
     """Validate inputs and submit an order to *broker*.
 
@@ -720,13 +756,19 @@ def _validate_and_submit_order(
 
     # Submit --------------------------------------------------------------
     try:
-        order = broker.submit_order(
+        _sync_broker_price(broker, symbol, market_price)
+        decision_price = limit_price or stop_price or market_price
+        order = submit_with_rationale(
+            broker,
+            manual_rationale(side, symbol, order_type, price=decision_price, origin="Dash Order Entry panel"),
             symbol=symbol,
             qty=float(qty),
             side=side,
             order_type=order_type,
             limit_price=limit_price,
             stop_price=stop_price,
+            # Fill market orders at the real price when we have one.
+            **({"execution_price": market_price} if (market_price and order_type == "market") else {}),
         )
         status = order.status.value
         if status == "filled":
@@ -979,6 +1021,10 @@ def register_callbacks(app: dash.Dash) -> None:
         if price is None:
             return no_update, badge_if_none
 
+        # Keep an existing paper broker marked to the real price so unrealized
+        # P&L reflects the market (no-op until the first order creates it).
+        _sync_broker_price(_broker_or_none(), symbol, price)
+
         # -- Partial figure update via Patch() ------------------------------
         # We only update the last trace (the live-tick scatter appended by
         # add_live_tick_trace) — not the candlestick body.  Patch sends only
@@ -1050,6 +1096,7 @@ def register_callbacks(app: dash.Dash) -> None:
             order_type=order_type,
             price=price,
             symbol=symbol,
+            market_price=_latest_price(symbol),
         )
 
     # ------------------------------------------------------------------

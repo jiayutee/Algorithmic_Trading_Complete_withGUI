@@ -985,7 +985,7 @@ class TestOrdersTableHelper:
         assert len(data) == 1
 
     def test_row_keys_match_datatable_columns(self):
-        """Every row dict must contain exactly the 7 column IDs."""
+        """Every row dict must contain exactly the 8 column IDs (7 blotter columns + "why")."""
         from unittest.mock import MagicMock
         import time
 
@@ -1001,7 +1001,7 @@ class TestOrdersTableHelper:
         broker.order_history = [order]
 
         data, _ = self._fn(broker)
-        expected_keys = {"time", "symbol", "side", "type", "qty", "fill_price", "status"}
+        expected_keys = {"time", "symbol", "side", "type", "qty", "fill_price", "status", "why"}
         assert set(data[0].keys()) == expected_keys
 
     def test_side_is_uppercased(self):
@@ -1253,7 +1253,7 @@ class TestOrdersTabLayout:
         assert "orders-status" in all_ids
 
     def test_orders_table_has_seven_columns(self, layout):
-        """orders-table must declare exactly 7 columns matching the PyQt5 blotter."""
+        """orders-table declares the 7 PyQt5 blotter columns plus the Phase 11.1 "Why" column (8)."""
         from dash_app.layout import build_layout
         from dash.development.base_component import Component as DashComponent
 
@@ -1281,12 +1281,12 @@ class TestOrdersTabLayout:
         layout = build_layout()
         table = _find_by_id(layout, "orders-table")
         assert table is not None, "orders-table not found in layout"
-        assert len(table.columns) == 7, (
-            f"Expected 7 columns, found {len(table.columns)}: {table.columns}"
+        assert len(table.columns) == 8, (
+            f"Expected 8 columns, found {len(table.columns)}: {table.columns}"
         )
 
     def test_orders_table_column_ids_match_pyqt5(self, layout):
-        """Column IDs must match the 7 PyQt5 _orders_table columns."""
+        """Column IDs must match the PyQt5 _orders_table columns (incl. "why")."""
         from dash_app.layout import build_layout
         from dash.development.base_component import Component as DashComponent
 
@@ -1315,7 +1315,7 @@ class TestOrdersTabLayout:
         table = _find_by_id(layout, "orders-table")
         assert table is not None
         col_ids = [c["id"] for c in table.columns]
-        expected = ["time", "symbol", "side", "type", "qty", "fill_price", "status"]
+        expected = ["time", "symbol", "side", "type", "qty", "fill_price", "status", "why"]
         assert col_ids == expected, f"Expected {expected}, got {col_ids}"
 
     def test_orders_table_starts_with_empty_data(self, layout):

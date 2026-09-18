@@ -43,6 +43,9 @@ except ImportError:
 from typing import Dict, List, Optional
 from core.news_scraper import scrape_and_analyze_finviz_news
 from core.logger import logger
+from core.trade_rationale import (
+    format_rationale, format_rationale_detail, manual_rationale, submit_with_rationale,
+)
 from core.chart_builder import build_candlestick_figure, overlay_signals
 
 
@@ -569,10 +572,10 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(clear_btn)
         layout.addLayout(toolbar)
 
-        # Table: Time | Symbol | Side | Type | Qty | Fill Price | Status
-        self._orders_table = QTableWidget(0, 7)
+        # Table: Time | Symbol | Side | Type | Qty | Fill Price | Status | Why
+        self._orders_table = QTableWidget(0, 8)
         self._orders_table.setHorizontalHeaderLabels(
-            ["Time", "Symbol", "Side", "Type", "Qty", "Fill Price", "Status"]
+            ["Time", "Symbol", "Side", "Type", "Qty", "Fill Price", "Status", "Why"]
         )
         self._orders_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self._orders_table.horizontalHeader().setStretchLastSection(True)
@@ -769,7 +772,10 @@ class MainWindow(QMainWindow):
                 QTableWidgetItem(f"{order.filled_qty:.4f}"),
                 QTableWidgetItem(fill_price),
                 QTableWidgetItem(status_str.capitalize()),
+                QTableWidgetItem(format_rationale(getattr(order, "rationale", None))),
             ]
+            # Full decision-time detail (values / rules / model confidence) on hover.
+            items[7].setToolTip(format_rationale_detail(getattr(order, "rationale", None)))
 
             # Colour the Side cell
             bg_hex, fg_hex = _SIDE_COLORS.get(side_str.lower(), ("#1c2128", "#e6edf3"))
@@ -781,7 +787,7 @@ class MainWindow(QMainWindow):
             items[6].setForeground(QColor(status_color))
 
             for col, item in enumerate(items):
-                item.setTextAlignment(Qt.AlignCenter)
+                item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter if col == 7 else Qt.AlignCenter)
                 self._orders_table.setItem(row, col, item)
 
         count = len(history)
@@ -1605,13 +1611,31 @@ class MainWindow(QMainWindow):
             if not self.current_broker:
                 self.current_broker = self.broker_manager.get_broker(self.broker_combo.currentText())
 
-            order = self.current_broker.submit_order(
+            # Real price for the paper broker: the last loaded candle's close.
+            # (Without this SimulatedBroker falls back to its fake $100 default.)
+            market_price = None
+            try:
+                if hasattr(self, 'df') and not self.df.empty:
+                    market_price = float(self.df['Close'].iloc[-1])
+            except Exception:  # price is context only; never block the order
+                market_price = None
+            if market_price and hasattr(self.current_broker, 'market_data'):
+                with self.current_broker._lock:
+                    self.current_broker.market_data[symbol] = market_price
+            decision_price = limit_price or stop_price or market_price
+            extra = {}
+            if market_price and order_type == "market" and hasattr(self.current_broker, 'market_data'):
+                extra["execution_price"] = market_price
+            order = submit_with_rationale(
+                self.current_broker,
+                manual_rationale(side, symbol, order_type, price=decision_price, origin="desktop Order Entry panel"),
                 symbol=symbol,
                 qty=qty,
                 side=side,
                 order_type=order_type,
                 limit_price=limit_price,
-                stop_price=stop_price
+                stop_price=stop_price,
+                **extra,
             )
 
             if order.status.value == "filled":

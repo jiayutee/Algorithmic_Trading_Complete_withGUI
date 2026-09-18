@@ -1095,6 +1095,7 @@ def _bottom_tabs_panel() -> html.Div:
                                             {"name": "Qty",        "id": "qty"},
                                             {"name": "Fill Price", "id": "fill_price"},
                                             {"name": "Status",     "id": "status"},
+                                            {"name": "Why",        "id": "why"},
                                         ],
                                         data=[],
                                         page_action="none",   # show all rows
@@ -1128,6 +1129,18 @@ def _bottom_tabs_panel() -> html.Div:
                                             "letterSpacing": "0.5px",
                                             "padding": "4px 8px",
                                         },
+                                        # "Why" holds the recorded rationale sentence (Phase 11.1):
+                                        # left-aligned and wrapping so it stays fully readable.
+                                        style_cell_conditional=[
+                                            {
+                                                "if": {"column_id": "why"},
+                                                "textAlign": "left",
+                                                "whiteSpace": "normal",
+                                                "height": "auto",
+                                                "minWidth": "320px",
+                                                "maxWidth": "520px",
+                                            },
+                                        ],
                                         # Color-coding rows by side + status —
                                         # mirrors PyQt5's _SIDE_COLORS / _STATUS_COLORS.
                                         style_data_conditional=[
