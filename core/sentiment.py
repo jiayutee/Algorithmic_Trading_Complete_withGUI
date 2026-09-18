@@ -17,15 +17,21 @@ AutoModelForSequenceClassification = None
 AutoTokenizer = None
 
 _DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+# Kept small deliberately: larger batches (tried up to ~79 headlines in one
+# call) made the model occasionally miscount entries in its own response
+# (observed: 81 rows for 79 inputs), which used to blow away the whole
+# batch's LLM result. Matching by "id" below makes that self-correcting even
+# within a chunk, but a smaller chunk also just makes miscounts rarer.
+_LLM_CHUNK_SIZE = 20
 _LLM_SYSTEM_PROMPT = (
-    "You are a financial headline sentiment classifier. For each headline, "
-    "score how positive, negative, and neutral it is for the mentioned "
-    "company/asset's near-term stock price (three floats summing to 1.0), "
-    "and give a one-word label (positive/negative/neutral) with a confidence "
-    "0-1. Respond with ONLY a JSON object: "
-    '{"results": [{"positive": 0.0, "negative": 0.0, "neutral": 0.0, '
-    '"label": "...", "confidence": 0.0}, ...]}, one entry per headline, '
-    "in the same order as the input."
+    "You are a financial headline sentiment classifier. Each headline is "
+    "numbered. For each one, score how positive, negative, and neutral it is "
+    "for the mentioned company/asset's near-term stock price (three floats "
+    "summing to 1.0), and give a one-word label (positive/negative/neutral) "
+    "with a confidence 0-1. Respond with ONLY a JSON object: "
+    '{"results": [{"id": 1, "positive": 0.0, "negative": 0.0, "neutral": 0.0, '
+    '"label": "...", "confidence": 0.0}, ...]} -- exactly one entry per '
+    "headline, and \"id\" must equal that headline's number from the input."
 )
 
 
@@ -128,9 +134,7 @@ class SentimentAnalyzer:
             return []
 
         if not self.force_rule_based and self._deepseek_api_key:
-            llm_results = self._analyze_with_llm(texts)
-            if llm_results is not None:
-                return llm_results
+            return self._analyze_with_llm_batched(texts)
 
         if self._load_model():
             return self._analyze_with_model(texts)
@@ -177,10 +181,29 @@ class SentimentAnalyzer:
             )
         return results
 
+    def _analyze_with_llm_batched(self, texts: list[str]) -> list[SentimentResult]:
+        """Runs the LLM sentiment path in fixed-size chunks so a single
+        chunk's failure (network error, or the model miscounting its own
+        response) only degrades that chunk to rule-based, not the whole
+        batch."""
+        results: list[SentimentResult] = []
+        for start in range(0, len(texts), _LLM_CHUNK_SIZE):
+            chunk = texts[start:start + _LLM_CHUNK_SIZE]
+            chunk_results = self._analyze_with_llm(chunk)
+            if chunk_results is None:
+                chunk_results = [self._analyze_rule_based(text) for text in chunk]
+            results.extend(chunk_results)
+        return results
+
     def _analyze_with_llm(self, texts: list[str]) -> list[SentimentResult] | None:
-        """Hosted LLM sentiment path (DeepSeek). Returns None on any failure
-        so the caller falls through to FinBERT/rule-based instead of crashing
-        or silently returning wrong-length results."""
+        """Hosted LLM sentiment path (DeepSeek) for one chunk. Returns None
+        only when the request/response itself is unusable (network error,
+        unparsable JSON, no "results" list) -- the caller then falls back to
+        rule-based for the whole chunk. Individual rows are matched by their
+        "id" field rather than by list position, so a model miscount (seen
+        in practice: 81 rows returned for 79 inputs) degrades to a per-row
+        rule-based fallback for just the missing/duplicate ids instead of
+        discarding the entire chunk's real sentiment scores."""
         prompt = "\n".join(f"{i + 1}. {text}" for i, text in enumerate(texts))
         try:
             resp = requests.post(
@@ -207,31 +230,40 @@ class SentimentAnalyzer:
             logger.warning("DeepSeek sentiment call failed, falling back: %s", exc)
             return None
 
-        if not isinstance(rows, list) or len(rows) != len(texts):
-            logger.warning(
-                "DeepSeek sentiment response shape mismatch (%d rows for %d texts), falling back.",
-                len(rows) if isinstance(rows, list) else -1,
-                len(texts),
-            )
+        if not isinstance(rows, list):
+            logger.warning("DeepSeek sentiment response had no 'results' list, falling back.")
             return None
 
-        results: list[SentimentResult] = []
+        by_id: dict[int, SentimentResult] = {}
         for row in rows:
             try:
-                results.append(
-                    SentimentResult(
-                        positive=float(row["positive"]),
-                        negative=float(row["negative"]),
-                        neutral=float(row["neutral"]),
-                        label=str(row["label"]).lower(),
-                        confidence=float(row["confidence"]),
-                        model_name="deepseek-chat",
-                    )
+                row_id = int(row["id"])
+                if not (1 <= row_id <= len(texts)):
+                    continue
+                result = SentimentResult(
+                    positive=float(row["positive"]),
+                    negative=float(row["negative"]),
+                    neutral=float(row["neutral"]),
+                    label=str(row["label"]).lower(),
+                    confidence=float(row["confidence"]),
+                    model_name="deepseek-chat",
                 )
-            except (KeyError, TypeError, ValueError) as exc:
-                logger.warning("DeepSeek sentiment row malformed (%s), falling back.", exc)
-                return None
-        return results
+            except (KeyError, TypeError, ValueError):
+                continue
+            by_id.setdefault(row_id, result)  # first occurrence wins on duplicate ids
+
+        missing = len(texts) - len(by_id)
+        if missing:
+            logger.warning(
+                "DeepSeek sentiment returned %d/%d matched rows for this chunk; "
+                "filling the rest with rule-based sentiment.",
+                len(by_id), len(texts),
+            )
+
+        return [
+            by_id.get(i + 1) or self._analyze_rule_based(text)
+            for i, text in enumerate(texts)
+        ]
 
     def _analyze_rule_based(self, text: str) -> SentimentResult:
         words = [token.lower() for token in re.findall(r"[A-Za-z']+", text)]

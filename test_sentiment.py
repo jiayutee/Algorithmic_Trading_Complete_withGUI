@@ -39,7 +39,7 @@ def test_llm_path_used_when_api_key_present_and_not_forced(monkeypatch):
     analyzer = SentimentAnalyzer()
     assert analyzer.force_rule_based is False
 
-    mock_rows = [{"positive": 0.8, "negative": 0.05, "neutral": 0.15, "label": "positive", "confidence": 0.8}]
+    mock_rows = [{"id": 1, "positive": 0.8, "negative": 0.05, "neutral": 0.15, "label": "positive", "confidence": 0.8}]
     with patch("core.sentiment.requests.post", return_value=_mock_deepseek_response(mock_rows)) as mock_post:
         results = analyzer.analyze_many(["Company beats earnings estimates"])
 
@@ -63,16 +63,66 @@ def test_llm_failure_falls_back_to_rule_based(monkeypatch):
     assert results[0].label == "positive"
 
 
-def test_llm_malformed_response_falls_back(monkeypatch):
+def test_llm_empty_response_falls_back_for_all(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     analyzer = SentimentAnalyzer()
 
-    # Wrong number of rows for the number of input texts.
     with patch("core.sentiment.requests.post", return_value=_mock_deepseek_response([])):
         results = analyzer.analyze_many(["Headline one", "Headline two"])
 
     assert len(results) == 2
     assert all(r.model_name == "rule-based-headline-v1" for r in results)
+
+
+def test_llm_partial_miscount_only_falls_back_for_missing_ids(monkeypatch):
+    """Regression test for the observed bug: DeepSeek returned 81 rows for
+    79 inputs (a miscount), which used to discard the entire batch's real
+    sentiment and fall back to rule-based for everything. Matching by id
+    should now keep the correctly-matched rows and only backfill the ones
+    the model dropped or duplicated."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    analyzer = SentimentAnalyzer()
+
+    # 3 inputs; model returns id=1 twice (a miscount) and never returns id=3.
+    mock_rows = [
+        {"id": 1, "positive": 0.9, "negative": 0.05, "neutral": 0.05, "label": "positive", "confidence": 0.9},
+        {"id": 1, "positive": 0.1, "negative": 0.1, "neutral": 0.8, "label": "neutral", "confidence": 0.8},
+        {"id": 2, "positive": 0.05, "negative": 0.9, "neutral": 0.05, "label": "negative", "confidence": 0.9},
+    ]
+    with patch("core.sentiment.requests.post", return_value=_mock_deepseek_response(mock_rows)):
+        results = analyzer.analyze_many(["Beats estimates", "Regulatory probe launched", "Company beats earnings"])
+
+    assert len(results) == 3
+    # id=1: first occurrence wins, real LLM result kept.
+    assert results[0].model_name == "deepseek-chat" and results[0].label == "positive"
+    # id=2: matched correctly.
+    assert results[1].model_name == "deepseek-chat" and results[1].label == "negative"
+    # id=3: never returned by the model -> falls back to rule-based for just this row.
+    assert results[2].model_name == "rule-based-headline-v1"
+    assert results[2].label == "positive"  # "beats" is a positive keyword
+
+
+def test_llm_chunks_large_batches(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    analyzer = SentimentAnalyzer()
+
+    texts = [f"Headline number {i}" for i in range(45)]  # 3 chunks at size 20
+
+    def make_response(*args, **kwargs):
+        prompt = kwargs["json"]["messages"][1]["content"]
+        n = len(prompt.strip().split("\n"))
+        rows = [
+            {"id": i + 1, "positive": 0.1, "negative": 0.1, "neutral": 0.8, "label": "neutral", "confidence": 0.8}
+            for i in range(n)
+        ]
+        return _mock_deepseek_response(rows)
+
+    with patch("core.sentiment.requests.post", side_effect=make_response) as mock_post:
+        results = analyzer.analyze_many(texts)
+
+    assert len(results) == 45
+    assert all(r.model_name == "deepseek-chat" for r in results)
+    assert mock_post.call_count == 3  # ceil(45/20)
 
 
 def test_force_rule_based_skips_llm_even_with_api_key(monkeypatch):

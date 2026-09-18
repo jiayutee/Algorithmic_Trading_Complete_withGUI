@@ -140,9 +140,10 @@ class MainWindow(QMainWindow):
             QTabBar::tab { background: #161b22; border: 1px solid #30363d; padding: 5px 12px;
                            color: #8b949e; font-size: 11px; border-bottom: none; border-radius: 4px 4px 0 0; }
             QTabBar::tab:selected { background: #0d1117; color: #e6edf3; border-bottom: 2px solid #58a6ff; }
-            QTableWidget { background: #0d1117; gridline-color: #21262d; color: #e6edf3;
+            QTableWidget { background: #0d1117; alternate-background-color: #1a2130;
+                           gridline-color: #21262d; color: #e6edf3;
                            border: none; font-size: 11px; }
-            QTableWidget::item:selected { background: #1f6feb33; }
+            QTableWidget::item:selected { background: #1f3d6b; color: #ffffff; }
             QHeaderView::section { background: #161b22; color: #8b949e; border: none;
                                    border-bottom: 1px solid #30363d; padding: 4px 6px; font-size: 10px;
                                    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -713,8 +714,9 @@ class MainWindow(QMainWindow):
             if pnl is not None:
                 month_total += pnl
                 sign = "+" if pnl >= 0 else ""
-                bg = "#1a4731" if pnl >= 0 else "#3d1a1a"
-                fg = "#3fb950" if pnl >= 0 else "#f85149"
+                # Same >=9:1-contrast pair as the News/Orders tabs' badges.
+                bg = "#0f2818" if pnl >= 0 else "#2d1111"
+                fg = "#7ee787" if pnl >= 0 else "#ffa198"
                 cell.setText(f"{cell_date.day}\n{sign}${pnl:,.2f}")
             else:
                 bg = "#161b22"
@@ -739,9 +741,11 @@ class MainWindow(QMainWindow):
         history = self.current_broker.order_history
         self._orders_table.setRowCount(len(history))
 
+        # Same contrast fix as the News tab's sentiment badges (>=9:1 vs. the
+        # original ~4.15-4.6:1, which read as low-contrast in the table).
         _SIDE_COLORS = {
-            "buy":  ("#1a4731", "#3fb950"),
-            "sell": ("#3d1a1a", "#f85149"),
+            "buy":  ("#0f2818", "#7ee787"),
+            "sell": ("#2d1111", "#ffa198"),
         }
         _STATUS_COLORS = {
             "filled":   "#3fb950",
@@ -862,10 +866,14 @@ class MainWindow(QMainWindow):
             self._news_table.setRowCount(0)
             return
 
+        # bg/fg pairs chosen for >=9:1 contrast (WCAG AAA) against the dark
+        # theme -- the original pairing measured ~4.15-5.26:1, borderline-to-
+        # failing WCAG AA (4.5:1) for normal text, which read as low-contrast
+        # in the dense table at typical row font size.
         _SENTIMENT_COLORS = {
-            "positive": ("#1a4731", "#3fb950"),   # bg, fg
-            "negative": ("#3d1a1a", "#f85149"),
-            "neutral":  ("#1c2128", "#8b949e"),
+            "positive": ("#0f2818", "#7ee787"),   # bg, fg
+            "negative": ("#2d1111", "#ffa198"),
+            "neutral":  ("#21262d", "#c9d1d9"),
         }
 
         self._news_table.setRowCount(len(df))

@@ -1,4 +1,6 @@
 """Simple supervisor that coordinates runtime agents and an Ollama client."""
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional, Any
 import time
