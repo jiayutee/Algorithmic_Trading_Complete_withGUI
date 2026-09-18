@@ -120,8 +120,8 @@ def _broker_or_none():
 # from the PyQt5 reference implementation in ui/main_window.py).
 # ---------------------------------------------------------------------------
 
-_CAL_GREEN_BG = "#1a4731"  # dark green cell bg for days with PnL >= 0
-_CAL_RED_BG   = "#3d1a1a"  # dark red cell bg for days with PnL < 0
+_CAL_GREEN_BG = "#0f2818"  # dark green cell bg for days with PnL >= 0
+_CAL_RED_BG   = "#2d1111"  # dark red cell bg for days with PnL < 0
 _CAL_DIMMED_FG = "#484f58"  # very muted text for out-of-month filler cells
 
 
@@ -191,6 +191,41 @@ def _build_orders_table_data(broker) -> tuple:
     except Exception as exc:  # noqa: BLE001
         logger.error("[Dash] orders table build error: %s", exc)
         return [], f"Orders: error — {exc}"
+
+def _build_pnl_card(broker) -> tuple:
+    """``(total_text, total_style, breakdown_text, balance_text)`` for the P&L card.
+
+    Shows total P&L split into realized (locked in by closed positions) and
+    unrealized (open positions marked to market), plus account value. Safe
+    with ``broker=None`` (nothing traded yet -> zeros, starting balance).
+    """
+    from dash_app.layout import _METRIC_VALUE_STYLE
+
+    realized = unrealized = 0.0
+    balance = 100_000.0
+    if broker is not None:
+        try:
+            realized = float(broker.get_realized_pnl())
+            unrealized = float(broker.get_unrealized_pnl())
+            info = broker.get_account_info()
+            balance = float(info.get("portfolio_value", info.get("equity", balance)))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[Dash] P&L card update failed: %s", exc)
+
+    total = realized + unrealized
+
+    def _money(v: float) -> str:
+        return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
+
+    style = {
+        **_METRIC_VALUE_STYLE,
+        "fontSize": "20px",
+        "textAlign": "center",
+        "color": THEME["green"] if total >= 0 else THEME["red"],
+    }
+    breakdown = f"Realized {_money(realized)}  ·  Unrealized {_money(unrealized)}"
+    return _money(total), style, breakdown, f"${balance:,.2f}"
+
 
 def _build_position_row(symbol: str, pos) -> html.Div:
     """Build one row in the positions panel for a single open position.
@@ -304,7 +339,7 @@ def _build_pnl_calendar_grid(year: int, month: int, by_day: dict) -> list:
             cell_children: object = str(cell_date.day)
         elif pnl is not None:
             bg = _CAL_GREEN_BG if pnl >= 0 else _CAL_RED_BG
-            fg = THEME["green"] if pnl >= 0 else THEME["red"]
+            fg = "#7ee787" if pnl >= 0 else "#ffa198"  # >=9:1 vs the cell bg
             border_color = THEME["accent"] if is_today else THEME["border_dim"]
             sign = "+" if pnl >= 0 else ""
             cell_style = {
@@ -341,6 +376,49 @@ def _build_pnl_calendar_grid(year: int, month: int, by_day: dict) -> list:
 # ---------------------------------------------------------------------------
 # News & Earnings panel helpers (Phase 1.7)
 # ---------------------------------------------------------------------------
+
+# (background, foreground) pairs -- same >=9:1-contrast palette as the PyQt5
+# News tab's sentiment badges.
+_SENTIMENT_BADGE_COLORS = {
+    "positive": ("#0f2818", "#7ee787"),
+    "negative": ("#2d1111", "#ffa198"),
+    "neutral": ("#21262d", "#c9d1d9"),
+}
+
+
+def _sentiment_badge(item) -> Optional[html.Span]:
+    """Small coloured Positive/Negative/Neutral pill with confidence %.
+
+    The scoring backend (deepseek-chat, FinBERT or rule-based) is exposed as
+    the hover tooltip so it's visible which analyzer actually produced it.
+    Returns None when the item carries no sentiment.
+    """
+    sentiment = getattr(item, "sentiment", None) or {}
+    label = str(sentiment.get("label", "")).lower()
+    if not label:
+        return None
+    bg, fg = _SENTIMENT_BADGE_COLORS.get(label, _SENTIMENT_BADGE_COLORS["neutral"])
+    text = label.capitalize()
+    try:
+        text += f" {float(sentiment.get('confidence', 0.0)):.0%}"
+    except (TypeError, ValueError):
+        pass
+    return html.Span(
+        text,
+        title=f"Scored by {sentiment.get('model_name', 'unknown')}",
+        style={
+            "backgroundColor": bg,
+            "color": fg,
+            "border": f"1px solid {fg}55",
+            "borderRadius": "3px",
+            "padding": "1px 6px",
+            "fontSize": "10px",
+            "fontWeight": "600",
+            "marginRight": "8px",
+            "whiteSpace": "nowrap",
+        },
+    )
+
 
 def _build_news_content(symbol: Optional[str]) -> list:
     """Build the ``children`` list for the ``news-content`` Div.
@@ -413,7 +491,10 @@ def _build_news_content(symbol: Optional[str]) -> list:
                     "padding": "5px 0",
                 },
                 children=[
-                    headline_el,
+                    html.Div(
+                        [b for b in (_sentiment_badge(item), headline_el) if b is not None],
+                        style={"display": "flex", "alignItems": "baseline"},
+                    ),
                     html.Div(
                         f"{item.source or '—'}  ·  {ts}",
                         style={
@@ -2111,6 +2192,19 @@ def register_callbacks(app: dash.Dash) -> None:
         )
 
     # ------------------------------------------------------------------
+    # Live P&L card + account balance (was a static placeholder)
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("pnl-value", "children"),
+        Output("pnl-value", "style"),
+        Output("pnl-breakdown", "children"),
+        Output("account-balance", "children"),
+        Input("order-status", "children"),
+        Input("price-interval", "n_intervals"),
+    )
+    def update_pnl_card(_order_status: object, _n_intervals: object):
+        return _build_pnl_card(_broker_or_none())
+
+    # ------------------------------------------------------------------
     # Placeholder wiring points for future phases
     # ------------------------------------------------------------------
-    # Phase 4: live P&L polling → account-balance / pnl-value

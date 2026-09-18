@@ -358,6 +358,16 @@ def _metrics_panel() -> dbc.Col:
                         "fontSize": "20px",
                         "textAlign": "center",
                     }),
+                    html.Div(
+                        id="pnl-breakdown",
+                        children="Realized $0.00  ·  Unrealized $0.00",
+                        style={
+                            "textAlign": "center",
+                            "fontSize": "10px",
+                            "color": THEME["text_muted"],
+                            "marginTop": "2px",
+                        },
+                    ),
                 ],
             ),
             # Backtest results card (Phase 1.5)
@@ -1271,6 +1281,7 @@ def _bottom_tabs_panel() -> html.Div:
                                                         style={
                                                             "maxHeight": "240px",
                                                             "overflowY": "auto",
+                                                            "colorScheme": "dark",
                                                         },
                                                         children=html.Span(
                                                             "Select a symbol and click Refresh to load news.",

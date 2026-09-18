@@ -1955,3 +1955,96 @@ class TestCallbackCountPhase17:
             f"Expected at least 10 registered callbacks, found {len(callback_map)}: "
             f"{list(callback_map.keys())}"
         )
+
+
+class TestNewsSentimentBadge:
+    """Dash news rows must show the item's sentiment (was previously never rendered)."""
+
+    @staticmethod
+    def _spans(comp, out=None):
+        from dash import html as dash_html
+        out = [] if out is None else out
+        if isinstance(comp, dash_html.Span):
+            out.append(comp)
+        children = getattr(comp, "children", None)
+        if isinstance(children, list):
+            for c in children:
+                TestNewsSentimentBadge._spans(c, out)
+        elif children is not None and not isinstance(children, str):
+            TestNewsSentimentBadge._spans(children, out)
+        return out
+
+    def _item(self, sentiment):
+        import datetime
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            headline="Apple beats estimates", url="https://example.com/a", source="Reuters",
+            datetime_utc=datetime.datetime(2026, 9, 17, 10, 0), sentiment=sentiment,
+        )
+
+    def test_badge_shows_label_confidence_and_model(self):
+        from dash_app.callbacks import _sentiment_badge
+        badge = _sentiment_badge(self._item(
+            {"label": "positive", "confidence": 0.95, "model_name": "deepseek-chat"}
+        ))
+        assert badge.children == "Positive 95%"
+        assert "deepseek-chat" in badge.title
+        assert badge.style["color"] == "#7ee787"
+
+    def test_negative_and_neutral_use_distinct_colors(self):
+        from dash_app.callbacks import _sentiment_badge
+        neg = _sentiment_badge(self._item({"label": "negative", "confidence": 0.8}))
+        neu = _sentiment_badge(self._item({"label": "neutral", "confidence": 0.8}))
+        assert neg.style["color"] == "#ffa198"
+        assert neu.style["color"] == "#c9d1d9"
+        assert neg.style["backgroundColor"] != neu.style["backgroundColor"]
+
+    def test_no_sentiment_returns_none(self):
+        from dash_app.callbacks import _sentiment_badge
+        assert _sentiment_badge(self._item({})) is None
+
+    def test_news_rows_include_badge(self):
+        from unittest.mock import MagicMock, patch
+        from dash_app.callbacks import _build_news_content
+        pipeline = MagicMock()
+        pipeline.fetch_news_items.return_value = [
+            self._item({"label": "negative", "confidence": 0.9, "model_name": "rule-based-headline-v1"})
+        ]
+        with patch("core.news_pipeline.get_default_news_pipeline", return_value=pipeline):
+            rows = _build_news_content("AAPL")
+        texts = [s.children for s in self._spans(rows[0]) if isinstance(s.children, str)]
+        assert "Negative 90%" in texts
+
+
+class TestPnlCard:
+    """The P&L card was a static "$0.00" placeholder; it must reflect the broker."""
+
+    def test_no_broker_shows_zeros_and_starting_balance(self):
+        from dash_app.callbacks import _build_pnl_card
+        total, _style, breakdown, balance = _build_pnl_card(None)
+        assert total == "+$0.00"
+        assert "Realized +$0.00" in breakdown and "Unrealized +$0.00" in breakdown
+        assert balance == "$100,000.00"
+
+    def test_splits_realized_and_unrealized_with_colors(self):
+        from types import SimpleNamespace
+        from dash_app.callbacks import _build_pnl_card
+        from dash_app.layout import THEME
+        broker = SimpleNamespace(
+            get_realized_pnl=lambda: 150.0,
+            get_unrealized_pnl=lambda: -400.0,
+            get_account_info=lambda: {"portfolio_value": 99_750.0},
+        )
+        total, style, breakdown, balance = _build_pnl_card(broker)
+        assert total == "-$250.00"
+        assert breakdown == "Realized +$150.00  ·  Unrealized -$400.00"
+        assert balance == "$99,750.00"
+        assert style["color"] == THEME["red"]
+
+    def test_broker_error_falls_back_safely(self):
+        from types import SimpleNamespace
+        from dash_app.callbacks import _build_pnl_card
+        def boom():
+            raise RuntimeError("x")
+        total, _s, _b, balance = _build_pnl_card(SimpleNamespace(get_realized_pnl=boom))
+        assert total == "+$0.00" and balance == "$100,000.00"
