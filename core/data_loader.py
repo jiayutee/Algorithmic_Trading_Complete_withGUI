@@ -28,6 +28,15 @@ def _to_float_or_none(value):
         return None
 
 
+NEWS_FEATURE_COLUMNS = [
+    'positive', 'negative', 'neutral', 'sentiment_confidence', 'sentiment_balance',
+    'sentiment_magnitude', 'impact_score', 'source_reliability', 'news_count',
+    'headline_count', 'source_count', 'news_flow_ratio', 'event_earnings',
+    'event_guidance', 'event_mna', 'event_analyst', 'event_macro', 'event_regulatory',
+    'event_product', 'event_litigation', 'event_dividend', 'event_general',
+]
+
+
 class DataLoader:
     """
     Manages data loading from various sources (Historical, Live, FinRL)
@@ -84,7 +93,7 @@ class DataLoader:
         self._ws_connect_timeout = 10        # seconds to wait for initial on_open
         self.news_pipeline = get_default_news_pipeline()
 
-    def load_data(self, symbol, source="Historical", live=False, days=365, interval='1d'):
+    def load_data(self, symbol, source="Historical", live=False, days=365, interval='1d', include_news=True):
         """
         Load data from various sources.
         
@@ -94,7 +103,10 @@ class DataLoader:
             live (bool): If True, loads recent data (previously 'live').
             days (int): Number of days of history.
             interval (str): Candle interval ('1m', '1h', '1d').
-            
+            include_news (bool): Merge news sentiment/event features into the frame
+                (slow: scrapes sources + scores headlines). False returns candles
+                with those columns zero-filled.
+
         Returns:
             pd.DataFrame: OHLCV data.
         """
@@ -107,7 +119,16 @@ class DataLoader:
         else:
             df = self._get_historical_data(symbol, days, interval)
 
-        # News and event feature integration
+        # News and event feature integration. Scraping the news sources and
+        # scoring headlines takes tens of seconds when sources are rate-limited,
+        # so callers that only need candles (e.g. the Dash chart) can skip it;
+        # the sentiment/event columns are then zero-filled so the schema is
+        # identical either way.
+        if not include_news:
+            if df is not None:
+                self._fill_missing_news_columns(df)
+            return df
+
         logger.info(f"Fetching news and event features for {symbol}...")
         try:
             news_df = self.news_pipeline.fetch_news_dataframe(symbol)
@@ -115,29 +136,20 @@ class DataLoader:
                 df = self.news_pipeline.merge_features_into_prices(df, news_df, interval=interval)
                 logger.info("News sentiment and event features merged successfully.")
             else:
-                feature_columns = [
-                    'positive', 'negative', 'neutral', 'sentiment_confidence', 'sentiment_balance',
-                    'sentiment_magnitude', 'impact_score', 'source_reliability', 'news_count',
-                    'headline_count', 'source_count', 'news_flow_ratio', 'event_earnings',
-                    'event_guidance', 'event_mna', 'event_analyst', 'event_macro', 'event_regulatory',
-                    'event_product', 'event_litigation', 'event_dividend', 'event_general'
-                ]
-                for column in feature_columns:
-                    if column not in df.columns:
-                        df[column] = 0
+                self._fill_missing_news_columns(df)
                 logger.info("No news and event data found.")
         except Exception as e:
             logger.error(f"Error fetching news and event data: {e}")
-            for column in [
-                'positive', 'negative', 'neutral', 'sentiment_confidence', 'sentiment_balance',
-                'sentiment_magnitude', 'impact_score', 'source_reliability', 'news_count',
-                'headline_count', 'source_count', 'news_flow_ratio', 'event_earnings',
-                'event_guidance', 'event_mna', 'event_analyst', 'event_macro', 'event_regulatory',
-                'event_product', 'event_litigation', 'event_dividend', 'event_general'
-            ]:
+            for column in NEWS_FEATURE_COLUMNS:
                 df[column] = 0
 
         return df
+
+    @staticmethod
+    def _fill_missing_news_columns(df):
+        for column in NEWS_FEATURE_COLUMNS:
+            if column not in df.columns:
+                df[column] = 0
 
     def _get_finrl_data(self, symbol, days=3650, interval='1d'):
         """Get data simulating FinRL's YahooDownloader using internal method"""
@@ -467,7 +479,12 @@ class DataLoader:
         _HEARTBEAT_STALENESS = self._ws_heartbeat_staleness
         _CONNECT_TIMEOUT     = self._ws_connect_timeout
 
-        stream_name = f"{symbol.lower()}@depth@100ms"
+        # Partial-book stream: every message is a best-first snapshot of the top 5
+        # levels, so bids[0]/asks[0] really are the best bid/ask. The previous
+        # "@depth@100ms" diff stream only lists levels that *changed* in the last
+        # 100 ms, which are often far from the touch -- the derived mid-price was
+        # off by 1-9% (e.g. 74,230 shown while BTC traded at 81,200).
+        stream_name = f"{symbol.lower()}@depth5@100ms"
         ws_url = f"wss://stream.binance.com:9443/ws/{stream_name}"
 
         # Reset per-stream state
@@ -485,13 +502,17 @@ class DataLoader:
                 data = json.loads(message)
                 # logger.debug(f"[WebSocket Raw] {message}") # Debug raw message
 
-                # Check for order book depth update structure
-                if 'b' in data and 'a' in data:
+                # Order book message. Partial-book payloads use "bids"/"asks";
+                # the older diff-depth payloads used "b"/"a" (still accepted).
+                bids = data.get('bids', data.get('b'))
+                asks = data.get('asks', data.get('a'))
+                if bids is not None and asks is not None:
+                    event_ms = data.get('E')
                     order_book_update = {
-                        'symbol': data['s'],
-                        'bids': data['b'],   # [[price, quantity], ...]
-                        'asks': data['a'],   # [[price, quantity], ...]
-                        'timestamp': datetime.fromtimestamp(data['E'] / 1000),  # Event time
+                        'symbol': data.get('s') or symbol.upper(),
+                        'bids': bids,   # [[price, quantity], ...] best first
+                        'asks': asks,   # [[price, quantity], ...] best first
+                        'timestamp': datetime.fromtimestamp(event_ms / 1000) if event_ms else datetime.now(),
                         'exchange': 'binance',
                         'type': 'depthUpdate'
                     }

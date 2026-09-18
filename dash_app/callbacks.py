@@ -937,12 +937,16 @@ def register_callbacks(app: dash.Dash) -> None:
         try:
             from core.data_loader import DataLoader
             loader = DataLoader()
+            # Candles only: the news/sentiment merge scrapes rate-limited sources
+            # (~35 s) and the chart doesn't use those columns. The News tab
+            # fetches headlines separately on demand.
             df = loader.load_data(
                 symbol=symbol,
                 source="Historical",
                 live=False,
                 days=365,
                 interval=interval,
+                include_news=False,
             )
 
             if df is None or df.empty:
@@ -1311,6 +1315,7 @@ def register_callbacks(app: dash.Dash) -> None:
                 source="Historical",
                 live=False,
                 days=365,
+                include_news=False,  # rule-based strategies / research lab use OHLCV only
             )
             if df is None or df.empty:
                 return _err(f"No data available for {symbol}. Load the chart first.")
@@ -1566,6 +1571,7 @@ def register_callbacks(app: dash.Dash) -> None:
                 source="Historical",
                 live=False,
                 days=365,
+                include_news=False,  # rule-based strategies / research lab use OHLCV only
             )
             if df is None or df.empty:
                 return _err(f"No OHLCV data available for {symbol}. Load the chart first.")

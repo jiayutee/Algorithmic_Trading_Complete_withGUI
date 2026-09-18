@@ -1858,3 +1858,125 @@ class TestEarningsCalendarFMP:
             mock_get.assert_not_called()
             mock_ticker_cls.assert_not_called()
         assert result == []
+
+
+class TestLoadDataIncludeNews:
+    """The Dash chart used to block ~35 s on the news scrape + sentiment merge."""
+
+    def _loader(self):
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+        from core.data_loader import DataLoader
+        candles = pd.DataFrame(
+            {"Open": [1.0, 2.0], "High": [2.0, 3.0], "Low": [0.5, 1.5], "Close": [1.5, 2.5], "Volume": [10, 20]},
+            index=pd.date_range("2026-01-01", periods=2),
+        )
+        loader = DataLoader()
+        loader.news_pipeline = MagicMock()
+        patcher = patch.object(DataLoader, "_get_historical_data", return_value=candles)
+        patcher.start()
+        self.addCleanup = patcher.stop
+        return loader
+
+    def test_skips_the_news_pipeline_and_zero_fills_the_schema(self):
+        from core.data_loader import NEWS_FEATURE_COLUMNS
+        loader = self._loader()
+        try:
+            df = loader.load_data("AAPL", include_news=False)
+        finally:
+            self.addCleanup()
+        loader.news_pipeline.fetch_news_dataframe.assert_not_called()
+        for col in NEWS_FEATURE_COLUMNS:
+            assert col in df.columns and (df[col] == 0).all()
+        assert list(df["Close"]) == [1.5, 2.5]
+
+    def test_default_still_fetches_news(self):
+        import pandas as pd
+        loader = self._loader()
+        loader.news_pipeline.fetch_news_dataframe.return_value = pd.DataFrame()
+        try:
+            loader.load_data("AAPL")
+        finally:
+            self.addCleanup()
+        loader.news_pipeline.fetch_news_dataframe.assert_called_once()
+
+
+def test_dash_chart_backtest_and_research_lab_skip_news():
+    """Guard: the three Dash callers that only need candles must not pay for the news scrape."""
+    import re
+    from pathlib import Path
+    src = Path(__file__).parent.joinpath("dash_app", "callbacks.py").read_text()
+    calls = re.findall(r"df = loader\.load_data\((.*?)\n\s*\)", src, flags=re.S)
+    assert len(calls) == 3
+    assert all("include_news=False" in c for c in calls)
+
+
+class TestRealtimeStreamTopOfBook:
+    """The live price used to come from Binance's diff-depth stream, whose messages only
+    list *changed* levels (often far from the touch), so the mid-price was off by 1-9%."""
+
+    def _capture(self, monkeypatch):
+        import websocket
+        from core.data_loader import DataLoader
+        captured = {}
+
+        import threading
+
+        class FakeWS:
+            def __init__(self, url, on_message=None, on_error=None, on_close=None, on_open=None, **kw):
+                captured["url"] = url
+                captured["on_message"] = on_message
+                self._on_open = on_open
+                self._closed = threading.Event()
+
+            def run_forever(self, *a, **k):
+                self._on_open(self)          # the loader waits for "connected"
+                self._closed.wait(timeout=30)
+
+            def close(self):
+                self._closed.set()
+
+        monkeypatch.setattr(websocket, "WebSocketApp", FakeWS)
+        loader = DataLoader()
+        loader.start_realtime_stream("BTCUSDT", callback=lambda u: None)
+        import time
+        for _ in range(50):
+            if "on_message" in captured:
+                break
+            time.sleep(0.05)
+        return loader, captured
+
+    def test_subscribes_to_the_partial_book_stream(self, monkeypatch):
+        loader, captured = self._capture(monkeypatch)
+        try:
+            assert captured["url"].endswith("btcusdt@depth5@100ms")
+        finally:
+            loader.stop_realtime_stream()
+
+    def test_partial_book_message_gives_the_true_mid_price(self, monkeypatch):
+        import json
+        loader, captured = self._capture(monkeypatch)
+        try:
+            captured["on_message"](None, json.dumps({
+                "lastUpdateId": 1,
+                "bids": [["81194.83", "1.4"], ["81194.00", "2.0"]],
+                "asks": [["81194.84", "0.1"], ["81195.50", "3.0"]],
+            }))
+            update = loader.realtime_queue.get_nowait()
+            assert update["symbol"] == "BTCUSDT"
+            mid = (float(update["bids"][0][0]) + float(update["asks"][0][0])) / 2
+            assert abs(mid - 81194.835) < 1e-6
+        finally:
+            loader.stop_realtime_stream()
+
+    def test_legacy_diff_message_is_still_accepted(self, monkeypatch):
+        import json
+        loader, captured = self._capture(monkeypatch)
+        try:
+            captured["on_message"](None, json.dumps({
+                "e": "depthUpdate", "E": 1700000000000, "s": "BTCUSDT",
+                "b": [["50000.0", "1.0"]], "a": [["50001.0", "1.0"]],
+            }))
+            assert loader.realtime_queue.get_nowait()["bids"] == [["50000.0", "1.0"]]
+        finally:
+            loader.stop_realtime_stream()
