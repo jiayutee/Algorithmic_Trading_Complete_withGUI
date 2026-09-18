@@ -194,6 +194,82 @@ def _build_orders_table_data(broker) -> tuple:
         logger.error("[Dash] orders table build error: %s", exc)
         return [], f"Orders: error — {exc}"
 
+# ---------------------------------------------------------------------------
+# Agent Monitor (mirrors the desktop app's Agent Monitor tab)
+# ---------------------------------------------------------------------------
+
+_supervisor = None                      # shared runtime Supervisor (one per server process)
+_supervisor_lock = threading.Lock()
+
+
+def _supervisor_factory():
+    """Create a Supervisor. Split out so tests can substitute a fake."""
+    from core.runtime.supervisor import Supervisor
+    return Supervisor()
+
+
+def _control_supervisor(action: Optional[str]) -> Optional[str]:
+    """Start or stop the shared supervisor. Returns an error message, or None.
+
+    ``action`` is "start", "stop" or None (no-op, just observe). Idempotent:
+    starting while running or stopping while stopped changes nothing.
+    """
+    global _supervisor
+    with _supervisor_lock:
+        if action == "start" and _supervisor is None:
+            try:
+                sup = _supervisor_factory()
+                sup.start(loop_delay=5.0)
+                _supervisor = sup
+                logger.info("[Dash] runtime supervisor started")
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[Dash] failed to start supervisor: %s", exc)
+                return f"failed to start — {exc}"
+        elif action == "stop" and _supervisor is not None:
+            sup, _supervisor = _supervisor, None
+            try:
+                sup.stop()
+                logger.info("[Dash] runtime supervisor stopped")
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[Dash] error stopping supervisor: %s", exc)
+                return f"stopped with error — {exc}"
+    return None
+
+
+def _agent_monitor_state(supervisor, error: Optional[str] = None) -> tuple:
+    """``(status_text, status_style, start_disabled, stop_disabled, rows, llm_text)``.
+
+    Pure function of the supervisor's snapshot -- no Dash context needed.
+    """
+    running = supervisor is not None
+    if error:
+        status_text, color = f"Agents: {error}", THEME["red"]
+    elif running:
+        status_text, color = "Agents: running", THEME["green"]
+    else:
+        status_text, color = "Agents: stopped", THEME["text_muted"]
+    status_style = {"fontSize": "11px", "color": color, "flex": "1"}
+
+    rows: list = []
+    llm_text = "LLM summary: —"
+    if running:
+        try:
+            snap = supervisor.snapshot()
+            meta = snap.pop("__meta__", {})
+            llm_text = f"LLM summary: {str(meta.get('last_summary', '—'))[:400]}"
+            for name in sorted(snap):
+                latest = snap[name].get("latest")
+                rows.append({
+                    "agent": name,
+                    "status": str(latest.status) if latest else "—",
+                    "runs": snap[name].get("history_len", 0),
+                    "summary": str(latest.summary)[:200] if latest else "waiting for first cycle…",
+                })
+        except Exception as exc:  # noqa: BLE001 -- never break the page over a bad snapshot
+            logger.warning("[Dash] agent snapshot failed: %s", exc)
+    return status_text, status_style, running, not running, rows, llm_text
+
+
 def _build_pnl_card(broker) -> tuple:
     """``(total_text, total_style, breakdown_text, balance_text)`` for the P&L card.
 
@@ -2243,6 +2319,26 @@ def register_callbacks(app: dash.Dash) -> None:
             _build_position_size_div(),
             _build_gate_verdict_div(),
         )
+
+    # ------------------------------------------------------------------
+    # Agent Monitor: start/stop the supervisor and refresh the table
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("agent-status-label", "children"),
+        Output("agent-status-label", "style"),
+        Output("agent-start-btn", "disabled"),
+        Output("agent-stop-btn", "disabled"),
+        Output("agent-table", "data"),
+        Output("agent-llm-summary", "children"),
+        Input("agent-start-btn", "n_clicks"),
+        Input("agent-stop-btn", "n_clicks"),
+        Input("agent-interval", "n_intervals"),
+    )
+    def agent_monitor(_start_clicks, _stop_clicks, _n_intervals):
+        triggered = dash.callback_context.triggered_id
+        action = {"agent-start-btn": "start", "agent-stop-btn": "stop"}.get(triggered)
+        error = _control_supervisor(action)
+        return _agent_monitor_state(_supervisor, error)
 
     # ------------------------------------------------------------------
     # Live P&L card + account balance (was a static placeholder)

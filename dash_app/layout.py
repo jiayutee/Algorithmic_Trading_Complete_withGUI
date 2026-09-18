@@ -1383,6 +1383,85 @@ def _bottom_tabs_panel() -> html.Div:
                             ),
                         ],
                     ),
+                    _agent_monitor_tab(),
+                ],
+            ),
+        ],
+    )
+
+
+def _agent_table() -> "dash_table.DataTable":
+    """Per-agent status table; status text is colour-coded with high-contrast colours."""
+    table = _rl_datatable(
+        "agent-table",
+        [
+            {"name": "Agent", "id": "agent"},
+            {"name": "Status", "id": "status"},
+            {"name": "Runs", "id": "runs"},
+            {"name": "Summary", "id": "summary"},
+        ],
+    )
+    table.style_cell_conditional = [
+        {"if": {"column_id": "summary"}, "textAlign": "left", "whiteSpace": "normal",
+         "height": "auto", "minWidth": "300px"},
+        {"if": {"column_id": "agent"}, "textAlign": "left", "fontWeight": "600"},
+    ]
+    table.style_data_conditional = [
+        {"if": {"row_index": "odd"}, "backgroundColor": "#0f1419"},
+        {"if": {"filter_query": "{status} = 'ok'", "column_id": "status"}, "color": "#7ee787", "fontWeight": "600"},
+        {"if": {"filter_query": "{status} = 'warning'", "column_id": "status"}, "color": "#ffb86b", "fontWeight": "600"},
+        {"if": {"filter_query": "{status} = 'error'", "column_id": "status"}, "color": "#ffa198", "fontWeight": "600"},
+    ]
+    return table
+
+
+def _agent_monitor_tab() -> "dcc.Tab":
+    """Agent Monitor tab -- mirrors the desktop app's Agent Monitor.
+
+    Start/Stop the runtime supervisor, then watch one row per agent
+    (portfolio / news / price / stats) plus the LLM's summary line. All
+    dynamic content is driven by the single ``agent_monitor`` callback in
+    callbacks.py; the interval only exists while this tab is open.
+    """
+    _btn = {
+        "backgroundColor": THEME["bg_dark"],
+        "border": f"1px solid {THEME['border']}",
+        "borderRadius": "4px",
+        "padding": "3px 12px",
+        "fontSize": "11px",
+        "cursor": "pointer",
+        "marginLeft": "8px",
+    }
+    return dcc.Tab(
+        label="Agent Monitor",
+        value="agent-monitor-tab",
+        style=_TAB_STYLE,
+        selected_style=_TAB_SELECTED_STYLE,
+        children=[
+            html.Div(
+                style={**_PANEL_STYLE, "margin": "8px 0"},
+                children=[
+                    dcc.Interval(id="agent-interval", interval=3000, n_intervals=0),
+                    html.Div(
+                        style={"display": "flex", "alignItems": "center", "marginBottom": "8px"},
+                        children=[
+                            html.P("Agent Monitor", style={**_LABEL_MUTED, "fontWeight": "600",
+                                                           "marginBottom": "0", "marginRight": "12px"}),
+                            html.Span("Agents: stopped", id="agent-status-label",
+                                      style={"fontSize": "11px", "color": THEME["text_muted"], "flex": "1"}),
+                            html.Button("Start Agents", id="agent-start-btn", n_clicks=0,
+                                        style={**_btn, "color": THEME["green"]}),
+                            html.Button("Stop Agents", id="agent-stop-btn", n_clicks=0, disabled=True,
+                                        style={**_btn, "color": THEME["red"]}),
+                        ],
+                    ),
+                    _agent_table(),
+                    html.Div(
+                        "LLM summary: —",
+                        id="agent-llm-summary",
+                        style={"color": THEME["text_muted"], "fontSize": "11px",
+                               "fontStyle": "italic", "marginTop": "8px", "lineHeight": "1.5"},
+                    ),
                 ],
             ),
         ],

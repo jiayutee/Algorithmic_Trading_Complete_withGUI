@@ -2048,3 +2048,112 @@ class TestPnlCard:
             raise RuntimeError("x")
         total, _s, _b, balance = _build_pnl_card(SimpleNamespace(get_realized_pnl=boom))
         assert total == "+$0.00" and balance == "$100,000.00"
+
+
+class TestAgentMonitor:
+    """Dash Agent Monitor (parity with the desktop app's tab)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset(self):
+        import dash_app.callbacks as cb
+        cb._supervisor = None
+        original = cb._supervisor_factory
+        yield cb
+        cb._supervisor = None
+        cb._supervisor_factory = original
+
+    @staticmethod
+    def _fake_supervisor(started=None, stopped=None):
+        from types import SimpleNamespace
+        result = lambda name, status, summary: SimpleNamespace(name=name, status=status, summary=summary)
+        class Fake:
+            def start(self, loop_delay=1.0):
+                if started is not None:
+                    started.append(loop_delay)
+            def stop(self, timeout=2.0):
+                if stopped is not None:
+                    stopped.append(True)
+            def snapshot(self):
+                return {
+                    "price": {"latest": result("price", "ok", "AAPL=190.1"), "history_len": 7},
+                    "news": {"latest": None, "history_len": 0},
+                    "__meta__": {"last_summary": "All quiet."},
+                }
+        return Fake()
+
+    def test_state_when_stopped(self, _reset):
+        text, style, start_disabled, stop_disabled, rows, llm = _reset._agent_monitor_state(None)
+        assert text == "Agents: stopped" and rows == []
+        assert (start_disabled, stop_disabled) == (False, True)
+        assert llm == "LLM summary: —"
+
+    def test_state_when_running_lists_one_row_per_agent(self, _reset):
+        text, style, start_disabled, stop_disabled, rows, llm = _reset._agent_monitor_state(self._fake_supervisor())
+        assert text == "Agents: running" and (start_disabled, stop_disabled) == (True, False)
+        assert [r["agent"] for r in rows] == ["news", "price"]          # sorted
+        price = rows[1]
+        assert price["status"] == "ok" and price["runs"] == 7 and "AAPL=190.1" in price["summary"]
+        assert rows[0]["status"] == "—" and "waiting" in rows[0]["summary"]   # no result yet
+        assert llm == "LLM summary: All quiet."
+
+    def test_error_is_shown_in_red(self, _reset):
+        from dash_app.layout import THEME
+        text, style, *_ = _reset._agent_monitor_state(None, error="failed to start — boom")
+        assert "boom" in text and style["color"] == THEME["red"]
+
+    def test_snapshot_failure_never_breaks_the_page(self, _reset):
+        class Broken:
+            def snapshot(self):
+                raise RuntimeError("x")
+        *_, rows, llm = _reset._agent_monitor_state(Broken())
+        assert rows == []
+
+    def test_start_then_stop_is_idempotent(self, _reset):
+        started, stopped = [], []
+        _reset._supervisor_factory = lambda: self._fake_supervisor(started, stopped)
+        assert _reset._control_supervisor("start") is None
+        assert _reset._control_supervisor("start") is None          # already running: no second start
+        assert started == [5.0] and _reset._supervisor is not None
+        assert _reset._control_supervisor(None) is None             # observe only
+        assert _reset._control_supervisor("stop") is None
+        assert _reset._control_supervisor("stop") is None           # already stopped: no second stop
+        assert stopped == [True] and _reset._supervisor is None
+
+    def test_start_failure_returns_message_and_stays_stopped(self, _reset):
+        def boom():
+            raise RuntimeError("no ollama")
+        _reset._supervisor_factory = boom
+        msg = _reset._control_supervisor("start")
+        assert "no ollama" in msg and _reset._supervisor is None
+
+    def test_real_supervisor_starts_and_stops(self, _reset, monkeypatch):
+        """Real Supervisor construct/start/stop -- would have failed with the Python 3.9
+        union-syntax crash. The agent cycle is stubbed so no network calls happen."""
+        monkeypatch.setattr("core.runtime.supervisor.Supervisor.run_cycle", lambda self, ctx=None: [])
+        assert _reset._control_supervisor("start") is None
+        try:
+            text, *_ , rows, _llm = _reset._agent_monitor_state(_reset._supervisor)
+            assert text == "Agents: running"
+            assert {r["agent"] for r in rows} == {"portfolio", "news", "price", "stats"}
+        finally:
+            assert _reset._control_supervisor("stop") is None
+
+    def test_layout_has_the_tab_and_components(self):
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component
+
+        ids, tab_values = set(), set()
+        def walk(c):
+            if isinstance(c, Component):
+                if getattr(c, "id", None):
+                    ids.add(c.id)
+                if getattr(c, "value", None) and type(c).__name__ == "Tab":
+                    tab_values.add(c.value)
+                walk(getattr(c, "children", None))
+            elif isinstance(c, (list, tuple)):
+                for x in c:
+                    walk(x)
+        walk(build_layout())
+        assert "agent-monitor-tab" in tab_values
+        assert {"agent-start-btn", "agent-stop-btn", "agent-table", "agent-llm-summary",
+                "agent-status-label", "agent-interval"} <= ids
