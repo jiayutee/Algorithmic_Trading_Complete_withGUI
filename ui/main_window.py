@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QComboBox, QPushButton, QLabel, QGroupBox, QLineEdit,
                              QTextEdit, QTabWidget, QSplitter, QTableWidget,
                              QTableWidgetItem, QHeaderView, QApplication, QFormLayout,
-                             QFrame, QSizePolicy, QGridLayout)
+                             QFrame, QSizePolicy, QGridLayout, QCheckBox)
 from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 try:
@@ -355,6 +355,12 @@ class MainWindow(QMainWindow):
         self.strategy_combo.addItems(strategy_items)
         self.strategy_combo.setFixedWidth(130)
         layout.addWidget(self.strategy_combo)
+        self.trend_overlay_check = QCheckBox("Trend overlay")
+        self.trend_overlay_check.setToolTip(
+            "Only hold positions while the trailing 28-bar return is positive; otherwise sit in cash.\n"
+            "Evidence (Phases 6.7-6.9): reduced the worst drawdown in 3 tests; did NOT show higher return.\n"
+            "Also stops the strategy from shorting. Validated on daily bars, crypto only.")
+        layout.addWidget(self.trend_overlay_check)
 
         # Broker
         layout.addWidget(self._muted_label("Broker"))
@@ -1395,7 +1401,8 @@ class MainWindow(QMainWindow):
             if strategy_name == "LSTM Predictor":
                 kwargs = {'ticker': self.symbol_combo.currentText(), 'sequence_length': 60}
 
-            strategy_wrapper = self.strategy_manager.get_strategy(strategy_name, **kwargs)
+            strategy_wrapper = self.strategy_manager.get_strategy(
+                strategy_name, trend_overlay=self.trend_overlay_check.isChecked(), **kwargs)
             if not strategy_wrapper:
                  self.statusBar().showMessage(f"Failed to load strategy: {strategy_name}")
                  return False

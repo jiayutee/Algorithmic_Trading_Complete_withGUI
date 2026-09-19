@@ -122,6 +122,7 @@ class TestLayoutStructure:
         # Backtest controls + results (Phase 1.5)
         "bt-cash-input",
         "bt-run-btn",
+        "trend-overlay-check",
         "bt-alpha",
         "bt-beta",
         "bt-status",

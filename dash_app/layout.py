@@ -113,7 +113,7 @@ _TAB_SELECTED_STYLE = {
 
 _SYMBOLS    = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AAPL", "TSLA", "SPY", "QQQ"]
 _INTERVALS  = ["1d", "1h", "15m", "5m", "1m"]
-_STRATEGIES = ["None", "MACD/RSI", "EMA Crossover", "Stochastic", "GBM (LightGBM)"]
+_STRATEGIES = ["None", "MACD/RSI", "EMA Crossover", "Stochastic", "GBM (LightGBM)", "Trend Filter (28d)"]
 
 
 def _muted(text: str) -> html.Span:
@@ -152,6 +152,18 @@ def _topbar() -> html.Div:
                 value="None",
                 clearable=False,
                 style={**_DROPDOWN_STYLE, "minWidth": "130px"},
+            ),
+            html.Div(
+                title=("Only hold positions while the trailing 28-bar return is positive, else cash. "
+                       "Evidence (Phases 6.7-6.9): cut the worst drawdown in 3 tests; did NOT show higher return. "
+                       "Also stops the strategy from shorting. Daily bars, crypto only."),
+                children=dcc.Checklist(
+                    id="trend-overlay-check",
+                    options=[{"label": " Trend overlay", "value": "on"}],
+                    value=[],
+                    inline=True,
+                    style={"color": THEME["text_muted"], "fontSize": "12px", "whiteSpace": "nowrap"},
+                ),
             ),
 
             html.Div(style={"flex": "1"}),  # spacer

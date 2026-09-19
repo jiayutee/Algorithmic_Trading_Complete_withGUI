@@ -1361,6 +1361,7 @@ def register_callbacks(app: dash.Dash) -> None:
         "EMA Crossover": ("strategies.simple_strategies", "EMACrossoverStrategy"),
         "Stochastic":    ("strategies.simple_strategies", "StochasticStrategy"),
         "GBM (LightGBM)": ("strategies.gbm_strategy", "GBMStrategy"),
+        "Trend Filter (28d)": ("strategies.trend_filter_strategy", "TrendFilterStrategy"),
     }
 
     @app.callback(
@@ -1377,6 +1378,7 @@ def register_callbacks(app: dash.Dash) -> None:
         State("active-symbol-store", "data"),
         State("strategy-dropdown", "value"),
         State("bt-cash-input", "value"),
+        State("trend-overlay-check", "value"),
         prevent_initial_call=True,
     )
     def run_backtest_callback(
@@ -1384,6 +1386,7 @@ def register_callbacks(app: dash.Dash) -> None:
         symbol: Optional[str],
         strategy_name: Optional[str],
         cash: Optional[float],
+        trend_overlay: Optional[list] = None,
     ):
         """Run a backtest and update the Backtest Results panel + Equity Curve tab.
 
@@ -1455,6 +1458,9 @@ def register_callbacks(app: dash.Dash) -> None:
             mod_name, cls_name = _STRATEGY_CLASS_MAP[strategy_name]
             import importlib
             strategy_cls = getattr(importlib.import_module(mod_name), cls_name)
+            if trend_overlay and "on" in trend_overlay:
+                from strategies.trend_filter_strategy import with_trend_overlay
+                strategy_cls = with_trend_overlay(strategy_cls)
 
             from core.backtester import Backtester
             backtester = Backtester()

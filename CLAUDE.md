@@ -32,6 +32,7 @@ core/
   kalshi_arbitrage.py     # Kalshi mispricing SIGNALS only (YES+NO<$1, exclusive-event sets), after assumed fees
   kalshi_collector.py     # Daily Kalshi snapshot collector + outcome resolver (python -m core.kalshi_collector collect|resolve|status)
   research_loop.py        # Autonomous research loop: evaluate candidates vs buy&hold, promote/retire, forward paper ledger
+  trend_overlay.py        # Trend-filter rule (28-bar, weekly): drawdown reduction, NOT alpha (Phases 6.7-6.9)
   risk_sizing.py          # Volatility-targeting helpers (Phase 6.6; result: did not help)
   news_health.py          # Per-source circuit breaker so one rate-limited news source can't stall a refresh
 brokers/
@@ -43,6 +44,7 @@ brokers/
 strategies/
   simple_strategies.py    # MACD/RSI, EMA crossover, Stochastic
   ml_strategies.py        # DEPRECATED LSTM (hidden from UI; see docstring for why) -- use gbm_strategy.py
+  trend_filter_strategy.py # Trend Filter (28d) strategy + with_trend_overlay(cls) wrapper (UI checkbox 'Trend overlay')
   gbm_strategy.py         # LightGBM direction model, retrained walk-forward (Phase 6.2)
   FinRL_strategy.py
   TD3_strategy.py
