@@ -21,9 +21,10 @@ from core.broker_manager import BrokerManager
 from ui.main_window import MainWindow
 from config.settings import (
     ALPACA_API_KEY, ALPACA_SECRET_KEY,
-    KUCOIN_API_KEY, KUCOIN_SECRET_KEY,
+    KUCOIN_API_KEY, KUCOIN_SECRET_KEY, KUCOIN_PASSWORD,
     BINANCE_API_KEY, BINANCE_SECRET_KEY,
     BINANCE_TESTNET_API_KEY, BINANCE_TESTNET_SECRET_KEY,
+    MEXC_API_KEY, MEXC_SECRET_KEY,
 )
 
 # Optional heavy dependencies — imported lazily so missing packages don't
@@ -73,6 +74,15 @@ class TradingApp:
             binance_secret=BINANCE_SECRET_KEY,
             binance_testnet_key=BINANCE_TESTNET_API_KEY,
             binance_testnet_secret=BINANCE_TESTNET_SECRET_KEY,
+            # NOTE: kucoin_key/kucoin_secret/kucoin_password were previously
+            # imported above but never passed here, so KuCoinConnector could
+            # never actually initialize with live credentials. Fixed as part
+            # of adding MEXC support, since this is the same block.
+            kucoin_key=KUCOIN_API_KEY,
+            kucoin_secret=KUCOIN_SECRET_KEY,
+            kucoin_password=KUCOIN_PASSWORD,
+            mexc_key=MEXC_API_KEY,
+            mexc_secret=MEXC_SECRET_KEY,
         )
 
         # Create main window

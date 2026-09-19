@@ -9,6 +9,7 @@ dash-bootstrap-components>=1.5,<2
 pandas
 numpy
 scikit-learn
+lightgbm
 tensorflow
 torch
 transformers
@@ -27,6 +28,8 @@ ccxt
 alpaca-py
 alpaca-trade-api
 ib-insync
+# Phase 8.0 evaluation spike. Needs Python >= 3.11 (no wheels for 3.9): see scripts/setup_py311_env.sh
+nautilus_trader; python_version >= "3.11"
 ta
 pandas-ta
 PyPortfolioOpt

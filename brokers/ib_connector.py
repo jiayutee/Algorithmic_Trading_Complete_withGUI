@@ -2,6 +2,8 @@ from ib_insync import IB, MarketOrder, Contract
 from typing import Optional, Union
 
 
+from brokers.execution_guard import guarded_live_order
+
 class IBKRConnector:
     """
     Interactive Brokers Connector for live trading
@@ -12,7 +14,9 @@ class IBKRConnector:
         """
         Initialize connection to TWS/Gateway
         :param host: IP address where TWS/Gateway is running
-        :param port: 7497 for TWS live, 7496 for Gateway live, 4002 for paper trading
+        :param port: IB defaults -- TWS: 7496 live / 7497 paper; IB Gateway: 4001 live / 4002 paper.
+            Ports are user-configurable, so this connector never *assumes* a port means paper: orders always
+            go through the live-order guard (brokers/execution_guard.py).
         :param client_id: Client ID for this connection (must be unique per connection)
         """
         self.ib = IB()
@@ -40,6 +44,7 @@ class IBKRConnector:
         """Context manager exit"""
         self.disconnect()
 
+    @guarded_live_order("IBKR")
     def submit_order(
             self,
             symbol: str,
@@ -121,6 +126,18 @@ class IBKRConnector:
                     }
                 }
         return None
+
+    def get_positions(self) -> dict:
+        """All open positions as {symbol: {qty, avg_cost, sec_type, currency, exchange}} (same keyed shape as the
+        other brokers' portfolio entries). Multiple contracts on one symbol (e.g. option legs) are keyed
+        ``SYMBOL:secType`` after the first so none is silently overwritten."""
+        out: dict = {}
+        for position in self.ib.positions():
+            c = position.contract
+            key = c.symbol if c.symbol not in out else f"{c.symbol}:{c.secType}"
+            out[key] = {"qty": float(position.position), "avg_cost": float(position.avgCost),
+                        "sec_type": c.secType, "currency": c.currency, "exchange": c.exchange}
+        return out
 
     def get_account_info(self) -> dict:
         """Get basic account information"""

@@ -8,6 +8,7 @@ import threading
 import numpy as np
 from collections import defaultdict
 from core.logger import get_logger
+from core.trade_rationale import unspecified_rationale
 
 logger = get_logger(__name__)
 
@@ -48,6 +49,7 @@ class Order:
     updated_at: float = field(default_factory=time.time)
     realized_pnl: float = 0.0  # this order's own contribution to closing/reducing a position; 0 for opens
     fee: float = 0.0  # commission paid on this fill
+    rationale: Dict = field(default_factory=unspecified_rationale)  # structured "why" (core/trade_rationale.py)
 
 
 @dataclass
@@ -139,7 +141,8 @@ class SimulatedBroker:
             limit_price: Optional[float] = None,
             stop_price: Optional[float] = None,
             leverage: float = 1.0,
-            execution_price: Optional[float] = None
+            execution_price: Optional[float] = None,
+            rationale: Optional[Dict] = None
     ) -> Order:
         """
         Submit an order to the simulated broker
@@ -152,6 +155,9 @@ class SimulatedBroker:
             limit_price: Required for limit orders
             stop_price: Required for stop orders
             leverage: Leverage multiplier (1.0 = no leverage)
+            rationale: Structured "why" for this order (see core/trade_rationale.py);
+                       defaults to an explicit "unspecified" record so no order is
+                       ever stored without one.
 
         Returns:
             Order object with status
@@ -181,7 +187,8 @@ class SimulatedBroker:
                 price=current_price,
                 limit_price=limit_price,
                 stop_price=stop_price,
-                execution_price=execution_price
+                execution_price=execution_price,
+                rationale=rationale if rationale is not None else unspecified_rationale(),
             )
 
             # Process order based on type

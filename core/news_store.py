@@ -119,6 +119,43 @@ class NewsStore:
             result.append(obj)
         return result
 
+    def get_cached_sentiments(self, hashes: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+        """Trusted stored sentiment per headline hash. Scores from the rule-based fallback and
+        malformed rows are excluded so they get re-scored by the real analyzer."""
+        hashes = [h for h in hashes if h]
+        out: Dict[str, Dict[str, Any]] = {}
+        cur = self.conn.cursor()
+        for i in range(0, len(hashes), 400):                 # stay under SQLite's variable limit
+            chunk = hashes[i:i + 400]
+            cur.execute(f"SELECT headline_hash, sentiment FROM news WHERE headline_hash IN ({','.join('?' * len(chunk))})", chunk)
+            for row in cur.fetchall():
+                try:
+                    sent = json.loads(row["sentiment"] or "null")
+                except Exception:
+                    continue
+                if (isinstance(sent, dict) and sent.get("label") and sent.get("model_name")
+                        and not str(sent["model_name"]).startswith("rule-based")
+                        and all(k in sent for k in ("positive", "negative", "neutral", "confidence"))):
+                    out[row["headline_hash"]] = sent
+        return out
+
+    def upgrade_sentiments(self, by_hash: Dict[str, Dict[str, Any]]) -> int:
+        """Replace rule-based / missing stored sentiment with a better score (INSERT OR IGNORE
+        never updates an existing row, so improved scores would otherwise be lost)."""
+        n = 0
+        cur = self.conn.cursor()
+        for hh, sent in by_hash.items():
+            if not sent or str(sent.get("model_name", "")).startswith("rule-based"):
+                continue
+            cur.execute(
+                "UPDATE news SET sentiment=? WHERE headline_hash=? AND (sentiment IS NULL OR sentiment IN ('', '{}', 'null') "
+                "OR sentiment LIKE '%rule-based%' OR sentiment NOT LIKE '%model_name%')",
+                (json.dumps(sent), hh),
+            )
+            n += cur.rowcount
+        self.conn.commit()
+        return n
+
     def set_meta(self, key: str, value: str):
         cur = self.conn.cursor()
         cur.execute(

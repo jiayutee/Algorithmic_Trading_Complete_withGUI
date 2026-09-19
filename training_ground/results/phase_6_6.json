@@ -1,0 +1,141 @@
+{
+  "run_at": "2026-09-19T09:37:18.193581+00:00",
+  "window": [
+    "2023-10-16",
+    "2026-08-31"
+  ],
+  "days": 1051,
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "LTCUSDT",
+    "DOGEUSDT",
+    "SOLUSDT"
+  ],
+  "stats": {
+    "GBM-VT": {
+      "ann_return": 0.0828301465332335,
+      "ann_vol": 0.38717217091431244,
+      "sharpe": 0.39915962002546934,
+      "max_drawdown": -0.5462308332028338,
+      "calmar": 0.15163945624884909,
+      "total_return": 0.25751981475938024,
+      "avg_exposure": 0.6968047132794359,
+      "annual_turnover": 32.19887232418642
+    },
+    "NAIVE-VT": {
+      "ann_return": 0.1949580653985139,
+      "ann_vol": 0.38882636183522384,
+      "sharpe": 0.6528192144386067,
+      "max_drawdown": -0.562575130518594,
+      "calmar": 0.3465458297433044,
+      "total_return": 0.6700646744050851,
+      "avg_exposure": 0.6697214888057935,
+      "annual_turnover": 4.183579061764028
+    },
+    "FIXED (matched to GBM-VT)": {
+      "ann_return": 0.2760933473784666,
+      "ann_vol": 0.4249159070458246,
+      "sharpe": 0.7861896448831723,
+      "max_drawdown": -0.5219086649424238,
+      "calmar": 0.5290070196648772,
+      "total_return": 1.0178246476099906,
+      "avg_exposure": 0.6968047132794458,
+      "annual_turnover": 0.0
+    },
+    "FIXED (matched to NAIVE-VT)": {
+      "ann_return": 0.26833089131509413,
+      "ann_vol": 0.4084003860201676,
+      "sharpe": 0.7861896448831724,
+      "max_drawdown": -0.506784805833127,
+      "calmar": 0.5294769855500552,
+      "total_return": 0.9826827878993152,
+      "avg_exposure": 0.6697214888057876,
+      "annual_turnover": 0.0
+    },
+    "BUY&HOLD (100%)": {
+      "ann_return": 0.34096395118364775,
+      "ann_vol": 0.6098063043316742,
+      "sharpe": 0.7861896448831724,
+      "max_drawdown": -0.667300418993824,
+      "calmar": 0.5109601934579385,
+      "total_return": 1.3275093750788671,
+      "avg_exposure": 1.0,
+      "annual_turnover": 0.0
+    }
+  },
+  "comparisons": [
+    {
+      "comparison": "C1 NAIVE-VT vs FIXED matched",
+      "sharpe_diff": -0.13337043044456576,
+      "ci": [
+        -0.5071365471075847,
+        0.291939485674764
+      ],
+      "ci_level": 0.9833333333333333,
+      "sharpe_diff_halves": [
+        -0.11544144874698259,
+        0.06656036536810747
+      ],
+      "criteria": {
+        "1_ci_lower_above_zero": false,
+        "2_positive_in_both_halves": false,
+        "3_max_drawdown_not_worse": false,
+        "FINDING": false
+      }
+    },
+    {
+      "comparison": "C2 GBM-VT vs FIXED matched",
+      "sharpe_diff": -0.387030024857703,
+      "ci": [
+        -0.7540767212703174,
+        0.00887170884572519
+      ],
+      "ci_level": 0.9833333333333333,
+      "sharpe_diff_halves": [
+        -0.4514850154374457,
+        -0.19455682448297665
+      ],
+      "criteria": {
+        "1_ci_lower_above_zero": false,
+        "2_positive_in_both_halves": false,
+        "3_max_drawdown_not_worse": false,
+        "FINDING": false
+      }
+    },
+    {
+      "comparison": "C3 GBM-VT vs NAIVE-VT",
+      "sharpe_diff": -0.25365959441313735,
+      "ci": [
+        -0.5515412333680775,
+        0.05435237321379865
+      ],
+      "ci_level": 0.9833333333333333,
+      "sharpe_diff_halves": [
+        -0.3360435666904624,
+        -0.2611171898510846
+      ],
+      "criteria": {
+        "1_ci_lower_above_zero": false,
+        "2_positive_in_both_halves": false,
+        "3_max_drawdown_not_worse": true,
+        "FINDING": false
+      }
+    }
+  ],
+  "gbm_naive_forecast_log_correlation": 0.4457670753533204,
+  "protocol": {
+    "k": 0.7,
+    "cap": 1.0,
+    "band": 0.1,
+    "fee": 0.001,
+    "train": 400,
+    "retrain": 20,
+    "block": 10,
+    "n_boot": 2000,
+    "ci_level": 0.9833333333333333
+  }
+}

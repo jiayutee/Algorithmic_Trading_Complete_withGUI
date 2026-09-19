@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QComboBox, QPushButton, QLabel, QGroupBox, QLineEdit,
                              QTextEdit, QTabWidget, QSplitter, QTableWidget,
                              QTableWidgetItem, QHeaderView, QApplication, QFormLayout,
-                             QFrame, QSizePolicy, QGridLayout)
+                             QFrame, QSizePolicy, QGridLayout, QCheckBox)
 from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 try:
@@ -43,6 +43,9 @@ except ImportError:
 from typing import Dict, List, Optional
 from core.news_scraper import scrape_and_analyze_finviz_news
 from core.logger import logger
+from core.trade_rationale import (
+    format_rationale, format_rationale_detail, manual_rationale, submit_with_rationale,
+)
 from core.chart_builder import build_candlestick_figure, overlay_signals
 
 
@@ -58,9 +61,7 @@ class NewsWorker(QThread):
     def run(self):
         try:
             from core.news_pipeline import NewsPipeline
-            from core.sentiment import SentimentAnalyzer
             pipeline = NewsPipeline.from_env()
-            pipeline.sentiment_analyzer = SentimentAnalyzer(force_rule_based=True)
             df = pipeline.fetch_news_dataframe(self.symbol, limit=25)
             self.results_ready.emit(df)
         except Exception as e:
@@ -142,9 +143,10 @@ class MainWindow(QMainWindow):
             QTabBar::tab { background: #161b22; border: 1px solid #30363d; padding: 5px 12px;
                            color: #8b949e; font-size: 11px; border-bottom: none; border-radius: 4px 4px 0 0; }
             QTabBar::tab:selected { background: #0d1117; color: #e6edf3; border-bottom: 2px solid #58a6ff; }
-            QTableWidget { background: #0d1117; gridline-color: #21262d; color: #e6edf3;
+            QTableWidget { background: #0d1117; alternate-background-color: #1a2130;
+                           gridline-color: #21262d; color: #e6edf3;
                            border: none; font-size: 11px; }
-            QTableWidget::item:selected { background: #1f6feb33; }
+            QTableWidget::item:selected { background: #1f3d6b; color: #ffffff; }
             QHeaderView::section { background: #161b22; color: #8b949e; border: none;
                                    border-bottom: 1px solid #30363d; padding: 4px 6px; font-size: 10px;
                                    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -343,21 +345,27 @@ class MainWindow(QMainWindow):
                 # Fallback to known strategies if manager is unavailable
                 strategy_items += [
                     "MACD/RSI", "EMA Crossover", "Stochastic",
-                    "LSTM Predictor", "TD3 Strategy"
+                    "GBM (LightGBM)", "TD3 Strategy"
                 ]
         else:
             strategy_items += [
                 "MACD/RSI", "EMA Crossover", "Stochastic",
-                "LSTM Predictor", "TD3 Strategy"
+                "GBM (LightGBM)", "TD3 Strategy"
             ]
         self.strategy_combo.addItems(strategy_items)
         self.strategy_combo.setFixedWidth(130)
         layout.addWidget(self.strategy_combo)
+        self.trend_overlay_check = QCheckBox("Trend overlay")
+        self.trend_overlay_check.setToolTip(
+            "Only hold positions while the trailing 28-bar return is positive; otherwise sit in cash.\n"
+            "Evidence (Phases 6.7-6.9): reduced the worst drawdown in 3 tests; did NOT show higher return.\n"
+            "Also stops the strategy from shorting. Validated on daily bars, crypto only.")
+        layout.addWidget(self.trend_overlay_check)
 
         # Broker
         layout.addWidget(self._muted_label("Broker"))
         self.broker_combo = QComboBox()
-        self.broker_combo.addItems(["Simulator", "Alpaca", "Interactive Brokers", "Binance"])
+        self.broker_combo.addItems(["Simulator", "Alpaca", "Interactive Brokers", "Binance", "MEXC"])
         self.broker_combo.setFixedWidth(130)
         layout.addWidget(self.broker_combo)
 
@@ -540,6 +548,7 @@ class MainWindow(QMainWindow):
         self._setup_pnl_calendar_tab()
         self._setup_news_tab()
         self._setup_agent_monitor_tab()
+        self._setup_research_lab_tab()
 
         if self._missing_deps:
             self._setup_missing_deps_tab()
@@ -569,10 +578,10 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(clear_btn)
         layout.addLayout(toolbar)
 
-        # Table: Time | Symbol | Side | Type | Qty | Fill Price | Status
-        self._orders_table = QTableWidget(0, 7)
+        # Table: Time | Symbol | Side | Type | Qty | Fill Price | Status | Why
+        self._orders_table = QTableWidget(0, 8)
         self._orders_table.setHorizontalHeaderLabels(
-            ["Time", "Symbol", "Side", "Type", "Qty", "Fill Price", "Status"]
+            ["Time", "Symbol", "Side", "Type", "Qty", "Fill Price", "Status", "Why"]
         )
         self._orders_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self._orders_table.horizontalHeader().setStretchLastSection(True)
@@ -714,8 +723,9 @@ class MainWindow(QMainWindow):
             if pnl is not None:
                 month_total += pnl
                 sign = "+" if pnl >= 0 else ""
-                bg = "#1a4731" if pnl >= 0 else "#3d1a1a"
-                fg = "#3fb950" if pnl >= 0 else "#f85149"
+                # Same >=9:1-contrast pair as the News/Orders tabs' badges.
+                bg = "#0f2818" if pnl >= 0 else "#2d1111"
+                fg = "#7ee787" if pnl >= 0 else "#ffa198"
                 cell.setText(f"{cell_date.day}\n{sign}${pnl:,.2f}")
             else:
                 bg = "#161b22"
@@ -740,9 +750,11 @@ class MainWindow(QMainWindow):
         history = self.current_broker.order_history
         self._orders_table.setRowCount(len(history))
 
+        # Same contrast fix as the News tab's sentiment badges (>=9:1 vs. the
+        # original ~4.15-4.6:1, which read as low-contrast in the table).
         _SIDE_COLORS = {
-            "buy":  ("#1a4731", "#3fb950"),
-            "sell": ("#3d1a1a", "#f85149"),
+            "buy":  ("#0f2818", "#7ee787"),
+            "sell": ("#2d1111", "#ffa198"),
         }
         _STATUS_COLORS = {
             "filled":   "#3fb950",
@@ -766,7 +778,10 @@ class MainWindow(QMainWindow):
                 QTableWidgetItem(f"{order.filled_qty:.4f}"),
                 QTableWidgetItem(fill_price),
                 QTableWidgetItem(status_str.capitalize()),
+                QTableWidgetItem(format_rationale(getattr(order, "rationale", None))),
             ]
+            # Full decision-time detail (values / rules / model confidence) on hover.
+            items[7].setToolTip(format_rationale_detail(getattr(order, "rationale", None)))
 
             # Colour the Side cell
             bg_hex, fg_hex = _SIDE_COLORS.get(side_str.lower(), ("#1c2128", "#e6edf3"))
@@ -778,7 +793,7 @@ class MainWindow(QMainWindow):
             items[6].setForeground(QColor(status_color))
 
             for col, item in enumerate(items):
-                item.setTextAlignment(Qt.AlignCenter)
+                item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter if col == 7 else Qt.AlignCenter)
                 self._orders_table.setItem(row, col, item)
 
         count = len(history)
@@ -863,10 +878,14 @@ class MainWindow(QMainWindow):
             self._news_table.setRowCount(0)
             return
 
+        # bg/fg pairs chosen for >=9:1 contrast (WCAG AAA) against the dark
+        # theme -- the original pairing measured ~4.15-5.26:1, borderline-to-
+        # failing WCAG AA (4.5:1) for normal text, which read as low-contrast
+        # in the dense table at typical row font size.
         _SENTIMENT_COLORS = {
-            "positive": ("#1a4731", "#3fb950"),   # bg, fg
-            "negative": ("#3d1a1a", "#f85149"),
-            "neutral":  ("#1c2128", "#8b949e"),
+            "positive": ("#0f2818", "#7ee787"),   # bg, fg
+            "negative": ("#2d1111", "#ffa198"),
+            "neutral":  ("#21262d", "#c9d1d9"),
         }
 
         self._news_table.setRowCount(len(df))
@@ -1034,6 +1053,25 @@ class MainWindow(QMainWindow):
         layout.addWidget(label)
         layout.addStretch()
         self.bottom_tabs.addTab(tab, "⚠ Deps")
+
+    def _setup_research_lab_tab(self):
+        """Instantiate the Research Lab panel and add it to the bottom tabs.
+
+        The import is local to avoid a circular-import hazard (research_lab_panel
+        imports from core modules that are already loaded by the time this runs).
+        """
+        try:
+            from ui.research_lab_panel import ResearchLabPanel  # noqa: PLC0415
+            self._research_lab_panel = ResearchLabPanel(
+                data_loader=self.data_loader,
+                strategy_manager=self.strategy_manager,
+                parent_window=self,
+                parent=self.bottom_tabs,
+            )
+            self.bottom_tabs.addTab(self._research_lab_panel, "Research Lab")
+        except Exception as exc:
+            logger.warning("Research Lab panel failed to load: %s", exc)
+            self._research_lab_panel = None
 
     def closeEvent(self, event):
         if self._supervisor:
@@ -1325,6 +1363,10 @@ class MainWindow(QMainWindow):
             self.plot_candles()
             self.statusBar().showMessage(f"Loaded {len(self.df)} candles for {symbol}")
 
+            # Forward data snapshot to Research Lab panel (does not trigger reanalysis)
+            if getattr(self, '_research_lab_panel', None) is not None:
+                self._research_lab_panel.update_data(self.df)
+
         except Exception as e:
             self.statusBar().showMessage(f"Error: {str(e)}")
             import traceback
@@ -1359,7 +1401,8 @@ class MainWindow(QMainWindow):
             if strategy_name == "LSTM Predictor":
                 kwargs = {'ticker': self.symbol_combo.currentText(), 'sequence_length': 60}
 
-            strategy_wrapper = self.strategy_manager.get_strategy(strategy_name, **kwargs)
+            strategy_wrapper = self.strategy_manager.get_strategy(
+                strategy_name, trend_overlay=self.trend_overlay_check.isChecked(), **kwargs)
             if not strategy_wrapper:
                  self.statusBar().showMessage(f"Failed to load strategy: {strategy_name}")
                  return False
@@ -1469,6 +1512,11 @@ class MainWindow(QMainWindow):
 
             logger.info("BACKTEST RESULTS: %s", summary)
 
+            # Forward the full report to the Research Lab panel so it can
+            # run its analytics automatically after each backtest.
+            if getattr(self, '_research_lab_panel', None) is not None:
+                self._research_lab_panel.update_report(results)
+
         except Exception as e:
             self.statusBar().showMessage(f"Backtest error: {str(e)}")
             logger.error("Backtest error: %s", e)
@@ -1570,13 +1618,31 @@ class MainWindow(QMainWindow):
             if not self.current_broker:
                 self.current_broker = self.broker_manager.get_broker(self.broker_combo.currentText())
 
-            order = self.current_broker.submit_order(
+            # Real price for the paper broker: the last loaded candle's close.
+            # (Without this SimulatedBroker falls back to its fake $100 default.)
+            market_price = None
+            try:
+                if hasattr(self, 'df') and not self.df.empty:
+                    market_price = float(self.df['Close'].iloc[-1])
+            except Exception:  # price is context only; never block the order
+                market_price = None
+            if market_price and hasattr(self.current_broker, 'market_data'):
+                with self.current_broker._lock:
+                    self.current_broker.market_data[symbol] = market_price
+            decision_price = limit_price or stop_price or market_price
+            extra = {}
+            if market_price and order_type == "market" and hasattr(self.current_broker, 'market_data'):
+                extra["execution_price"] = market_price
+            order = submit_with_rationale(
+                self.current_broker,
+                manual_rationale(side, symbol, order_type, price=decision_price, origin="desktop Order Entry panel"),
                 symbol=symbol,
                 qty=qty,
                 side=side,
                 order_type=order_type,
                 limit_price=limit_price,
-                stop_price=stop_price
+                stop_price=stop_price,
+                **extra,
             )
 
             if order.status.value == "filled":
@@ -1806,5 +1872,6 @@ class MainWindow(QMainWindow):
             return
         # Delegate to the shared chart_builder module (also used by the Dash app).
         symbol = self.symbol_combo.currentText() if hasattr(self, 'symbol_combo') else ''
-        self.fig = build_candlestick_figure(self.df, symbol=symbol)
+        interval = self.interval_combo.currentText() if hasattr(self, 'interval_combo') else '1d'
+        self.fig = build_candlestick_figure(self.df, symbol=symbol, interval=interval)
         self.update_plotly_view()

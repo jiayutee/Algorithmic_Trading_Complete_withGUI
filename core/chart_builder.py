@@ -48,6 +48,7 @@ def build_candlestick_figure(
     symbol: str = "",
     show_ma: bool = False,
     height: int = 600,
+    interval: str = "1d",
 ) -> go.Figure:
     """Return a dark-themed candlestick ``go.Figure`` for *df*.
 
@@ -64,6 +65,12 @@ def build_candlestick_figure(
         those moving-average lines on the chart.
     height:
         Figure height in pixels.
+    interval:
+        The candle interval used to load *df* (e.g. ``"1d"``, ``"1h"``,
+        ``"5m"``). Controls how the x-axis collapses non-trading gaps —
+        see :func:`_compute_rangebreaks`. Ignored for crypto symbols
+        (see :func:`is_crypto_symbol`), which trade 24/7 and have no gaps
+        to close.
 
     Returns
     -------
@@ -99,6 +106,16 @@ def build_candlestick_figure(
                 ))
 
     _apply_dark_layout(fig, height=height)
+
+    # Collapse non-trading gaps (weekends, holidays, and — for intraday
+    # intervals — overnight hours) out of the x-axis so candles sit flush
+    # against each other instead of leaving a visible stretch of blank grid.
+    # Crypto trades 24/7, so there are no such gaps to close there.
+    if not is_crypto_symbol(symbol):
+        rangebreaks = _compute_rangebreaks(df, interval)
+        if rangebreaks:
+            fig.update_xaxes(rangebreaks=rangebreaks)
+
     return fig
 
 
@@ -128,6 +145,14 @@ def overlay_signals(
     buy_signals  = [s for s in signals if s.get("type") in ("buy", "buy_cover")]
     sell_signals = [s for s in signals if s.get("type") in ("sell", "sell_short")]
 
+    def _hover(s: Dict) -> str:
+        # Marker hover = the recorded "why" (Phase 11.1), wrapped for readability.
+        from core.trade_rationale import format_rationale_detail
+        label = {"buy": "BUY (open long)", "buy_cover": "BUY (cover short)",
+                 "sell": "SELL (close long)", "sell_short": "SELL (open short)"}.get(s.get("type"), "")
+        why = format_rationale_detail(s.get("rationale")).replace("\n", "<br>")
+        return f"<b>{label}</b> @ {s.get('price', 0):,.2f}<br>{why}"
+
     if buy_signals:
         fig.add_trace(go.Scatter(
             x=[s["date"] for s in buy_signals],
@@ -135,6 +160,8 @@ def overlay_signals(
             mode="markers",
             marker=dict(symbol="triangle-up", size=15, color=THEME["green"]),
             name="Buy Signal",
+            text=[_hover(s) for s in buy_signals],
+            hovertemplate="%{text}<extra></extra>",
         ))
 
     if sell_signals:
@@ -144,6 +171,8 @@ def overlay_signals(
             mode="markers",
             marker=dict(symbol="triangle-down", size=15, color=THEME["red"]),
             name="Sell Signal",
+            text=[_hover(s) for s in sell_signals],
+            hovertemplate="%{text}<extra></extra>",
         ))
 
     return fig
@@ -203,6 +232,61 @@ def add_live_tick_trace(fig: go.Figure) -> go.Figure:
         hovertemplate="Live: %{y:,.4f}<extra></extra>",
     ))
     return fig
+
+
+_INTRADAY_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
+
+
+def _compute_rangebreaks(df: pd.DataFrame, interval: str) -> List[dict]:
+    """Build Plotly ``rangebreaks`` that collapse non-trading gaps out of the x-axis.
+
+    Always closes weekends. For intraday intervals also closes overnight
+    hours outside the standard 09:30-16:00 US equity session (this codebase
+    is yfinance/US-equity-centric elsewhere too — see core/data_loader.py —
+    so this is a reasonable default rather than a per-exchange calendar).
+    Additionally detects the exact weekdays missing from *df*'s own date
+    range (i.e. market holidays) and closes those precisely, so no
+    hardcoded holiday calendar or extra dependency is needed.
+
+    Parameters
+    ----------
+    df:
+        The OHLCV DataFrame the figure was built from (datetime index).
+    interval:
+        The candle interval used to load *df* (e.g. ``"1d"``, ``"5m"``).
+        Anything in :data:`_INTRADAY_INTERVALS` also gets an hour-of-day
+        rangebreak; everything else (daily and coarser) only gets the
+        weekend/holiday breaks.
+
+    Returns
+    -------
+    list[dict]
+        Suitable for ``fig.update_xaxes(rangebreaks=...)``. Empty if *df*
+        has no usable datetime index.
+    """
+    if df is None or df.empty:
+        return []
+
+    breaks: List[dict] = [dict(bounds=["sat", "mon"])]  # always hide weekends
+
+    if interval in _INTRADAY_INTERVALS:
+        # Standard US equity session (09:30-16:00) — hides the overnight gap.
+        breaks.append(dict(bounds=[16, 9.5], pattern="hour"))
+
+    # Exact missing weekdays (holidays), derived from the data itself.
+    try:
+        idx = pd.DatetimeIndex(df.index)
+        present_days = idx.normalize().unique()
+        if len(present_days) > 1:
+            full_range = pd.date_range(present_days.min(), present_days.max(), freq="D")
+            weekday_range = full_range[full_range.weekday < 5]
+            missing = weekday_range.difference(present_days)
+            if len(missing) > 0:
+                breaks.append(dict(values=missing))
+    except (TypeError, ValueError):
+        pass  # odd/non-datetime index — skip exact holiday closing, keep weekend break
+
+    return breaks
 
 
 def _apply_dark_layout(fig: go.Figure, height: int = 600) -> None:

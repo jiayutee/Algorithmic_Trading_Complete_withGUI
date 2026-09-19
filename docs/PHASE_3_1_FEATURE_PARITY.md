@@ -83,7 +83,7 @@ close the gaps before designating Dash as sole entrypoint.
 | 48 | News: clickable headline links | **Missing** (plain QTableWidgetItem) | **Present** (html.A anchor with target=_blank) | Dash is better here |
 | 49 | Earnings Calendar tab | **Missing** | **Present** | New feature in Dash not in PyQt5 |
 | 50 | Equity Curve tab | **Missing** (only in StatisticsWindow via matplotlib) | **Present** (dcc.Graph line chart, populated after backtest) | New feature in Dash |
-| 51 | Agent Monitor tab (start/stop Supervisor, per-agent table, LLM summary) | **Present** | **Missing** | No agent monitoring in Dash |
+| 51 | Agent Monitor tab (start/stop Supervisor, per-agent table, LLM summary) | **Present** | **Present** (2026-09-19) | Dash tab: Start/Stop, per-agent status + run count, LLM summary; one shared server-side Supervisor |
 | 52 | ⚠ Deps tab (missing optional packages warning) | Present (conditional) | **Missing** | Minor: informational only |
 | **Windows / Dialogs** | | | | |
 | 53 | StatisticsWindow (separate matplotlib/pyfolio detailed stats window) | Present | **Missing** | No equivalent detailed stats popup in Dash |
@@ -177,7 +177,7 @@ items marked **MINOR** are low-impact and can be deferred post-launch.
 | P1 | Account balance + P&L update (Phase 4 callback) | Wire `account-balance` and `pnl-value` to `SimulatedBroker.get_account_info()` on order-status change and a `dcc.Interval` (5 s) |
 | P1 | News sentiment scores | Switch `_build_news_content` to use `NewsPipeline.fetch_news_dataframe()` + `SentimentAnalyzer`; surface label + score in the news rows |
 | P2 | Broker dropdown + Go Live | Add broker selector to Dash topbar; add a "Go Live" button; route to `BrokerManager` |
-| P2 | Agent Monitor tab | Port `_setup_agent_monitor_tab()` to Dash (Supervisor start/stop via Interval + Store) |
+| P2 | Agent Monitor tab | ~~Port `_setup_agent_monitor_tab()` to Dash~~ **Done 2026-09-19** (see `_agent_monitor_tab()` in dash_app/layout.py) |
 | P2 | Simulation mode | Port play/pause step-through to Dash (dcc.Interval-driven, stored state in dcc.Store) |
 | P3 | Days input / source selector | Add controls to topbar; wire to `load_chart` callback |
 | P3 | LSTM Predictor + TD3 in strategy map | Extend `_STRATEGY_CLASS_MAP` and strategy dropdown |

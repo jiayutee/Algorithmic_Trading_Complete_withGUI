@@ -53,6 +53,7 @@ from core.chart_builder import (
     overlay_signals,
 )
 from core.logger import logger
+from core.trade_rationale import format_rationale, manual_rationale, submit_with_rationale
 
 # ---------------------------------------------------------------------------
 # Module-level singletons (shared across all callback invocations)
@@ -120,8 +121,8 @@ def _broker_or_none():
 # from the PyQt5 reference implementation in ui/main_window.py).
 # ---------------------------------------------------------------------------
 
-_CAL_GREEN_BG = "#1a4731"  # dark green cell bg for days with PnL >= 0
-_CAL_RED_BG   = "#3d1a1a"  # dark red cell bg for days with PnL < 0
+_CAL_GREEN_BG = "#0f2818"  # dark green cell bg for days with PnL >= 0
+_CAL_RED_BG   = "#2d1111"  # dark red cell bg for days with PnL < 0
 _CAL_DIMMED_FG = "#484f58"  # very muted text for out-of-month filler cells
 
 
@@ -178,6 +179,7 @@ def _build_orders_table_data(broker) -> tuple:
                 "qty":        f"{order.filled_qty:.4f}",
                 "fill_price": fill_price,
                 "status":     status_str.capitalize(),
+                "why":        format_rationale(getattr(order, "rationale", None)),
             })
 
         count  = len(history)
@@ -191,6 +193,172 @@ def _build_orders_table_data(broker) -> tuple:
     except Exception as exc:  # noqa: BLE001
         logger.error("[Dash] orders table build error: %s", exc)
         return [], f"Orders: error — {exc}"
+
+# ---------------------------------------------------------------------------
+# Agent Monitor (mirrors the desktop app's Agent Monitor tab)
+# ---------------------------------------------------------------------------
+
+_supervisor = None                      # shared runtime Supervisor (one per server process)
+_supervisor_lock = threading.Lock()
+
+
+def _supervisor_factory():
+    """Create a Supervisor. Split out so tests can substitute a fake."""
+    from core.runtime.supervisor import Supervisor
+    return Supervisor()
+
+
+def _control_supervisor(action: Optional[str]) -> Optional[str]:
+    """Start or stop the shared supervisor. Returns an error message, or None.
+
+    ``action`` is "start", "stop" or None (no-op, just observe). Idempotent:
+    starting while running or stopping while stopped changes nothing.
+    """
+    global _supervisor
+    with _supervisor_lock:
+        if action == "start" and _supervisor is None:
+            try:
+                sup = _supervisor_factory()
+                sup.start(loop_delay=5.0)
+                _supervisor = sup
+                logger.info("[Dash] runtime supervisor started")
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[Dash] failed to start supervisor: %s", exc)
+                return f"failed to start — {exc}"
+        elif action == "stop" and _supervisor is not None:
+            sup, _supervisor = _supervisor, None
+            try:
+                sup.stop()
+                logger.info("[Dash] runtime supervisor stopped")
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[Dash] error stopping supervisor: %s", exc)
+                return f"stopped with error — {exc}"
+    return None
+
+
+def _agent_monitor_state(supervisor, error: Optional[str] = None) -> tuple:
+    """``(status_text, status_style, start_disabled, stop_disabled, rows, llm_text)``.
+
+    Pure function of the supervisor's snapshot -- no Dash context needed.
+    """
+    running = supervisor is not None
+    if error:
+        status_text, color = f"Agents: {error}", THEME["red"]
+    elif running:
+        status_text, color = "Agents: running", THEME["green"]
+    else:
+        status_text, color = "Agents: stopped", THEME["text_muted"]
+    status_style = {"fontSize": "11px", "color": color, "flex": "1"}
+
+    rows: list = []
+    llm_text = "LLM summary: —"
+    if running:
+        try:
+            snap = supervisor.snapshot()
+            meta = snap.pop("__meta__", {})
+            llm_text = f"LLM summary: {str(meta.get('last_summary', '—'))[:400]}"
+            for name in sorted(snap):
+                latest = snap[name].get("latest")
+                rows.append({
+                    "agent": name,
+                    "status": str(latest.status) if latest else "—",
+                    "runs": snap[name].get("history_len", 0),
+                    "summary": str(latest.summary)[:200] if latest else "waiting for first cycle…",
+                })
+        except Exception as exc:  # noqa: BLE001 -- never break the page over a bad snapshot
+            logger.warning("[Dash] agent snapshot failed: %s", exc)
+    return status_text, status_style, running, not running, rows, llm_text
+
+
+# ---------------------------------------------------------------------------
+# Research Loop tab (read-only view of core/research_loop.py + the experiment log)
+# ---------------------------------------------------------------------------
+
+def _research_loop_view(path: Optional[str] = None) -> dict:
+    """Rows for the Research Loop tab's three tables plus a status line. Never raises."""
+    empty = {"candidates": [], "paper": [], "runs": [],
+             "message": "No research-loop runs yet. Run  python -m core.research_loop run  in a terminal."}
+    try:
+        from core.experiment_log import ExperimentLog
+        from core.research_loop import ResearchState
+        log, state = ExperimentLog(path), ResearchState(path)
+        states = {r["candidate"]: r for r in state.all_states()}
+        latest = {}
+        for run in log.list_runs(tag="research-loop", limit=500):            # newest first
+            latest.setdefault(run["params"].get("candidate"), run)
+        candidates = []
+        for name in sorted(set(states) | set(latest)):
+            st, run = states.get(name), latest.get(name)
+            m = run["metrics"] if run else {}
+            f = lambda v, fmt="{:.2f}": fmt.format(v) if isinstance(v, (int, float)) else "—"
+            candidates.append({
+                "candidate": name, "status": st["status"] if st else "candidate",
+                "sharpe": f(m.get("sharpe")), "bh_sharpe": f(m.get("bh_sharpe")), "diff": f(m.get("sharpe_diff"), "{:+.2f}"),
+                "ci": f"[{m['ci_low']:+.2f}, {m['ci_high']:+.2f}]" if "ci_low" in m and "ci_high" in m else "—",
+                "trades": int(m["trades"]) if "trades" in m else "—",
+                "max_dd": f(m.get("max_drawdown") * 100 if "max_drawdown" in m else None, "{:.0f}%"),
+                "verdict": ("PASS" if m.get("PASS") else "fail") if m else "—",
+                "evaluated": run["created_at"][:16].replace("T", " ") if run else "—"})
+        paper = [{"candidate": r["candidate"], "days": r["days"], "return_pct": f"{r['return_pct']:+.2f}", "trades": r["trades"]}
+                 for r in state.paper_pnl().to_dict("records")]
+        runs = []
+        for r in log.list_runs(limit=15):
+            flat = {}
+            for k, v in r["metrics"].items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    flat[k] = v
+            key = next((k for k in ("auc", "auc_gbm", "sharpe_diff", "sharpe") if k in flat), next(iter(flat), None))
+            runs.append({"id": r["id"], "when": r["created_at"][:16].replace("T", " "), "name": r["name"][:44],
+                         "model": r["model_type"], "result": f"{key} = {flat[key]:.3f}" if key else "—",
+                         "commit": (r["git_commit"] or "")[:7] + ("*" if r["git_dirty"] else "")})
+        n_paper = sum(1 for c in candidates if c["status"] == "paper")
+        n_ret = sum(1 for c in candidates if c["status"] == "retired")
+        msg = (f"{len(candidates)} candidate(s): {n_paper} in paper trading, {n_ret} retired, "
+               f"{len(candidates) - n_paper - n_ret} still on trial. "
+               + ("" if n_paper else "None has yet passed every promotion test (interval lower bound > 0, both halves positive, "
+                                     ">= 30 trades, drawdown not much worse) -- which is the honest expected outcome for most ideas."))
+        if not candidates and not runs:
+            return empty
+        return {"candidates": candidates, "paper": paper, "runs": runs, "message": msg}
+    except Exception as exc:  # noqa: BLE001 -- a view problem must never break the page
+        logger.warning("[Dash] research loop view failed: %s", exc)
+        return {**empty, "message": f"Research loop data unavailable: {exc}"}
+
+
+def _build_pnl_card(broker) -> tuple:
+    """``(total_text, total_style, breakdown_text, balance_text)`` for the P&L card.
+
+    Shows total P&L split into realized (locked in by closed positions) and
+    unrealized (open positions marked to market), plus account value. Safe
+    with ``broker=None`` (nothing traded yet -> zeros, starting balance).
+    """
+    from dash_app.layout import _METRIC_VALUE_STYLE
+
+    realized = unrealized = 0.0
+    balance = 100_000.0
+    if broker is not None:
+        try:
+            realized = float(broker.get_realized_pnl())
+            unrealized = float(broker.get_unrealized_pnl())
+            info = broker.get_account_info()
+            balance = float(info.get("portfolio_value", info.get("equity", balance)))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[Dash] P&L card update failed: %s", exc)
+
+    total = realized + unrealized
+
+    def _money(v: float) -> str:
+        return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
+
+    style = {
+        **_METRIC_VALUE_STYLE,
+        "fontSize": "20px",
+        "textAlign": "center",
+        "color": THEME["green"] if total >= 0 else THEME["red"],
+    }
+    breakdown = f"Realized {_money(realized)}  ·  Unrealized {_money(unrealized)}"
+    return _money(total), style, breakdown, f"${balance:,.2f}"
+
 
 def _build_position_row(symbol: str, pos) -> html.Div:
     """Build one row in the positions panel for a single open position.
@@ -304,7 +472,7 @@ def _build_pnl_calendar_grid(year: int, month: int, by_day: dict) -> list:
             cell_children: object = str(cell_date.day)
         elif pnl is not None:
             bg = _CAL_GREEN_BG if pnl >= 0 else _CAL_RED_BG
-            fg = THEME["green"] if pnl >= 0 else THEME["red"]
+            fg = "#7ee787" if pnl >= 0 else "#ffa198"  # >=9:1 vs the cell bg
             border_color = THEME["accent"] if is_today else THEME["border_dim"]
             sign = "+" if pnl >= 0 else ""
             cell_style = {
@@ -341,6 +509,49 @@ def _build_pnl_calendar_grid(year: int, month: int, by_day: dict) -> list:
 # ---------------------------------------------------------------------------
 # News & Earnings panel helpers (Phase 1.7)
 # ---------------------------------------------------------------------------
+
+# (background, foreground) pairs -- same >=9:1-contrast palette as the PyQt5
+# News tab's sentiment badges.
+_SENTIMENT_BADGE_COLORS = {
+    "positive": ("#0f2818", "#7ee787"),
+    "negative": ("#2d1111", "#ffa198"),
+    "neutral": ("#21262d", "#c9d1d9"),
+}
+
+
+def _sentiment_badge(item) -> Optional[html.Span]:
+    """Small coloured Positive/Negative/Neutral pill with confidence %.
+
+    The scoring backend (deepseek-chat, FinBERT or rule-based) is exposed as
+    the hover tooltip so it's visible which analyzer actually produced it.
+    Returns None when the item carries no sentiment.
+    """
+    sentiment = getattr(item, "sentiment", None) or {}
+    label = str(sentiment.get("label", "")).lower()
+    if not label:
+        return None
+    bg, fg = _SENTIMENT_BADGE_COLORS.get(label, _SENTIMENT_BADGE_COLORS["neutral"])
+    text = label.capitalize()
+    try:
+        text += f" {float(sentiment.get('confidence', 0.0)):.0%}"
+    except (TypeError, ValueError):
+        pass
+    return html.Span(
+        text,
+        title=f"Scored by {sentiment.get('model_name', 'unknown')}",
+        style={
+            "backgroundColor": bg,
+            "color": fg,
+            "border": f"1px solid {fg}55",
+            "borderRadius": "3px",
+            "padding": "1px 6px",
+            "fontSize": "10px",
+            "fontWeight": "600",
+            "marginRight": "8px",
+            "whiteSpace": "nowrap",
+        },
+    )
+
 
 def _build_news_content(symbol: Optional[str]) -> list:
     """Build the ``children`` list for the ``news-content`` Div.
@@ -413,7 +624,10 @@ def _build_news_content(symbol: Optional[str]) -> list:
                     "padding": "5px 0",
                 },
                 children=[
-                    headline_el,
+                    html.Div(
+                        [b for b in (_sentiment_badge(item), headline_el) if b is not None],
+                        style={"display": "flex", "alignItems": "baseline"},
+                    ),
                     html.Div(
                         f"{item.source or '—'}  ·  {ts}",
                         style={
@@ -590,6 +804,39 @@ def _price_input_style_and_placeholder(order_type: str) -> tuple:
     return {"display": "none"}, "Price"
 
 
+def _latest_price(symbol: Optional[str]) -> Optional[float]:
+    """Best current real price for *symbol*, or None if none is available.
+
+    Crypto reads the WebSocket cache (non-blocking); equities use the last
+    price cached by the interval callback. Never raises.
+    """
+    if not symbol:
+        return None
+    try:
+        if is_crypto_symbol(symbol):
+            price = _get_live_svc().get_price(symbol)
+        else:
+            price = _equity_last_price
+        return float(price) if price else None
+    except Exception:  # noqa: BLE001 -- price feed problems must not block order entry
+        return None
+
+
+def _sync_broker_price(broker, symbol: Optional[str], price: Optional[float]) -> None:
+    """Mark the simulated broker to a real price so fills and P&L use it.
+
+    Without this, SimulatedBroker.market_data falls back to its fake $100
+    default and every paper trade fills at that price.
+    """
+    if broker is None or not symbol or not price:
+        return
+    try:
+        with broker._lock:
+            broker.market_data[symbol] = float(price)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[Dash] broker price sync failed for %s: %s", symbol, exc)
+
+
 def _validate_and_submit_order(
     broker,
     side: str,
@@ -597,6 +844,7 @@ def _validate_and_submit_order(
     order_type: str,
     price: Optional[float],
     symbol: Optional[str],
+    market_price: Optional[float] = None,
 ) -> tuple:
     """Validate inputs and submit an order to *broker*.
 
@@ -639,13 +887,19 @@ def _validate_and_submit_order(
 
     # Submit --------------------------------------------------------------
     try:
-        order = broker.submit_order(
+        _sync_broker_price(broker, symbol, market_price)
+        decision_price = limit_price or stop_price or market_price
+        order = submit_with_rationale(
+            broker,
+            manual_rationale(side, symbol, order_type, price=decision_price, origin="Dash Order Entry panel"),
             symbol=symbol,
             qty=float(qty),
             side=side,
             order_type=order_type,
             limit_price=limit_price,
             stop_price=stop_price,
+            # Fill market orders at the real price when we have one.
+            **({"execution_price": market_price} if (market_price and order_type == "market") else {}),
         )
         status = order.status.value
         if status == "filled":
@@ -814,12 +1068,16 @@ def register_callbacks(app: dash.Dash) -> None:
         try:
             from core.data_loader import DataLoader
             loader = DataLoader()
+            # Candles only: the news/sentiment merge scrapes rate-limited sources
+            # (~35 s) and the chart doesn't use those columns. The News tab
+            # fetches headlines separately on demand.
             df = loader.load_data(
                 symbol=symbol,
                 source="Historical",
                 live=False,
                 days=365,
                 interval=interval,
+                include_news=False,
             )
 
             if df is None or df.empty:
@@ -829,7 +1087,7 @@ def register_callbacks(app: dash.Dash) -> None:
                 badge = _badge_connecting(symbol)
                 return fig, status_msg, f"Warning: {status_msg}", False, symbol, badge
 
-            fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False)
+            fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False, interval=interval)
             add_live_tick_trace(fig)
             n_candles = len(df)
             status_msg = f"Loaded {n_candles:,} candles for {symbol} ({interval})"
@@ -897,6 +1155,10 @@ def register_callbacks(app: dash.Dash) -> None:
 
         if price is None:
             return no_update, badge_if_none
+
+        # Keep an existing paper broker marked to the real price so unrealized
+        # P&L reflects the market (no-op until the first order creates it).
+        _sync_broker_price(_broker_or_none(), symbol, price)
 
         # -- Partial figure update via Patch() ------------------------------
         # We only update the last trace (the live-tick scatter appended by
@@ -969,6 +1231,7 @@ def register_callbacks(app: dash.Dash) -> None:
             order_type=order_type,
             price=price,
             symbol=symbol,
+            market_price=_latest_price(symbol),
         )
 
     # ------------------------------------------------------------------
@@ -1097,6 +1360,8 @@ def register_callbacks(app: dash.Dash) -> None:
         "MACD/RSI":      ("strategies.simple_strategies", "MACD_RSI_Strategy"),
         "EMA Crossover": ("strategies.simple_strategies", "EMACrossoverStrategy"),
         "Stochastic":    ("strategies.simple_strategies", "StochasticStrategy"),
+        "GBM (LightGBM)": ("strategies.gbm_strategy", "GBMStrategy"),
+        "Trend Filter (28d)": ("strategies.trend_filter_strategy", "TrendFilterStrategy"),
     }
 
     @app.callback(
@@ -1113,6 +1378,7 @@ def register_callbacks(app: dash.Dash) -> None:
         State("active-symbol-store", "data"),
         State("strategy-dropdown", "value"),
         State("bt-cash-input", "value"),
+        State("trend-overlay-check", "value"),
         prevent_initial_call=True,
     )
     def run_backtest_callback(
@@ -1120,6 +1386,7 @@ def register_callbacks(app: dash.Dash) -> None:
         symbol: Optional[str],
         strategy_name: Optional[str],
         cash: Optional[float],
+        trend_overlay: Optional[list] = None,
     ):
         """Run a backtest and update the Backtest Results panel + Equity Curve tab.
 
@@ -1183,6 +1450,7 @@ def register_callbacks(app: dash.Dash) -> None:
                 source="Historical",
                 live=False,
                 days=365,
+                include_news=False,  # rule-based strategies / research lab use OHLCV only
             )
             if df is None or df.empty:
                 return _err(f"No data available for {symbol}. Load the chart first.")
@@ -1190,6 +1458,9 @@ def register_callbacks(app: dash.Dash) -> None:
             mod_name, cls_name = _STRATEGY_CLASS_MAP[strategy_name]
             import importlib
             strategy_cls = getattr(importlib.import_module(mod_name), cls_name)
+            if trend_overlay and "on" in trend_overlay:
+                from strategies.trend_filter_strategy import with_trend_overlay
+                strategy_cls = with_trend_overlay(strategy_cls)
 
             from core.backtester import Backtester
             backtester = Backtester()
@@ -1212,7 +1483,9 @@ def register_callbacks(app: dash.Dash) -> None:
         # -- Rebuild main chart with signal markers -------------------------
         signals = results.get("signals", [])
         try:
-            chart_fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False)
+            # interval='1d': the loader.load_data() call above this try-block
+            # doesn't pass interval either, so it defaults to '1d' too.
+            chart_fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False, interval='1d')
             add_live_tick_trace(chart_fig)
             if signals:
                 overlay_signals(chart_fig, signals)
@@ -1300,6 +1573,863 @@ def register_callbacks(app: dash.Dash) -> None:
         return news_children, earnings_data, earnings_status
 
     # ------------------------------------------------------------------
+    # Phase 2: Research Lab — Strategy Lab + Volatility Lab + Signal & Gate
+    # ------------------------------------------------------------------
+
+    @app.callback(
+        Output("rl-status",               "children"),
+        Output("rl-status",               "style"),
+        Output("rl-strategy-book-table",  "data"),
+        Output("rl-drawdown-chart",       "figure"),
+        Output("rl-rolling-sharpe-chart", "figure"),
+        Output("rl-pnl-dist-chart",       "figure"),
+        Output("rl-monthly-heatmap",      "figure"),
+        Output("rl-year-by-year-table",   "data"),
+        Output("rl-vol-chart",            "figure"),
+        Output("rl-vol-stats",            "children"),
+        Output("rl-regime-tape-chart",    "figure"),
+        Output("rl-permtest-result",      "children"),
+        Output("rl-position-size",        "children"),
+        Output("rl-gate-verdict",         "children"),
+        Input("rl-run-btn",               "n_clicks"),
+        State("active-symbol-store",      "data"),
+        State("strategy-dropdown",        "value"),
+        State("bt-cash-input",            "value"),
+        prevent_initial_call=True,
+    )
+    def run_research_lab(
+        n_clicks: Optional[int],
+        symbol: Optional[str],
+        strategy_name: Optional[str],
+        cash: Optional[float],
+    ):
+        """Run all Research Lab analytics for the loaded symbol/strategy.
+
+        Orchestrates a four-step pipeline:
+
+        1. **Backtest** — runs the selected (or default MACD/RSI) strategy
+           via ``Backtester`` to obtain the full report dict including
+           ``profit_per_trade``, ``dates``, ``returns``, ``total_asset_value``.
+
+        2. **Strategy Lab** — calls ``core.research_lab`` functions to build:
+           drawdown series, rolling Sharpe, P&L distribution histogram,
+           monthly-returns heatmap, year-by-year table, and strategy book.
+
+        3. **Volatility Lab** — calls
+           ``core.volatility_lab.compute_volatility_clustering_report`` on
+           the symbol's price returns (``Close.pct_change().dropna()``),
+           then builds the real-vs-shuffled vol chart, stats block, regime
+           tape, permutation-test card, and position-size card.
+
+        4. **Gate** — calls ``core.research_lab.evaluate_gate`` and renders
+           the pass/fail verdict with per-check detail rows.
+
+        All 14 outputs are returned from this single callback so that one
+        button press populates every Research Lab panel atomically.
+        Mirrors the conventions of ``run_backtest_callback`` above: lazy
+        imports inside the function, all exceptions caught and surfaced as
+        status messages rather than crashes.
+        """
+        import math
+        import plotly.graph_objects as go
+        import numpy as np
+
+        _err_style  = {**_ORDER_STATUS_BASE_STYLE, "color": THEME["red"]}
+        _ok_style   = {**_ORDER_STATUS_BASE_STYLE, "color": THEME["green"]}
+        _info_style = {**_ORDER_STATUS_BASE_STYLE, "color": THEME["text_muted"]}
+
+        _MONTH_LABELS = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ]
+
+        # -----------------------------------------------------------------
+        # Shared empty-state returns so early exits stay concise
+        # -----------------------------------------------------------------
+        def _empty_fig(height: int = 180) -> go.Figure:
+            fig = go.Figure()
+            fig.update_layout(
+                paper_bgcolor=THEME["bg_dark"],
+                plot_bgcolor=THEME["bg_card"],
+                font=dict(color=THEME["text_muted"], size=11),
+                margin=dict(l=50, r=10, t=24, b=30),
+                height=height,
+                xaxis=dict(showgrid=False, color=THEME["text_muted"], zeroline=False),
+                yaxis=dict(showgrid=True, gridcolor=THEME["border"],
+                           color=THEME["text_muted"], zeroline=False),
+                showlegend=False,
+            )
+            return fig
+
+        _noop14 = (no_update,) * 14
+
+        def _err(msg: str):
+            figs = [_empty_fig(h) for h in (180, 180, 160, 180, 200, 120)]
+            muted_div = html.Span(
+                msg, style={"color": THEME["text_muted"], "fontSize": "11px"}
+            )
+            return (
+                msg, _err_style,
+                [],                 # strategy book table
+                figs[0],            # drawdown
+                figs[1],            # rolling sharpe
+                figs[2],            # pnl dist
+                figs[3],            # monthly heatmap
+                [],                 # year-by-year table
+                figs[4],            # vol chart
+                muted_div,          # vol stats
+                figs[5],            # regime tape
+                muted_div,          # permtest
+                muted_div,          # position size
+                muted_div,          # gate verdict
+            )
+
+        if not n_clicks:
+            return _noop14
+
+        if not symbol:
+            return _err("Load a chart first before running the Research Lab.")
+
+        # Strategy is optional here — fall back to MACD/RSI if unset
+        _effective_strategy = (
+            strategy_name
+            if (strategy_name and strategy_name != "None" and strategy_name in _STRATEGY_CLASS_MAP)
+            else "MACD/RSI"
+        )
+        initial_cash = float(cash) if (cash and cash > 0) else 100_000.0
+
+        # -----------------------------------------------------------------
+        # Step 1: Load OHLCV data
+        # -----------------------------------------------------------------
+        try:
+            from core.data_loader import DataLoader
+            loader = DataLoader()
+            df = loader.load_data(
+                symbol=symbol,
+                source="Historical",
+                live=False,
+                days=365,
+                include_news=False,  # rule-based strategies / research lab use OHLCV only
+            )
+            if df is None or df.empty:
+                return _err(f"No OHLCV data available for {symbol}. Load the chart first.")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[Dash-RL] data load error: %s", exc)
+            return _err(f"Data load error: {exc}")
+
+        # -----------------------------------------------------------------
+        # Step 2: Run backtest
+        # -----------------------------------------------------------------
+        try:
+            import importlib
+            mod_name, cls_name = _STRATEGY_CLASS_MAP[_effective_strategy]
+            strategy_cls = getattr(importlib.import_module(mod_name), cls_name)
+
+            from core.backtester import Backtester
+            backtester = Backtester()
+            backtester.add_data(df.copy())
+            backtester.add_strategy(strategy_cls)
+            report = backtester.run_backtest(cash=initial_cash)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[Dash-RL] backtest error: %s", exc)
+            return _err(f"Backtest error: {exc}")
+
+        if "error" in report:
+            return _err(f"Backtest error: {report['error']}")
+
+        bt_dates   = report.get("dates",            [])
+        bt_returns = report.get("returns",           [])
+        equity     = report.get("total_asset_value", [])
+        ppt        = report.get("profit_per_trade",  [])
+
+        # -----------------------------------------------------------------
+        # Step 3a: Research Lab — drawdown series
+        # -----------------------------------------------------------------
+        from core.research_lab import (
+            compute_drawdown_series,
+            compute_rolling_sharpe,
+            trade_pnl_distribution,
+            monthly_returns_table,
+            year_by_year_table,
+            unit_economics_per_trade,
+            build_strategy_book,
+            evaluate_gate,
+        )
+
+        dd_series = compute_drawdown_series(equity)
+
+        def _build_drawdown_fig() -> go.Figure:
+            fig = go.Figure()
+            if dd_series:
+                x_vals = bt_dates if bt_dates else list(range(len(dd_series)))
+                fig.add_trace(go.Scatter(
+                    x=x_vals,
+                    y=dd_series,
+                    mode="lines",
+                    line=dict(color=THEME["red"], width=1.5),
+                    fill="tozeroy",
+                    fillcolor="rgba(248, 81, 73, 0.12)",
+                    name="Drawdown %",
+                ))
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor=THEME["bg_dark"],
+                plot_bgcolor=THEME["bg_card"],
+                font=dict(color=THEME["text_muted"], size=10),
+                margin=dict(l=50, r=6, t=6, b=30),
+                height=180,
+                xaxis=dict(showgrid=False, color=THEME["text_muted"]),
+                yaxis=dict(showgrid=True, gridcolor=THEME["border"],
+                           color=THEME["text_muted"], ticksuffix="%"),
+                showlegend=False,
+            )
+            return fig
+
+        # -----------------------------------------------------------------
+        # Step 3b: Rolling Sharpe
+        # -----------------------------------------------------------------
+        rs_series = compute_rolling_sharpe(bt_returns, window=63, annualization=252)
+
+        def _build_rolling_sharpe_fig() -> go.Figure:
+            fig = go.Figure()
+            if rs_series:
+                x_vals = bt_dates if bt_dates else list(range(len(rs_series)))
+                # Replace nan with None so plotly treats them as gaps
+                y_vals = [None if (isinstance(v, float) and math.isnan(v)) else v
+                          for v in rs_series]
+                fig.add_trace(go.Scatter(
+                    x=x_vals,
+                    y=y_vals,
+                    mode="lines",
+                    line=dict(color=THEME["accent"], width=1.5),
+                    name="Rolling Sharpe",
+                    connectgaps=False,
+                ))
+                # Zero-reference line
+                fig.add_hline(y=0, line_color=THEME["border"], line_dash="dot", line_width=1)
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor=THEME["bg_dark"],
+                plot_bgcolor=THEME["bg_card"],
+                font=dict(color=THEME["text_muted"], size=10),
+                margin=dict(l=50, r=6, t=6, b=30),
+                height=180,
+                xaxis=dict(showgrid=False, color=THEME["text_muted"]),
+                yaxis=dict(showgrid=True, gridcolor=THEME["border"],
+                           color=THEME["text_muted"]),
+                showlegend=False,
+            )
+            return fig
+
+        # -----------------------------------------------------------------
+        # Step 3c: Trade P&L distribution histogram
+        # -----------------------------------------------------------------
+        pnl_dist = trade_pnl_distribution(ppt, bins=30)
+
+        def _build_pnl_dist_fig() -> go.Figure:
+            fig = go.Figure()
+            edges  = pnl_dist.get("bin_edges", [])
+            counts = pnl_dist.get("counts",    [])
+            if edges and counts:
+                centers = [(edges[i] + edges[i + 1]) / 2 for i in range(len(counts))]
+                colors  = [THEME["green"] if c > 0 else THEME["red"] for c in centers]
+                fig.add_trace(go.Bar(
+                    x=centers,
+                    y=counts,
+                    marker_color=colors,
+                    marker_line_width=0,
+                    name="Trade P&L",
+                ))
+                # Add win/loss annotation
+                wins   = pnl_dist.get("win_count",  0)
+                losses = pnl_dist.get("loss_count", 0)
+                fig.add_annotation(
+                    text=f"Wins: {wins} | Losses: {losses}",
+                    xref="paper", yref="paper",
+                    x=0.99, y=0.95,
+                    showarrow=False,
+                    font=dict(color=THEME["text_muted"], size=10),
+                    align="right",
+                )
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor=THEME["bg_dark"],
+                plot_bgcolor=THEME["bg_card"],
+                font=dict(color=THEME["text_muted"], size=10),
+                margin=dict(l=50, r=6, t=6, b=30),
+                height=160,
+                xaxis=dict(showgrid=False, color=THEME["text_muted"], title="Net P&L ($)"),
+                yaxis=dict(showgrid=True, gridcolor=THEME["border"],
+                           color=THEME["text_muted"], title="Count"),
+                showlegend=False,
+            )
+            return fig
+
+        # -----------------------------------------------------------------
+        # Step 3d: Monthly returns heatmap
+        # -----------------------------------------------------------------
+        monthly_tbl = monthly_returns_table(bt_returns, bt_dates)
+
+        def _build_monthly_heatmap_fig() -> go.Figure:
+            fig = go.Figure()
+            # Collect numeric year keys
+            years = sorted(k for k in monthly_tbl if isinstance(k, int))
+            if years:
+                z_matrix, text_matrix = [], []
+                for yr in years:
+                    row_z, row_t = [], []
+                    for mo in _MONTH_LABELS:
+                        val = monthly_tbl[yr].get(mo) if isinstance(monthly_tbl.get(yr), dict) else None
+                        row_z.append(val)
+                        row_t.append(f"{val:.2f}%" if val is not None else "")
+                    z_matrix.append(row_z)
+                    text_matrix.append(row_t)
+
+                fig.add_trace(go.Heatmap(
+                    z=z_matrix,
+                    x=_MONTH_LABELS,
+                    y=[str(y) for y in years],
+                    text=text_matrix,
+                    texttemplate="%{text}",
+                    colorscale=[
+                        [0.0, THEME["red"]],
+                        [0.5, THEME["bg_card"]],
+                        [1.0, THEME["green"]],
+                    ],
+                    zmid=0,
+                    showscale=True,
+                    colorbar=dict(
+                        thickness=10,
+                        tickfont=dict(color=THEME["text_muted"], size=9),
+                        ticksuffix="%",
+                    ),
+                    hoverongaps=False,
+                ))
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor=THEME["bg_dark"],
+                plot_bgcolor=THEME["bg_card"],
+                font=dict(color=THEME["text_muted"], size=10),
+                margin=dict(l=50, r=70, t=6, b=30),
+                height=max(120, 40 + 30 * len(years)) if years else 180,
+                xaxis=dict(showgrid=False, color=THEME["text_muted"]),
+                yaxis=dict(showgrid=False, color=THEME["text_muted"]),
+            )
+            return fig
+
+        # -----------------------------------------------------------------
+        # Step 3e: Year-by-year table rows
+        # -----------------------------------------------------------------
+        yby_rows_raw = year_by_year_table(bt_returns, bt_dates)
+        yby_table_data = []
+        for row in yby_rows_raw:
+            yby_table_data.append({
+                "year":            str(row["year"]),
+                "return_pct":      f"{row['return_pct']:.2f}" if row["return_pct"] is not None else "—",
+                "benchmark_pct":   f"{row['benchmark_pct']:.2f}" if row.get("benchmark_pct") is not None else "—",
+                "sharpe":          f"{row['sharpe']:.2f}" if row.get("sharpe") is not None else "—",
+                "max_drawdown_pct": f"{row['max_drawdown_pct']:.2f}" if row.get("max_drawdown_pct") is not None else "—",
+            })
+
+        # -----------------------------------------------------------------
+        # Step 3f: Strategy book (runs all registered strategies — may be slow)
+        # -----------------------------------------------------------------
+        strategy_book_data = []
+        try:
+            from core.strategy_manager import StrategyManager
+            sm = StrategyManager()
+            book = build_strategy_book(sm, df.copy(), cash=initial_cash)
+            for entry in book:
+                if "error" in entry:
+                    strategy_book_data.append({
+                        "name": entry["name"],
+                        "sharpe": "—", "max_drawdown": "—", "win_rate": "—",
+                        "error": entry["error"][:60],
+                    })
+                else:
+                    strategy_book_data.append({
+                        "name":         entry["name"],
+                        "sharpe":       f"{entry['sharpe']:.2f}",
+                        "max_drawdown": f"{entry['max_drawdown']:.2f}",
+                        "win_rate":     f"{entry['win_rate']:.1f}",
+                        "error":        "",
+                    })
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[Dash-RL] strategy book error: %s", exc)
+            strategy_book_data = [{"name": "—", "sharpe": "—", "max_drawdown": "—",
+                                   "win_rate": "—", "error": str(exc)[:80]}]
+
+        # -----------------------------------------------------------------
+        # Step 4a: Volatility Lab — price returns from OHLCV Close
+        # -----------------------------------------------------------------
+        price_returns: list = []
+        price_dates: list = []
+        try:
+            close_col = next((c for c in df.columns if c.lower() == "close"), None)
+            if close_col:
+                close_s  = df[close_col].dropna()
+                ret_s    = close_s.pct_change().dropna()
+                price_returns = ret_s.tolist()
+                price_dates   = [d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
+                                  for d in ret_s.index]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[Dash-RL] price return extraction error: %s", exc)
+
+        from core.volatility_lab import compute_volatility_clustering_report
+
+        vol_report: dict = {}
+        if price_returns:
+            try:
+                vol_report = compute_volatility_clustering_report(
+                    price_returns,
+                    dates=price_dates,
+                    n_permutations=500,
+                    seed=42,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[Dash-RL] volatility report error: %s", exc)
+
+        # -----------------------------------------------------------------
+        # Step 4b: Real-vs-shuffled rolling vol chart
+        # -----------------------------------------------------------------
+        def _build_vol_chart() -> go.Figure:
+            fig = go.Figure()
+            ann_vol = vol_report.get("ann_vol_series", [])
+            tape    = vol_report.get("regime_tape", {})
+            if ann_vol:
+                vdates = vol_report.get("dates") or price_dates
+                x_real = vdates if vdates else list(range(len(ann_vol)))
+                y_real = [None if v is None else v for v in ann_vol]
+                fig.add_trace(go.Scatter(
+                    x=x_real,
+                    y=y_real,
+                    mode="lines",
+                    line=dict(color=THEME["accent"], width=1.5),
+                    name="Real Vol",
+                    connectgaps=False,
+                ))
+
+                # Build shuffled vol series from shuffled regime labels for visual comparison
+                # Use the shuffled_labels from regime_tape as a proxy indicator overlay
+                shuffled_labels = tape.get("shuffled_labels", [])
+                if shuffled_labels and len(shuffled_labels) == len(ann_vol):
+                    # Map labels to vol-relative multipliers for a visual "shuffled" trace
+                    # The shuffled series is the real vol applied to the shuffled label order —
+                    # since permutation_test already did the permutation, we approximate the
+                    # shuffled baseline by sorting the non-None vol values randomly.
+                    non_none = [v for v in ann_vol if v is not None]
+                    if non_none:
+                        rng = np.random.default_rng(42)
+                        shuffled_vols_arr = rng.permutation(non_none)
+                        shuffled_y: list = []
+                        idx = 0
+                        for v in ann_vol:
+                            if v is None:
+                                shuffled_y.append(None)
+                            else:
+                                shuffled_y.append(float(shuffled_vols_arr[idx % len(shuffled_vols_arr)]))
+                                idx += 1
+                        fig.add_trace(go.Scatter(
+                            x=x_real,
+                            y=shuffled_y,
+                            mode="lines",
+                            line=dict(color=THEME["text_muted"], width=1, dash="dot"),
+                            name="Shuffled Baseline",
+                            connectgaps=False,
+                        ))
+
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor=THEME["bg_dark"],
+                plot_bgcolor=THEME["bg_card"],
+                font=dict(color=THEME["text_muted"], size=10),
+                margin=dict(l=50, r=6, t=6, b=30),
+                height=200,
+                xaxis=dict(showgrid=False, color=THEME["text_muted"]),
+                yaxis=dict(showgrid=True, gridcolor=THEME["border"],
+                           color=THEME["text_muted"], tickformat=".1%"),
+                showlegend=True,
+                legend=dict(
+                    font=dict(color=THEME["text_muted"], size=9),
+                    bgcolor="rgba(0,0,0,0)",
+                    x=0.01, y=0.99,
+                ),
+            )
+            return fig
+
+        # -----------------------------------------------------------------
+        # Step 4c: Vol stats block (kurtosis, ACF, Ljung-Box, same-sign rate)
+        # -----------------------------------------------------------------
+        def _build_vol_stats_div():
+            if not vol_report:
+                return html.Span(
+                    "Volatility stats unavailable — insufficient data.",
+                    style={"color": THEME["text_muted"], "fontSize": "11px"},
+                )
+
+            ek    = vol_report.get("excess_kurtosis")
+            acf_d = vol_report.get("acf_abs", {})
+            lb    = vol_report.get("ljung_box", {})
+            ssr   = vol_report.get("same_sign_rate")
+
+            def _fmt(v, decimals=4):
+                if v is None or (isinstance(v, float) and math.isnan(v)):
+                    return "N/A"
+                return f"{v:.{decimals}f}"
+
+            lb_stat    = _fmt(lb.get("statistic"))
+            lb_pval    = _fmt(lb.get("p_value"), 3)
+            lb_sig     = ""
+            try:
+                if lb.get("p_value") is not None and not math.isnan(lb.get("p_value", float("nan"))):
+                    lb_sig = " — clustering confirmed" if lb["p_value"] < 0.05 else " — no clustering"
+            except Exception:
+                pass
+
+            ssr_interp = ""
+            if ssr is not None and not (isinstance(ssr, float) and math.isnan(ssr)):
+                ssr_interp = "  (momentum)" if ssr > 0.5 else "  (mean-reversion)"
+
+            def _stat_row(label: str, value: str) -> html.Div:
+                return html.Div(
+                    style={"display": "flex", "gap": "8px", "marginBottom": "3px"},
+                    children=[
+                        html.Span(label, style={"color": THEME["text_muted"], "minWidth": "180px"}),
+                        html.Span(value, style={"color": THEME["text_main"], "fontWeight": "600"}),
+                    ],
+                )
+
+            return html.Div(
+                style={"fontSize": "11px"},
+                children=[
+                    _stat_row("Excess Kurtosis:",          _fmt(ek)),
+                    _stat_row("ACF |ret| lag-1:",          _fmt(acf_d.get(1))),
+                    _stat_row("ACF |ret| lag-5:",          _fmt(acf_d.get(5))),
+                    _stat_row("ACF |ret| lag-22:",         _fmt(acf_d.get(22))),
+                    _stat_row("ACF |ret| lag-66:",         _fmt(acf_d.get(66))),
+                    _stat_row("Ljung-Box stat (lag 22):",  lb_stat),
+                    _stat_row("Ljung-Box p-value:",        lb_pval + lb_sig),
+                    _stat_row("Same-sign rate:",           _fmt(ssr) + ssr_interp),
+                ],
+            )
+
+        # -----------------------------------------------------------------
+        # Step 4d: Regime tape chart (calm / normal / turbulent)
+        # -----------------------------------------------------------------
+        def _build_regime_tape_fig() -> go.Figure:
+            fig = go.Figure()
+            tape    = vol_report.get("regime_tape", {})
+            labels  = tape.get("labels", [])
+            if labels:
+                vdates = vol_report.get("dates") or price_dates
+                x_vals = vdates if vdates else list(range(len(labels)))
+                # Numeric mapping for scatter color
+                _label_map = {"calm": 0, "normal": 1, "turbulent": 2}
+                _color_map = {"calm": THEME["green"], "normal": THEME["accent"],
+                              "turbulent": THEME["red"]}
+                for regime, color in _color_map.items():
+                    idxs = [i for i, lbl in enumerate(labels) if lbl == regime]
+                    if idxs:
+                        fig.add_trace(go.Scatter(
+                            x=[x_vals[i] for i in idxs],
+                            y=[1] * len(idxs),
+                            mode="markers",
+                            marker=dict(color=color, size=6, symbol="square"),
+                            name=regime.capitalize(),
+                        ))
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor=THEME["bg_dark"],
+                plot_bgcolor=THEME["bg_card"],
+                font=dict(color=THEME["text_muted"], size=10),
+                margin=dict(l=10, r=6, t=6, b=30),
+                height=120,
+                xaxis=dict(showgrid=False, color=THEME["text_muted"]),
+                yaxis=dict(visible=False),
+                showlegend=True,
+                legend=dict(
+                    font=dict(color=THEME["text_muted"], size=9),
+                    bgcolor="rgba(0,0,0,0)",
+                    orientation="h", x=0.0, y=1.1,
+                ),
+            )
+            return fig
+
+        # -----------------------------------------------------------------
+        # Step 4e: Permutation test card
+        # -----------------------------------------------------------------
+        def _build_permtest_div():
+            pt = vol_report.get("permutation", {})
+            if not pt:
+                return html.Span(
+                    "Permutation test unavailable.",
+                    style={"color": THEME["text_muted"], "fontSize": "11px"},
+                )
+
+            def _fmt(v, d=3):
+                if v is None or (isinstance(v, float) and math.isnan(v)):
+                    return "N/A"
+                return f"{v:.{d}f}"
+
+            lift = pt.get("lift_pts")
+            lift_str = _fmt(lift, 1) if lift is not None else "N/A"
+            pval = pt.get("p_value")
+            sig_text = ""
+            if pval is not None and not (isinstance(pval, float) and math.isnan(pval)):
+                sig_text = "significant" if pval < 0.05 else "not significant"
+
+            return html.Div(
+                style={"fontSize": "11px"},
+                children=[
+                    html.P(
+                        "Permutation Test (ACF lag-1 |ret|)",
+                        style={"color": THEME["text_muted"], "fontWeight": "600",
+                               "marginBottom": "6px", "fontSize": "11px"},
+                    ),
+                    html.Div([
+                        html.Span("Observed ACF: ", style={"color": THEME["text_muted"]}),
+                        html.Span(_fmt(pt.get("observed")), style={"color": THEME["text_main"], "fontWeight": "600"}),
+                    ], style={"marginBottom": "3px"}),
+                    html.Div([
+                        html.Span("Shuffled mean: ", style={"color": THEME["text_muted"]}),
+                        html.Span(_fmt(pt.get("shuffled_mean")), style={"color": THEME["text_main"]}),
+                    ], style={"marginBottom": "3px"}),
+                    html.Div([
+                        html.Span("Lift: ", style={"color": THEME["text_muted"]}),
+                        html.Span(
+                            f"+{lift_str} pts",
+                            style={"color": THEME["green"], "fontWeight": "600"},
+                        ),
+                    ], style={"marginBottom": "3px"}),
+                    html.Div([
+                        html.Span("p-value: ", style={"color": THEME["text_muted"]}),
+                        html.Span(
+                            f"{_fmt(pval)} ({sig_text})",
+                            style={"color": THEME["accent"]},
+                        ),
+                    ]),
+                ],
+            )
+
+        # -----------------------------------------------------------------
+        # Step 4f: Position size suggestion card
+        # -----------------------------------------------------------------
+        def _build_position_size_div():
+            if not price_returns or not vol_report:
+                return html.Span(
+                    "Position sizing unavailable.",
+                    style={"color": THEME["text_muted"], "fontSize": "11px"},
+                )
+            try:
+                from core.volatility_lab import suggest_position_size
+                sizing = suggest_position_size(
+                    price_returns,
+                    capital=initial_cash,
+                    risk_budget_pct=0.02,
+                    confidence=0.99,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return html.Span(
+                    f"Position sizing error: {exc}",
+                    style={"color": THEME["red"], "fontSize": "11px"},
+                )
+
+            def _fmt(v, d=4):
+                if v is None or (isinstance(v, float) and math.isnan(v)):
+                    return "N/A"
+                return f"{v:.{d}f}"
+
+            fraction = sizing.get("suggested_fraction", 0)
+            notional = sizing.get("suggested_notional", 0)
+
+            return html.Div(
+                style={"fontSize": "11px"},
+                children=[
+                    html.P(
+                        "Tail-Risk Position Sizing (99% VaR, 2% budget)",
+                        style={"color": THEME["text_muted"], "fontWeight": "600",
+                               "marginBottom": "6px", "fontSize": "11px"},
+                    ),
+                    html.Div([
+                        html.Span("VaR 99%: ", style={"color": THEME["text_muted"]}),
+                        html.Span(_fmt(sizing.get("var_99"), 4),
+                                  style={"color": THEME["red"], "fontWeight": "600"}),
+                    ], style={"marginBottom": "3px"}),
+                    html.Div([
+                        html.Span("CVaR 99%: ", style={"color": THEME["text_muted"]}),
+                        html.Span(_fmt(sizing.get("cvar_99"), 4),
+                                  style={"color": THEME["red"]}),
+                    ], style={"marginBottom": "3px"}),
+                    html.Div([
+                        html.Span("Suggested fraction: ", style={"color": THEME["text_muted"]}),
+                        html.Span(
+                            f"{fraction * 100:.1f}%",
+                            style={"color": THEME["accent"], "fontWeight": "600"},
+                        ),
+                    ], style={"marginBottom": "3px"}),
+                    html.Div([
+                        html.Span("Suggested notional: ", style={"color": THEME["text_muted"]}),
+                        html.Span(
+                            f"${notional:,.0f}",
+                            style={"color": THEME["green"], "fontWeight": "600"},
+                        ),
+                    ]),
+                ],
+            )
+
+        # -----------------------------------------------------------------
+        # Step 5: Gate verdict
+        # -----------------------------------------------------------------
+        def _build_gate_verdict_div():
+            try:
+                gate = evaluate_gate(report)
+            except Exception as exc:  # noqa: BLE001
+                return html.Span(
+                    f"Gate evaluation error: {exc}",
+                    style={"color": THEME["red"], "fontSize": "11px"},
+                )
+
+            passed  = gate.get("passed", False)
+            verdict = gate.get("verdict_text", "")
+            checks  = gate.get("checks", [])
+
+            header_color = THEME["green"] if passed else THEME["red"]
+            header_text  = "PASSED" if passed else "FAILED"
+
+            check_rows = []
+            for chk in checks:
+                chk_pass  = chk.get("passed", False)
+                chk_color = THEME["green"] if chk_pass else THEME["red"]
+                chk_icon  = "✓" if chk_pass else "✗"
+                check_rows.append(
+                    html.Div(
+                        style={
+                            "display": "flex",
+                            "gap": "8px",
+                            "marginBottom": "4px",
+                            "fontSize": "11px",
+                        },
+                        children=[
+                            html.Span(chk_icon, style={"color": chk_color, "fontWeight": "bold",
+                                                        "minWidth": "14px"}),
+                            html.Span(
+                                chk["name"],
+                                style={"color": THEME["text_main"], "minWidth": "180px"},
+                            ),
+                            html.Span(
+                                chk.get("detail", ""),
+                                style={"color": THEME["text_muted"]},
+                            ),
+                        ],
+                    )
+                )
+
+            return html.Div(
+                children=[
+                    html.Div(
+                        style={"display": "flex", "alignItems": "center", "gap": "10px",
+                               "marginBottom": "8px"},
+                        children=[
+                            html.Span(
+                                header_text,
+                                style={
+                                    "color": header_color,
+                                    "fontWeight": "bold",
+                                    "fontSize": "14px",
+                                    "border": f"1px solid {header_color}",
+                                    "borderRadius": "4px",
+                                    "padding": "2px 8px",
+                                },
+                            ),
+                            html.Span(
+                                f"{_effective_strategy}  ·  {symbol}",
+                                style={"color": THEME["text_muted"], "fontSize": "11px"},
+                            ),
+                        ],
+                    ),
+                    html.Div(check_rows, style={"marginBottom": "8px"}),
+                    html.P(
+                        verdict,
+                        style={"color": THEME["text_muted"], "fontSize": "11px",
+                               "lineHeight": "1.5", "marginBottom": "0"},
+                    ),
+                ]
+            )
+
+        # -----------------------------------------------------------------
+        # Assemble and return all 14 outputs
+        # -----------------------------------------------------------------
+        status_msg = (
+            f"Analysis complete — {_effective_strategy} on {symbol}"
+            f" | Sharpe: {report.get('sharpe', 0):.2f}"
+            f" | Win Rate: {report.get('win_rate', 0):.1f}%"
+        )
+
+        return (
+            status_msg,
+            _ok_style,
+            strategy_book_data,
+            _build_drawdown_fig(),
+            _build_rolling_sharpe_fig(),
+            _build_pnl_dist_fig(),
+            _build_monthly_heatmap_fig(),
+            yby_table_data,
+            _build_vol_chart(),
+            _build_vol_stats_div(),
+            _build_regime_tape_fig(),
+            _build_permtest_div(),
+            _build_position_size_div(),
+            _build_gate_verdict_div(),
+        )
+
+    # ------------------------------------------------------------------
+    # Research Loop tab
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("research-candidates-table", "data"),
+        Output("research-paper-table", "data"),
+        Output("research-runs-table", "data"),
+        Output("research-status", "children"),
+        Input("research-refresh-btn", "n_clicks"),
+    )
+    def research_loop_tab(_n_clicks):
+        view = _research_loop_view()
+        return view["candidates"], view["paper"], view["runs"], view["message"]
+
+    # ------------------------------------------------------------------
+    # Agent Monitor: start/stop the supervisor and refresh the table
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("agent-status-label", "children"),
+        Output("agent-status-label", "style"),
+        Output("agent-start-btn", "disabled"),
+        Output("agent-stop-btn", "disabled"),
+        Output("agent-table", "data"),
+        Output("agent-llm-summary", "children"),
+        Input("agent-start-btn", "n_clicks"),
+        Input("agent-stop-btn", "n_clicks"),
+        Input("agent-interval", "n_intervals"),
+    )
+    def agent_monitor(_start_clicks, _stop_clicks, _n_intervals):
+        triggered = dash.callback_context.triggered_id
+        action = {"agent-start-btn": "start", "agent-stop-btn": "stop"}.get(triggered)
+        error = _control_supervisor(action)
+        return _agent_monitor_state(_supervisor, error)
+
+    # ------------------------------------------------------------------
+    # Live P&L card + account balance (was a static placeholder)
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("pnl-value", "children"),
+        Output("pnl-value", "style"),
+        Output("pnl-breakdown", "children"),
+        Output("account-balance", "children"),
+        Input("order-status", "children"),
+        Input("price-interval", "n_intervals"),
+    )
+    def update_pnl_card(_order_status: object, _n_intervals: object):
+        return _build_pnl_card(_broker_or_none())
+
+    # ------------------------------------------------------------------
     # Placeholder wiring points for future phases
     # ------------------------------------------------------------------
-    # Phase 4: live P&L polling → account-balance / pnl-value

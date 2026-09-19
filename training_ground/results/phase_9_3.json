@@ -1,0 +1,126 @@
+{
+  "run_at": "2026-09-19T10:16:38.614401+00:00",
+  "n_markets": 389,
+  "n_events": 62,
+  "window": [
+    "2026-09-19 01:30:27",
+    "2026-09-19 10:09:57"
+  ],
+  "dropped": 0,
+  "dropped_one_sided": 349,
+  "hypotheses": [
+    {
+      "id": "L longshots (ask<=0.10): mean edge < 0",
+      "n_markets": 122,
+      "n_events": 37,
+      "mean_edge": -0.005737704918032792,
+      "mean_net": -0.005737704918032792,
+      "tradable_mean_net": -0.02418032786885243,
+      "tradable_ci": [
+        -0.07553398058252424,
+        0.01610633496176723
+      ],
+      "TRADABLE": false,
+      "mean_ask": 0.07131147540983605,
+      "hit_rate": 0.06557377049180328,
+      "ci": [
+        -0.045919913879663245,
+        0.04508471428571428
+      ],
+      "halves": [
+        -0.02163934426229509,
+        0.01016393442622951
+      ],
+      "criteria": {
+        "1_ci_excludes_zero_in_claimed_direction": false,
+        "2_same_sign_both_halves": false,
+        "3_enough_data": true,
+        "FINDING": false
+      }
+    },
+    {
+      "id": "F favorites (ask>=0.90): mean edge > 0",
+      "n_markets": 1,
+      "n_events": 1,
+      "mean_net": null,
+      "ci": null,
+      "criteria": {
+        "FINDING": false
+      },
+      "note": "too few markets"
+    }
+  ],
+  "calibration": [
+    {
+      "bucket": "(-0.001, 0.1]",
+      "n": 122,
+      "mean_ask": 0.07131147540983605,
+      "hit_rate": 0.06557377049180328
+    },
+    {
+      "bucket": "(0.1, 0.2]",
+      "n": 89,
+      "mean_ask": 0.1455056179775281,
+      "hit_rate": 0.3146067415730337
+    },
+    {
+      "bucket": "(0.2, 0.3]",
+      "n": 55,
+      "mean_ask": 0.2505454545454545,
+      "hit_rate": 0.36363636363636365
+    },
+    {
+      "bucket": "(0.3, 0.4]",
+      "n": 40,
+      "mean_ask": 0.36350000000000005,
+      "hit_rate": 0.2
+    },
+    {
+      "bucket": "(0.4, 0.5]",
+      "n": 24,
+      "mean_ask": 0.45708333333333334,
+      "hit_rate": 0.3333333333333333
+    },
+    {
+      "bucket": "(0.5, 0.6]",
+      "n": 41,
+      "mean_ask": 0.5485365853658537,
+      "hit_rate": 0.4878048780487805
+    },
+    {
+      "bucket": "(0.6, 0.7]",
+      "n": 13,
+      "mean_ask": 0.64,
+      "hit_rate": 0.6153846153846154
+    },
+    {
+      "bucket": "(0.7, 0.8]",
+      "n": 1,
+      "mean_ask": 0.8,
+      "hit_rate": 1.0
+    },
+    {
+      "bucket": "(0.8, 0.9]",
+      "n": 3,
+      "mean_ask": 0.8366666666666666,
+      "hit_rate": 1.0
+    },
+    {
+      "bucket": "(0.9, 1.0]",
+      "n": 1,
+      "mean_ask": 0.91,
+      "hit_rate": 1.0
+    }
+  ],
+  "protocol": {
+    "min_volume": 100.0,
+    "min_life_h": 3.0,
+    "sample": 800,
+    "lead_h": 2.0,
+    "longshot": 0.1,
+    "favorite": 0.9,
+    "level": 0.975,
+    "n_boot": 5000,
+    "seed": 0
+  }
+}

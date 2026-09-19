@@ -1,0 +1,327 @@
+{
+  "run_at": "2026-09-19T09:14:03.006292+00:00",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "LTCUSDT",
+    "DOGEUSDT",
+    "SOLUSDT"
+  ],
+  "protocol": {
+    "days": 1500,
+    "train": 400,
+    "retrain_every": 20,
+    "fee": 0.001,
+    "ci_level_directional": 0.9928571428571429,
+    "block": 10,
+    "n_boot": 2000
+  },
+  "results": {
+    "H1a": {
+      "name": "H1a per-symbol h=5",
+      "horizon": 5,
+      "n_oos": 8640,
+      "symbols": 8,
+      "auc": 0.5151406165278962,
+      "auc_ci_bonferroni": [
+        0.47686592314424214,
+        0.552868553699542
+      ],
+      "ci_level": 0.9928571428571429,
+      "auc_per_symbol": {
+        "ADAUSDT": 0.5082339638512268,
+        "BNBUSDT": 0.5156172413793103,
+        "BTCUSDT": 0.5129499205388877,
+        "DOGEUSDT": 0.5183620689655173,
+        "ETHUSDT": 0.5348476370614224,
+        "LTCUSDT": 0.5258954169467345,
+        "SOLUSDT": 0.48431017976810975,
+        "XRPUSDT": 0.5030939847420876
+      },
+      "symbols_above_half": 7,
+      "auc_first_half": 0.5243741859103517,
+      "auc_second_half": 0.5058713229369799,
+      "up_rate": 0.49918981481481484,
+      "economics": {
+        "rule_sharpe": -0.2914911486574348,
+        "hold_sharpe": 0.8250324221629829,
+        "rule_return_pct": -33.4649033377851,
+        "hold_return_pct": 159.55511869933926,
+        "decisions": 216,
+        "turnover_per_decision": 0.6811342592592593
+      },
+      "criteria": {
+        "1_ci_lower_above_half": false,
+        "2_at_least_6_of_8_symbols_above_half": true,
+        "3_rule_sharpe_beats_buy_hold": false,
+        "4_both_halves_above_half": true,
+        "FINDING": false
+      }
+    },
+    "H1b": {
+      "name": "H1b per-symbol h=10",
+      "horizon": 10,
+      "n_oos": 8632,
+      "symbols": 8,
+      "auc": 0.5014981397469567,
+      "auc_ci_bonferroni": [
+        0.45823544346589956,
+        0.5491785092916808
+      ],
+      "ci_level": 0.9928571428571429,
+      "auc_per_symbol": {
+        "ADAUSDT": 0.5158464233051111,
+        "BNBUSDT": 0.5187724929481567,
+        "BTCUSDT": 0.5223471831719254,
+        "DOGEUSDT": 0.4782919106843532,
+        "ETHUSDT": 0.5052601199760872,
+        "LTCUSDT": 0.4983439840582698,
+        "SOLUSDT": 0.42813664596273293,
+        "XRPUSDT": 0.5116287094547964
+      },
+      "symbols_above_half": 5,
+      "auc_first_half": 0.5283171347960743,
+      "auc_second_half": 0.47334371978081013,
+      "up_rate": 0.503822984244671,
+      "economics": {
+        "rule_sharpe": -0.1486172500581807,
+        "hold_sharpe": 0.7941951074929908,
+        "rule_return_pct": -21.183611575617356,
+        "hold_return_pct": 150.6345630557728,
+        "decisions": 108,
+        "turnover_per_decision": 0.7337962962962963
+      },
+      "criteria": {
+        "1_ci_lower_above_half": false,
+        "2_at_least_6_of_8_symbols_above_half": false,
+        "3_rule_sharpe_beats_buy_hold": false,
+        "4_both_halves_above_half": false,
+        "FINDING": false
+      }
+    },
+    "H2a": {
+      "name": "H2a pooled h=1",
+      "horizon": 1,
+      "n_oos": 8640,
+      "symbols": 8,
+      "auc": 0.4990388695987654,
+      "auc_ci_bonferroni": [
+        0.46907198755362756,
+        0.5254899377921475
+      ],
+      "ci_level": 0.9928571428571429,
+      "auc_per_symbol": {
+        "ADAUSDT": 0.47916896096029954,
+        "BNBUSDT": 0.4854798175136057,
+        "BTCUSDT": 0.5019644444139436,
+        "DOGEUSDT": 0.5043226675463192,
+        "ETHUSDT": 0.49596602535052664,
+        "LTCUSDT": 0.5418233082706767,
+        "SOLUSDT": 0.46372323057716314,
+        "XRPUSDT": 0.5278365094184194
+      },
+      "symbols_above_half": 4,
+      "auc_first_half": 0.5018417964843854,
+      "auc_second_half": 0.49690737843027355,
+      "up_rate": 0.5,
+      "economics": {
+        "rule_sharpe": -1.342642789502204,
+        "hold_sharpe": 0.7968405347232219,
+        "rule_return_pct": -80.02092811524639,
+        "hold_return_pct": 142.00420934077633,
+        "decisions": 1080,
+        "turnover_per_decision": 0.6172453703703704
+      },
+      "criteria": {
+        "1_ci_lower_above_half": false,
+        "2_at_least_6_of_8_symbols_above_half": false,
+        "3_rule_sharpe_beats_buy_hold": false,
+        "4_both_halves_above_half": false,
+        "FINDING": false
+      }
+    },
+    "H2b": {
+      "name": "H2b pooled h=5",
+      "horizon": 5,
+      "n_oos": 8640,
+      "symbols": 8,
+      "auc": 0.5002769479579502,
+      "auc_ci_bonferroni": [
+        0.45274827322893113,
+        0.5525629741839436
+      ],
+      "ci_level": 0.9928571428571429,
+      "auc_per_symbol": {
+        "ADAUSDT": 0.5130498933049272,
+        "BNBUSDT": 0.4887103448275862,
+        "BTCUSDT": 0.49416538253372355,
+        "DOGEUSDT": 0.4993793103448276,
+        "ETHUSDT": 0.48750304657222004,
+        "LTCUSDT": 0.5231484656854003,
+        "SOLUSDT": 0.4502540910198297,
+        "XRPUSDT": 0.5515704342610117
+      },
+      "symbols_above_half": 3,
+      "auc_first_half": 0.5082161011939945,
+      "auc_second_half": 0.4912774640641602,
+      "up_rate": 0.49918981481481484,
+      "economics": {
+        "rule_sharpe": 0.20332488293447945,
+        "hold_sharpe": 0.8250324221629829,
+        "rule_return_pct": 1.7468486859847365,
+        "hold_return_pct": 159.55511869933926,
+        "decisions": 216,
+        "turnover_per_decision": 0.5688657407407407
+      },
+      "criteria": {
+        "1_ci_lower_above_half": false,
+        "2_at_least_6_of_8_symbols_above_half": false,
+        "3_rule_sharpe_beats_buy_hold": false,
+        "4_both_halves_above_half": false,
+        "FINDING": false
+      }
+    },
+    "H4a": {
+      "name": "H4a pooled h=1 + taker flow",
+      "horizon": 1,
+      "n_oos": 8640,
+      "symbols": 8,
+      "auc": 0.49840990440672156,
+      "auc_ci_bonferroni": [
+        0.4701818657521307,
+        0.5263677360030362
+      ],
+      "ci_level": 0.9928571428571429,
+      "auc_per_symbol": {
+        "ADAUSDT": 0.47838431253785585,
+        "BNBUSDT": 0.4944116120204489,
+        "BTCUSDT": 0.5034021775308735,
+        "DOGEUSDT": 0.5018349002144153,
+        "ETHUSDT": 0.5020599019486672,
+        "LTCUSDT": 0.5319857581910982,
+        "SOLUSDT": 0.46026944341551085,
+        "XRPUSDT": 0.5206765885001922
+      },
+      "symbols_above_half": 5,
+      "auc_first_half": 0.49475829398531024,
+      "auc_second_half": 0.5048743338160101,
+      "up_rate": 0.5,
+      "economics": {
+        "rule_sharpe": -1.6620987645160266,
+        "hold_sharpe": 0.7968405347232219,
+        "rule_return_pct": -83.77291232687674,
+        "hold_return_pct": 142.00420934077633,
+        "decisions": 1080,
+        "turnover_per_decision": 0.6057870370370371
+      },
+      "criteria": {
+        "1_ci_lower_above_half": false,
+        "2_at_least_6_of_8_symbols_above_half": false,
+        "3_rule_sharpe_beats_buy_hold": false,
+        "4_both_halves_above_half": false,
+        "FINDING": false
+      }
+    },
+    "H4b": {
+      "name": "H4b pooled h=1 + funding",
+      "horizon": 1,
+      "n_oos": 8612,
+      "symbols": 8,
+      "auc": 0.502236238491908,
+      "auc_ci_bonferroni": [
+        0.4740973607392267,
+        0.5310311124533688
+      ],
+      "ci_level": 0.9928571428571429,
+      "auc_per_symbol": {
+        "ADAUSDT": 0.4824284030233687,
+        "BNBUSDT": 0.501837584358702,
+        "BTCUSDT": 0.5133633690307483,
+        "DOGEUSDT": 0.5027355175388759,
+        "ETHUSDT": 0.4968449168486247,
+        "LTCUSDT": 0.541408704085003,
+        "SOLUSDT": 0.4592336502448862,
+        "XRPUSDT": 0.526003624581251
+      },
+      "symbols_above_half": 5,
+      "auc_first_half": 0.49699547854338705,
+      "auc_second_half": 0.5095236105235131,
+      "up_rate": 0.49965164886205293,
+      "economics": {
+        "rule_sharpe": -1.0828233585041958,
+        "hold_sharpe": 0.8131735101178159,
+        "rule_return_pct": -75.52395461471626,
+        "hold_return_pct": 149.19821776168303,
+        "decisions": 1080,
+        "turnover_per_decision": 0.6099628425452857
+      },
+      "criteria": {
+        "1_ci_lower_above_half": false,
+        "2_at_least_6_of_8_symbols_above_half": false,
+        "3_rule_sharpe_beats_buy_hold": false,
+        "4_both_halves_above_half": false,
+        "FINDING": false
+      }
+    },
+    "H4c": {
+      "name": "H4c pooled h=1 + both",
+      "horizon": 1,
+      "n_oos": 8612,
+      "symbols": 8,
+      "auc": 0.5009419076330248,
+      "auc_ci_bonferroni": [
+        0.4712880036264322,
+        0.5296854748665729
+      ],
+      "ci_level": 0.9928571428571429,
+      "auc_per_symbol": {
+        "ADAUSDT": 0.48942514388738645,
+        "BNBUSDT": 0.48127864242224216,
+        "BTCUSDT": 0.5108550566000185,
+        "DOGEUSDT": 0.5045486746768232,
+        "ETHUSDT": 0.5050227275848336,
+        "LTCUSDT": 0.5379688125874028,
+        "SOLUSDT": 0.459597206788218,
+        "XRPUSDT": 0.5224579878082267
+      },
+      "symbols_above_half": 5,
+      "auc_first_half": 0.49934165425747934,
+      "auc_second_half": 0.5037850164101388,
+      "up_rate": 0.49965164886205293,
+      "economics": {
+        "rule_sharpe": -1.1593908455729407,
+        "hold_sharpe": 0.8131735101178159,
+        "rule_return_pct": -74.44812117525824,
+        "hold_return_pct": 149.19821776168303,
+        "decisions": 1080,
+        "turnover_per_decision": 0.5991639572689271
+      },
+      "criteria": {
+        "1_ci_lower_above_half": false,
+        "2_at_least_6_of_8_symbols_above_half": false,
+        "3_rule_sharpe_beats_buy_hold": false,
+        "4_both_halves_above_half": false,
+        "FINDING": false
+      }
+    },
+    "H5": {
+      "name": "H5 volatility",
+      "n_oos": 8640,
+      "high_vol_rate": 0.4909722222222222,
+      "auc_gbm": 0.7301343416352939,
+      "auc_gbm_ci95": [
+        0.7075053293565907,
+        0.7541803645406294
+      ],
+      "auc_naive": 0.7007296617402922,
+      "auc_diff_gbm_minus_naive_ci95": [
+        0.008589000343778606,
+        0.04830420097911578
+      ],
+      "gbm_adds_value": true
+    }
+  }
+}

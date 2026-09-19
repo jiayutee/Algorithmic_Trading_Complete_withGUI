@@ -1,3 +1,5 @@
+import warnings
+
 import backtrader as bt
 from core.ta_engine import TAEngine
 try:
@@ -20,9 +22,22 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 logger = get_logger(__name__)
 
 class LSTMPredictor(bt.Strategy):
+    """DEPRECATED (Phase 6.3, 2026-09-19) -- use strategies/gbm_strategy.py.
+
+    Not removed, just retired from the UI. Why: it only ever loaded a pre-trained
+    .h5 file (no training script, no validation), used close prices only, and needs
+    TensorFlow, which this project does not install. More importantly the Phase 6.2
+    LightGBM baseline showed no out-of-sample skill on the same kind of inputs, so a
+    bigger model on ~1,500 daily bars would mostly memorise noise. Worth revisiting
+    (with torch, the walk-forward framework in core/ml_validation.py and a feature
+    set that demonstrably carries signal -- Phase 6.5) if intraday or multi-symbol
+    data provides far more rows.
+    """
     params = (('ticker', 'AAPL'), ('sequence_length', 60),)
 
     def __init__(self):
+        warnings.warn("LSTMPredictor is deprecated; use GBMStrategy (strategies/gbm_strategy.py).",
+                      DeprecationWarning, stacklevel=2)
         self.model = None
         self.scaler = None
         self.data_buffer = np.array([])

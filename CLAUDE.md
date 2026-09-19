@@ -24,6 +24,17 @@ core/
   news_sources.py         # OpenBBNewsSource, RSSSource, GDELTSource
   backtester.py           # backtrader engine, pyfolio reports
   broker_manager.py       # Broker routing/switching
+  feature_engineering.py  # ML feature matrix (technicals/news/macro/time), no-lookahead by construction
+  ml_validation.py        # Walk-forward splits + purge gap; walk_forward_predict() = OOS predictions
+  trade_rationale.py      # Structured "why" record attached to every order/signal
+  experiment_log.py       # SQLite log of training/eval runs (params, metrics, git commit): python -m core.experiment_log list
+  kalshi_data.py          # Read-only Kalshi public-API client (no auth, no order path; NOT a broker)
+  kalshi_arbitrage.py     # Kalshi mispricing SIGNALS only (YES+NO<$1, exclusive-event sets), after assumed fees
+  kalshi_collector.py     # Daily Kalshi snapshot collector + outcome resolver (python -m core.kalshi_collector collect|resolve|status)
+  research_loop.py        # Autonomous research loop: evaluate candidates vs buy&hold, promote/retire, forward paper ledger
+  trend_overlay.py        # Trend-filter rule (28-bar, weekly): drawdown reduction, NOT alpha (Phases 6.7-6.9)
+  risk_sizing.py          # Volatility-targeting helpers (Phase 6.6; result: did not help)
+  news_health.py          # Per-source circuit breaker so one rate-limited news source can't stall a refresh
 brokers/
   simulatedbroker.py      # Paper trading, order history, positions
   binance_connector.py    # Live Binance (paper flag)
@@ -32,7 +43,9 @@ brokers/
   ib_connector.py         # Interactive Brokers (Phase 4.1, not yet wired into broker_manager)
 strategies/
   simple_strategies.py    # MACD/RSI, EMA crossover, Stochastic
-  ml_strategies.py
+  ml_strategies.py        # DEPRECATED LSTM (hidden from UI; see docstring for why) -- use gbm_strategy.py
+  trend_filter_strategy.py # Trend Filter (28d) strategy + with_trend_overlay(cls) wrapper (UI checkbox 'Trend overlay')
+  gbm_strategy.py         # LightGBM direction model, retrained walk-forward (Phase 6.2)
   FinRL_strategy.py
   TD3_strategy.py
   ddpg_strategy.py
@@ -60,10 +73,34 @@ scripts/
 - CI status checked via `$GITHUB_PAT` from `.env`
 
 ## Environment
-- Python: `~/miniconda3/bin/python3` (base env — NOT myenv, it OOM-kills)
+- Python: `~/miniconda3/bin/python3` (base env, 3.9 — NOT myenv, it OOM-kills). Orchestrator, Telegram bot and the daily collectors run on this.
+- Python 3.11 env (NautilusTrader, Phase 8.0): `scripts/setup_py311_env.sh` creates `~/.venvs/algotrader311` (needs `brew install libomp` for lightgbm). Full suite passes there (1074 passed). Use `~/.venvs/algotrader311/bin/python` for anything touching `nautilus_trader`. pandas-ta has no release for <3.12, so it is absent from both envs' required set.
 - Claude CLI: `/Users/jiayutee/.local/bin/claude`
 - `.env` is gitignored — contains all secrets (never commit)
-- Run tests: `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -v`
+- Run tests: `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -v` (or the 3.11 env's python)
+- News fetch budget: `NEWS_FETCH_DEADLINE_SECONDS` (default 6); sources still running when it expires are abandoned and
+  skipped for a cool-down after repeated failures
+- IBKR (Phase 4.1): opt-in. Set `IBKR_ENABLED=1` (+ optional `IBKR_HOST`/`IBKR_PORT` (default 7497 = TWS paper; Gateway paper 4002)/`IBKR_CLIENT_ID`) and run TWS/Gateway with API enabled; needs `pip install ib_insync`. Tests use a mocked `ib_insync`; a live connection is only for manual verification. Orders always go through the live-order guard.
+- Daily data collectors (launchd, plain Python, no Claude tokens): `com.algotrader.collect-news` (07:20) and
+  `com.algotrader.collect-kalshi` (07:05, 12:05, 17:05, local time) run `scripts/run_collectors.sh news|kalshi`, log to
+  `logs/collectors.log`. Plist sources: `scripts/launchd/`; installed copies in `~/Library/LaunchAgents/`.
+  Check: `launchctl list | grep collect`, `python -m core.news_collector status`, `python -m core.kalshi_collector status`.
+  Stop: `launchctl bootout gui/$(id -u)/com.algotrader.collect-news` (same for `-kalshi`).
+- Research loop: `python -m core.research_loop run|status` (also visible in the Dash "Research Loop" tab). Promote/retire
+  rules are fixed in the module docstring; retired strategies never revive automatically
+- Experiment log: `python -m core.experiment_log list|show|best|compare` (file: training_ground/results/experiments.sqlite3,
+  override with `EXPERIMENT_LOG_PATH`)
+- Train/evaluate the ML model: `~/miniconda3/bin/python3 training_ground/train_gbm.py --symbol BTCUSDT --days 1500 --interval 1d`
+  (prints out-of-sample AUC with a confidence interval; read the VERDICT line before trusting any number)
+
+## Live trading safety (Phase 11.2)
+Every live connector's `submit_order` goes through `brokers/execution_guard.py` (inside the connector,
+so nothing can route around it). **By default all live orders are blocked.** Env vars (read per order):
+- `LIVE_TRADING_ENABLED=true` -- master switch (default off = kill switch ON)
+- `LIVE_DRY_RUN=false` -- default true: orders are logged as "would submit", not sent. Real orders need BOTH settings
+- `touch .kill_switch` -- stops all live trading instantly, no restart (delete the file to release)
+- `MAX_ORDER_NOTIONAL_USD` (100), `MAX_SESSION_NOTIONAL_USD` (500 per broker), `MAX_ORDERS_PER_MINUTE` (6)
+- An order whose value can't be determined (no price) is refused. Simulator and paper-mode connectors are unaffected.
 
 ## Coding Rules
 - **No `.env` in commits** — always check `git status` before committing

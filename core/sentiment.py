@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 import re
 from typing import Iterable
+
+import requests
 
 from core.logger import logger
 
@@ -12,6 +15,24 @@ from core.logger import logger
 torch = None
 AutoModelForSequenceClassification = None
 AutoTokenizer = None
+
+_DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+# Kept small deliberately: larger batches (tried up to ~79 headlines in one
+# call) made the model occasionally miscount entries in its own response
+# (observed: 81 rows for 79 inputs), which used to blow away the whole
+# batch's LLM result. Matching by "id" below makes that self-correcting even
+# within a chunk, but a smaller chunk also just makes miscounts rarer.
+_LLM_CHUNK_SIZE = 20
+_LLM_SYSTEM_PROMPT = (
+    "You are a financial headline sentiment classifier. Each headline is "
+    "numbered. For each one, score how positive, negative, and neutral it is "
+    "for the mentioned company/asset's near-term stock price (three floats "
+    "summing to 1.0), and give a one-word label (positive/negative/neutral) "
+    "with a confidence 0-1. Respond with ONLY a JSON object: "
+    '{"results": [{"id": 1, "positive": 0.0, "negative": 0.0, "neutral": 0.0, '
+    '"label": "...", "confidence": 0.0}, ...]} -- exactly one entry per '
+    "headline, and \"id\" must equal that headline's number from the input."
+)
 
 
 @dataclass
@@ -69,6 +90,7 @@ class SentimentAnalyzer:
         self._tokenizer = None
         self._model = None
         self._loaded_model_name = None
+        self._deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 
     def _load_model(self) -> bool:
         if self.force_rule_based:
@@ -110,6 +132,9 @@ class SentimentAnalyzer:
         texts = [text or "" for text in texts]
         if not texts:
             return []
+
+        if not self.force_rule_based and self._deepseek_api_key:
+            return self._analyze_with_llm_batched(texts)
 
         if self._load_model():
             return self._analyze_with_model(texts)
@@ -155,6 +180,90 @@ class SentimentAnalyzer:
                 )
             )
         return results
+
+    def _analyze_with_llm_batched(self, texts: list[str]) -> list[SentimentResult]:
+        """Runs the LLM sentiment path in fixed-size chunks so a single
+        chunk's failure (network error, or the model miscounting its own
+        response) only degrades that chunk to rule-based, not the whole
+        batch."""
+        results: list[SentimentResult] = []
+        for start in range(0, len(texts), _LLM_CHUNK_SIZE):
+            chunk = texts[start:start + _LLM_CHUNK_SIZE]
+            chunk_results = self._analyze_with_llm(chunk)
+            if chunk_results is None:
+                chunk_results = [self._analyze_rule_based(text) for text in chunk]
+            results.extend(chunk_results)
+        return results
+
+    def _analyze_with_llm(self, texts: list[str]) -> list[SentimentResult] | None:
+        """Hosted LLM sentiment path (DeepSeek) for one chunk. Returns None
+        only when the request/response itself is unusable (network error,
+        unparsable JSON, no "results" list) -- the caller then falls back to
+        rule-based for the whole chunk. Individual rows are matched by their
+        "id" field rather than by list position, so a model miscount (seen
+        in practice: 81 rows returned for 79 inputs) degrades to a per-row
+        rule-based fallback for just the missing/duplicate ids instead of
+        discarding the entire chunk's real sentiment scores."""
+        prompt = "\n".join(f"{i + 1}. {text}" for i, text in enumerate(texts))
+        try:
+            resp = requests.post(
+                _DEEPSEEK_URL,
+                headers={
+                    "Authorization": f"Bearer {self._deepseek_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [
+                        {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.0,
+                },
+                timeout=20,
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+            rows = json.loads(content)["results"]
+        except Exception as exc:  # pragma: no cover - network/API failures
+            logger.warning("DeepSeek sentiment call failed, falling back: %s", exc)
+            return None
+
+        if not isinstance(rows, list):
+            logger.warning("DeepSeek sentiment response had no 'results' list, falling back.")
+            return None
+
+        by_id: dict[int, SentimentResult] = {}
+        for row in rows:
+            try:
+                row_id = int(row["id"])
+                if not (1 <= row_id <= len(texts)):
+                    continue
+                result = SentimentResult(
+                    positive=float(row["positive"]),
+                    negative=float(row["negative"]),
+                    neutral=float(row["neutral"]),
+                    label=str(row["label"]).lower(),
+                    confidence=float(row["confidence"]),
+                    model_name="deepseek-chat",
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            by_id.setdefault(row_id, result)  # first occurrence wins on duplicate ids
+
+        missing = len(texts) - len(by_id)
+        if missing:
+            logger.warning(
+                "DeepSeek sentiment returned %d/%d matched rows for this chunk; "
+                "filling the rest with rule-based sentiment.",
+                len(by_id), len(texts),
+            )
+
+        return [
+            by_id.get(i + 1) or self._analyze_rule_based(text)
+            for i, text in enumerate(texts)
+        ]
 
     def _analyze_rule_based(self, text: str) -> SentimentResult:
         words = [token.lower() for token in re.findall(r"[A-Za-z']+", text)]

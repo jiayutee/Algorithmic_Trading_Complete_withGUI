@@ -1,0 +1,82 @@
+/* dash_app/assets/dark_dropdown.css
+ *
+ * dcc.Dropdown is built on an internal react-select fork whose CSS ships
+ * hardcoded light-theme colors (white control background, mid-grey text,
+ * white menu/option list). The `style=` prop passed to dcc.Dropdown in
+ * layout.py only affects the OUTER wrapper div — none of that reaches the
+ * inner .Select-* elements below, so every dropdown in the app rendered
+ * white-on-grey regardless of the dark theme. Dash auto-loads any CSS
+ * placed in an `assets/` folder next to app.py, which is the only way to
+ * reach these internal classes.
+ *
+ * Colors mirror core/chart_builder.py's THEME dict — kept in sync by hand
+ * since this is plain CSS, not Python.
+ */
+
+.Select-control {
+  background-color: #161b22 !important; /* THEME.bg_card */
+  border-color: #30363d !important;     /* THEME.border */
+  color: #e6edf3 !important;            /* THEME.text_main */
+}
+
+.Select-control:hover {
+  box-shadow: none !important;
+  border-color: #58a6ff !important;     /* THEME.accent */
+}
+
+.is-open > .Select-control,
+.is-focused:not(.is-open) > .Select-control {
+  background-color: #161b22 !important;
+  border-color: #58a6ff !important;
+}
+
+.Select-placeholder,
+.Select--single > .Select-control .Select-value {
+  color: #8b949e !important;            /* THEME.text_muted */
+}
+
+.Select-value-label {
+  color: #e6edf3 !important;
+}
+
+.Select-input > input {
+  color: #e6edf3 !important;
+}
+
+.Select-arrow {
+  border-color: #8b949e transparent transparent !important;
+}
+
+.is-open .Select-arrow {
+  border-color: transparent transparent #8b949e !important;
+}
+
+/* Dropdown menu (the open options list) */
+.Select-menu-outer {
+  background-color: #161b22 !important;
+  border: 1px solid #30363d !important;
+  color: #e6edf3 !important;
+}
+
+.Select-option,
+.VirtualizedSelectOption {
+  background-color: #161b22 !important;
+  color: #e6edf3 !important;
+}
+
+.Select-option.is-focused,
+.Select-option:hover,
+.VirtualizedSelectFocusedOption {
+  background-color: #21262d !important; /* THEME.border_dim */
+  color: #e6edf3 !important;
+}
+
+.Select-option.is-selected {
+  background-color: #1f6feb33 !important; /* matches the app's selection-highlight tint */
+  color: #58a6ff !important;
+}
+
+.Select-noresults {
+  background-color: #161b22 !important;
+  color: #8b949e !important;
+}

@@ -1,6 +1,8 @@
 from core.logger import logger
 from strategies.simple_strategies import MACD_RSI_Strategy, EMACrossoverStrategy, StochasticStrategy
 from strategies.ml_strategies import LSTMPredictor
+from strategies.gbm_strategy import GBMStrategy
+from strategies.trend_filter_strategy import TrendFilterStrategy, with_trend_overlay
 try:
     from strategies.FinRL_strategy import FinRLStrategy
 except ImportError:
@@ -37,8 +39,12 @@ class StrategyManager:
             "MACD/RSI": MACD_RSI_Strategy,
             "EMA Crossover": EMACrossoverStrategy,
             "Stochastic": StochasticStrategy,
-            "LSTM Predictor": LSTMPredictor,
+            "GBM (LightGBM)": GBMStrategy,
+            "Trend Filter (28d)": TrendFilterStrategy,
         }
+        # Deprecated (Phase 6.3 decision, 2026-09-19): not offered in the UI, but still
+        # resolvable by name so old scripts/configs keep working. See strategies/ml_strategies.py.
+        self.deprecated_strategies = {"LSTM Predictor": LSTMPredictor}
 
         if TD3Strategy is not None:
             self.strategies["TD3 Strategy"] = TD3Strategy
@@ -49,21 +55,26 @@ class StrategyManager:
         self.backtester = Backtester()
 
     def get_available_strategies(self):
-        """Return list of available strategy names"""
+        """Return list of available strategy names (deprecated strategies are excluded)"""
         return list(self.strategies.keys())
 
-    def get_strategy(self, name, **kwargs):
+    def get_strategy(self, name, trend_overlay=False, **kwargs):
         """
         Get a strategy wrapped in a consistent interface.
         
         Args:
             name (str): The name of the strategy from self.strategies keys.
+            trend_overlay (bool): wrap a Backtrader strategy so it only holds positions while the trailing 28-bar
+                trend is up (core/trend_overlay.py: reduces drawdown, NOT shown to add return; daily bars validated).
             **kwargs: Arguments to pass to the strategy constructor (for non-Backtrader strategies).
             
         Returns:
             StrategyWrapper: A wrapper containing the strategy object and type info.
         """
         strategy_class = self.strategies.get(name)
+        if not strategy_class and name in self.deprecated_strategies:
+            logger.warning("Strategy %r is deprecated and hidden from the UI; use 'GBM (LightGBM)'.", name)
+            strategy_class = self.deprecated_strategies[name]
         if not strategy_class:
             logger.error(f"Strategy {name} not found.")
             return None
@@ -81,9 +92,14 @@ class StrategyManager:
         if is_bt:
             # For backtrader, we pass the CLASS itself
             logger.info(f"Returning Backtrader strategy class: {name}")
+            if trend_overlay:
+                strategy_class = with_trend_overlay(strategy_class)
+                name = f"{name} + trend overlay"
             return StrategyWrapper(name, strategy_class, is_backtrader=True)
         else:
             # For custom strategies, we instantiate them
+            if trend_overlay:
+                logger.warning("trend_overlay is only supported for Backtrader strategies; ignored for %s", name)
             try:
                 logger.info(f"Creating custom strategy instance: {name}")
                 instance = strategy_class(**kwargs)

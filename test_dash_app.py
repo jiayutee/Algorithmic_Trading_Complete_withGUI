@@ -122,6 +122,7 @@ class TestLayoutStructure:
         # Backtest controls + results (Phase 1.5)
         "bt-cash-input",
         "bt-run-btn",
+        "trend-overlay-check",
         "bt-alpha",
         "bt-beta",
         "bt-status",
@@ -985,7 +986,7 @@ class TestOrdersTableHelper:
         assert len(data) == 1
 
     def test_row_keys_match_datatable_columns(self):
-        """Every row dict must contain exactly the 7 column IDs."""
+        """Every row dict must contain exactly the 8 column IDs (7 blotter columns + "why")."""
         from unittest.mock import MagicMock
         import time
 
@@ -1001,7 +1002,7 @@ class TestOrdersTableHelper:
         broker.order_history = [order]
 
         data, _ = self._fn(broker)
-        expected_keys = {"time", "symbol", "side", "type", "qty", "fill_price", "status"}
+        expected_keys = {"time", "symbol", "side", "type", "qty", "fill_price", "status", "why"}
         assert set(data[0].keys()) == expected_keys
 
     def test_side_is_uppercased(self):
@@ -1253,7 +1254,7 @@ class TestOrdersTabLayout:
         assert "orders-status" in all_ids
 
     def test_orders_table_has_seven_columns(self, layout):
-        """orders-table must declare exactly 7 columns matching the PyQt5 blotter."""
+        """orders-table declares the 7 PyQt5 blotter columns plus the Phase 11.1 "Why" column (8)."""
         from dash_app.layout import build_layout
         from dash.development.base_component import Component as DashComponent
 
@@ -1281,12 +1282,12 @@ class TestOrdersTabLayout:
         layout = build_layout()
         table = _find_by_id(layout, "orders-table")
         assert table is not None, "orders-table not found in layout"
-        assert len(table.columns) == 7, (
-            f"Expected 7 columns, found {len(table.columns)}: {table.columns}"
+        assert len(table.columns) == 8, (
+            f"Expected 8 columns, found {len(table.columns)}: {table.columns}"
         )
 
     def test_orders_table_column_ids_match_pyqt5(self, layout):
-        """Column IDs must match the 7 PyQt5 _orders_table columns."""
+        """Column IDs must match the PyQt5 _orders_table columns (incl. "why")."""
         from dash_app.layout import build_layout
         from dash.development.base_component import Component as DashComponent
 
@@ -1315,7 +1316,7 @@ class TestOrdersTabLayout:
         table = _find_by_id(layout, "orders-table")
         assert table is not None
         col_ids = [c["id"] for c in table.columns]
-        expected = ["time", "symbol", "side", "type", "qty", "fill_price", "status"]
+        expected = ["time", "symbol", "side", "type", "qty", "fill_price", "status", "why"]
         assert col_ids == expected, f"Expected {expected}, got {col_ids}"
 
     def test_orders_table_starts_with_empty_data(self, layout):
@@ -1955,3 +1956,282 @@ class TestCallbackCountPhase17:
             f"Expected at least 10 registered callbacks, found {len(callback_map)}: "
             f"{list(callback_map.keys())}"
         )
+
+
+class TestNewsSentimentBadge:
+    """Dash news rows must show the item's sentiment (was previously never rendered)."""
+
+    @staticmethod
+    def _spans(comp, out=None):
+        from dash import html as dash_html
+        out = [] if out is None else out
+        if isinstance(comp, dash_html.Span):
+            out.append(comp)
+        children = getattr(comp, "children", None)
+        if isinstance(children, list):
+            for c in children:
+                TestNewsSentimentBadge._spans(c, out)
+        elif children is not None and not isinstance(children, str):
+            TestNewsSentimentBadge._spans(children, out)
+        return out
+
+    def _item(self, sentiment):
+        import datetime
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            headline="Apple beats estimates", url="https://example.com/a", source="Reuters",
+            datetime_utc=datetime.datetime(2026, 9, 17, 10, 0), sentiment=sentiment,
+        )
+
+    def test_badge_shows_label_confidence_and_model(self):
+        from dash_app.callbacks import _sentiment_badge
+        badge = _sentiment_badge(self._item(
+            {"label": "positive", "confidence": 0.95, "model_name": "deepseek-chat"}
+        ))
+        assert badge.children == "Positive 95%"
+        assert "deepseek-chat" in badge.title
+        assert badge.style["color"] == "#7ee787"
+
+    def test_negative_and_neutral_use_distinct_colors(self):
+        from dash_app.callbacks import _sentiment_badge
+        neg = _sentiment_badge(self._item({"label": "negative", "confidence": 0.8}))
+        neu = _sentiment_badge(self._item({"label": "neutral", "confidence": 0.8}))
+        assert neg.style["color"] == "#ffa198"
+        assert neu.style["color"] == "#c9d1d9"
+        assert neg.style["backgroundColor"] != neu.style["backgroundColor"]
+
+    def test_no_sentiment_returns_none(self):
+        from dash_app.callbacks import _sentiment_badge
+        assert _sentiment_badge(self._item({})) is None
+
+    def test_news_rows_include_badge(self):
+        from unittest.mock import MagicMock, patch
+        from dash_app.callbacks import _build_news_content
+        pipeline = MagicMock()
+        pipeline.fetch_news_items.return_value = [
+            self._item({"label": "negative", "confidence": 0.9, "model_name": "rule-based-headline-v1"})
+        ]
+        with patch("core.news_pipeline.get_default_news_pipeline", return_value=pipeline):
+            rows = _build_news_content("AAPL")
+        texts = [s.children for s in self._spans(rows[0]) if isinstance(s.children, str)]
+        assert "Negative 90%" in texts
+
+
+class TestPnlCard:
+    """The P&L card was a static "$0.00" placeholder; it must reflect the broker."""
+
+    def test_no_broker_shows_zeros_and_starting_balance(self):
+        from dash_app.callbacks import _build_pnl_card
+        total, _style, breakdown, balance = _build_pnl_card(None)
+        assert total == "+$0.00"
+        assert "Realized +$0.00" in breakdown and "Unrealized +$0.00" in breakdown
+        assert balance == "$100,000.00"
+
+    def test_splits_realized_and_unrealized_with_colors(self):
+        from types import SimpleNamespace
+        from dash_app.callbacks import _build_pnl_card
+        from dash_app.layout import THEME
+        broker = SimpleNamespace(
+            get_realized_pnl=lambda: 150.0,
+            get_unrealized_pnl=lambda: -400.0,
+            get_account_info=lambda: {"portfolio_value": 99_750.0},
+        )
+        total, style, breakdown, balance = _build_pnl_card(broker)
+        assert total == "-$250.00"
+        assert breakdown == "Realized +$150.00  ·  Unrealized -$400.00"
+        assert balance == "$99,750.00"
+        assert style["color"] == THEME["red"]
+
+    def test_broker_error_falls_back_safely(self):
+        from types import SimpleNamespace
+        from dash_app.callbacks import _build_pnl_card
+        def boom():
+            raise RuntimeError("x")
+        total, _s, _b, balance = _build_pnl_card(SimpleNamespace(get_realized_pnl=boom))
+        assert total == "+$0.00" and balance == "$100,000.00"
+
+
+class TestAgentMonitor:
+    """Dash Agent Monitor (parity with the desktop app's tab)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset(self):
+        import dash_app.callbacks as cb
+        cb._supervisor = None
+        original = cb._supervisor_factory
+        yield cb
+        cb._supervisor = None
+        cb._supervisor_factory = original
+
+    @staticmethod
+    def _fake_supervisor(started=None, stopped=None):
+        from types import SimpleNamespace
+        result = lambda name, status, summary: SimpleNamespace(name=name, status=status, summary=summary)
+        class Fake:
+            def start(self, loop_delay=1.0):
+                if started is not None:
+                    started.append(loop_delay)
+            def stop(self, timeout=2.0):
+                if stopped is not None:
+                    stopped.append(True)
+            def snapshot(self):
+                return {
+                    "price": {"latest": result("price", "ok", "AAPL=190.1"), "history_len": 7},
+                    "news": {"latest": None, "history_len": 0},
+                    "__meta__": {"last_summary": "All quiet."},
+                }
+        return Fake()
+
+    def test_state_when_stopped(self, _reset):
+        text, style, start_disabled, stop_disabled, rows, llm = _reset._agent_monitor_state(None)
+        assert text == "Agents: stopped" and rows == []
+        assert (start_disabled, stop_disabled) == (False, True)
+        assert llm == "LLM summary: —"
+
+    def test_state_when_running_lists_one_row_per_agent(self, _reset):
+        text, style, start_disabled, stop_disabled, rows, llm = _reset._agent_monitor_state(self._fake_supervisor())
+        assert text == "Agents: running" and (start_disabled, stop_disabled) == (True, False)
+        assert [r["agent"] for r in rows] == ["news", "price"]          # sorted
+        price = rows[1]
+        assert price["status"] == "ok" and price["runs"] == 7 and "AAPL=190.1" in price["summary"]
+        assert rows[0]["status"] == "—" and "waiting" in rows[0]["summary"]   # no result yet
+        assert llm == "LLM summary: All quiet."
+
+    def test_error_is_shown_in_red(self, _reset):
+        from dash_app.layout import THEME
+        text, style, *_ = _reset._agent_monitor_state(None, error="failed to start — boom")
+        assert "boom" in text and style["color"] == THEME["red"]
+
+    def test_snapshot_failure_never_breaks_the_page(self, _reset):
+        class Broken:
+            def snapshot(self):
+                raise RuntimeError("x")
+        *_, rows, llm = _reset._agent_monitor_state(Broken())
+        assert rows == []
+
+    def test_start_then_stop_is_idempotent(self, _reset):
+        started, stopped = [], []
+        _reset._supervisor_factory = lambda: self._fake_supervisor(started, stopped)
+        assert _reset._control_supervisor("start") is None
+        assert _reset._control_supervisor("start") is None          # already running: no second start
+        assert started == [5.0] and _reset._supervisor is not None
+        assert _reset._control_supervisor(None) is None             # observe only
+        assert _reset._control_supervisor("stop") is None
+        assert _reset._control_supervisor("stop") is None           # already stopped: no second stop
+        assert stopped == [True] and _reset._supervisor is None
+
+    def test_start_failure_returns_message_and_stays_stopped(self, _reset):
+        def boom():
+            raise RuntimeError("no ollama")
+        _reset._supervisor_factory = boom
+        msg = _reset._control_supervisor("start")
+        assert "no ollama" in msg and _reset._supervisor is None
+
+    def test_real_supervisor_starts_and_stops(self, _reset, monkeypatch):
+        """Real Supervisor construct/start/stop -- would have failed with the Python 3.9
+        union-syntax crash. The agent cycle is stubbed so no network calls happen."""
+        monkeypatch.setattr("core.runtime.supervisor.Supervisor.run_cycle", lambda self, ctx=None: [])
+        assert _reset._control_supervisor("start") is None
+        try:
+            text, *_ , rows, _llm = _reset._agent_monitor_state(_reset._supervisor)
+            assert text == "Agents: running"
+            assert {r["agent"] for r in rows} == {"portfolio", "news", "price", "stats"}
+        finally:
+            assert _reset._control_supervisor("stop") is None
+
+    def test_layout_has_the_tab_and_components(self):
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component
+
+        ids, tab_values = set(), set()
+        def walk(c):
+            if isinstance(c, Component):
+                if getattr(c, "id", None):
+                    ids.add(c.id)
+                if getattr(c, "value", None) and type(c).__name__ == "Tab":
+                    tab_values.add(c.value)
+                walk(getattr(c, "children", None))
+            elif isinstance(c, (list, tuple)):
+                for x in c:
+                    walk(x)
+        walk(build_layout())
+        assert "agent-monitor-tab" in tab_values
+        assert {"agent-start-btn", "agent-stop-btn", "agent-table", "agent-llm-summary",
+                "agent-status-label", "agent-interval"} <= ids
+
+
+class TestResearchLoopTab:
+    """Read-only Dash view of the research loop + experiment log."""
+
+    def test_empty_database_gives_a_helpful_message(self, tmp_path):
+        from dash_app.callbacks import _research_loop_view
+        view = _research_loop_view(str(tmp_path / "empty.sqlite3"))
+        assert view["candidates"] == [] and view["paper"] == [] and view["runs"] == []
+        assert "python -m core.research_loop run" in view["message"]
+
+    def test_populated_view_shows_status_evidence_paper_pnl_and_recent_runs(self, tmp_path):
+        from dash_app.callbacks import _research_loop_view
+        from core.experiment_log import ExperimentLog
+        from core.research_loop import ResearchState
+        path = str(tmp_path / "loop.sqlite3")
+        log, st = ExperimentLog(path), ResearchState(path)
+        git = {"commit": "a" * 40, "dirty": False}
+        rid = log.log_run(name="research-loop EMA Crossover", model_type="strategy", git=git, tags=["research-loop"],
+                          params={"candidate": "EMA Crossover"},
+                          metrics={"sharpe": 0.81, "bh_sharpe": 0.43, "sharpe_diff": 0.38, "ci_low": -1.4, "ci_high": 2.12,
+                                   "trades": 130, "max_drawdown": -0.34, "PASS": False})
+        st.apply("EMA Crossover", {"ci": [-1.4, 2.12], "sharpe_diff_halves": [0.1, -0.1], "trades": 130,
+                                   "strategy": {"max_drawdown": -0.34}, "buy_hold": {"max_drawdown": -0.3}},
+                 {"PASS": False}, rid)
+        st.record_paper_positions("d1", "EMA Crossover", {"A": 1}, {"A": 100.0})
+        st.record_paper_positions("d2", "EMA Crossover", {"A": 1}, {"A": 102.0})
+        log.log_run(name="H5 volatility", model_type="lightgbm", git=git, metrics={"auc_gbm": 0.73})
+        view = _research_loop_view(path)
+        c = view["candidates"][0]
+        assert c["candidate"] == "EMA Crossover" and c["status"] == "candidate" and c["verdict"] == "fail"
+        assert c["sharpe"] == "0.81" and c["diff"] == "+0.38" and c["ci"] == "[-1.40, +2.12]" and c["trades"] == 130
+        assert c["max_dd"] == "-34%"
+        assert view["paper"][0]["days"] == 1 and view["paper"][0]["return_pct"].startswith("+1.9")
+        assert [r["name"] for r in view["runs"]][:2] == ["H5 volatility", "research-loop EMA Crossover"]      # newest first
+        assert view["runs"][0]["result"] == "auc_gbm = 0.730" and view["runs"][0]["commit"] == "aaaaaaa"
+        assert "1 candidate(s)" in view["message"] and "None has yet passed" in view["message"]
+
+    def test_a_paper_and_a_retired_candidate_are_counted(self, tmp_path):
+        from dash_app.callbacks import _research_loop_view
+        from core.research_loop import ResearchState
+        path = str(tmp_path / "s.sqlite3")
+        st = ResearchState(path)
+        good = {"ci": [0.1, 0.9], "sharpe_diff_halves": [0.1, 0.1], "trades": 50,
+                "strategy": {"max_drawdown": -0.2}, "buy_hold": {"max_drawdown": -0.2}}
+        st.apply("Winner", good, {"PASS": True}, None)
+        bad = {**good, "ci": [-0.9, -0.2]}
+        st.apply("Loser", good, {"PASS": True}, None)
+        st.apply("Loser", bad, {"PASS": False}, None)
+        view = _research_loop_view(path)
+        states = {c["candidate"]: c["status"] for c in view["candidates"]}
+        assert states == {"Winner": "paper", "Loser": "retired"}
+        assert "1 in paper trading, 1 retired" in view["message"] and "None has yet passed" not in view["message"]
+
+    def test_a_broken_database_path_never_raises(self):
+        from dash_app.callbacks import _research_loop_view
+        view = _research_loop_view("/nonexistent_dir_xyz/cannot/create.sqlite3")
+        assert view["candidates"] == [] and "unavailable" in view["message"] or "No research-loop" in view["message"]
+
+    def test_layout_has_the_tab_and_tables(self):
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component
+        ids, tabs = set(), set()
+        def walk(c):
+            if isinstance(c, Component):
+                if getattr(c, "id", None):
+                    ids.add(c.id)
+                if type(c).__name__ == "Tab" and getattr(c, "value", None):
+                    tabs.add(c.value)
+                walk(getattr(c, "children", None))
+            elif isinstance(c, (list, tuple)):
+                for x in c:
+                    walk(x)
+        walk(build_layout())
+        assert "research-loop-tab" in tabs
+        assert {"research-refresh-btn", "research-status", "research-candidates-table",
+                "research-paper-table", "research-runs-table"} <= ids
