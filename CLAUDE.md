@@ -30,6 +30,7 @@ core/
   experiment_log.py       # SQLite log of training/eval runs (params, metrics, git commit): python -m core.experiment_log list
   kalshi_data.py          # Read-only Kalshi public-API client (no auth, no order path; NOT a broker)
   kalshi_arbitrage.py     # Kalshi mispricing SIGNALS only (YES+NO<$1, exclusive-event sets), after assumed fees
+  kalshi_collector.py     # Daily Kalshi snapshot collector + outcome resolver (python -m core.kalshi_collector collect|resolve|status)
   research_loop.py        # Autonomous research loop: evaluate candidates vs buy&hold, promote/retire, forward paper ledger
   risk_sizing.py          # Volatility-targeting helpers (Phase 6.6; result: did not help)
   news_health.py          # Per-source circuit breaker so one rate-limited news source can't stall a refresh
