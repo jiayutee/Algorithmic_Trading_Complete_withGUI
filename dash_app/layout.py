@@ -1384,6 +1384,7 @@ def _bottom_tabs_panel() -> html.Div:
                         ],
                     ),
                     _agent_monitor_tab(),
+                    _research_loop_tab(),
                 ],
             ),
         ],
@@ -1462,6 +1463,68 @@ def _agent_monitor_tab() -> "dcc.Tab":
                         style={"color": THEME["text_muted"], "fontSize": "11px",
                                "fontStyle": "italic", "marginTop": "8px", "lineHeight": "1.5"},
                     ),
+                ],
+            ),
+        ],
+    )
+
+
+def _research_loop_tab() -> "dcc.Tab":
+    """Research Loop tab: read-only view of the autonomous research loop and the experiment log.
+
+    Shows each candidate strategy's status (candidate / paper / retired) with its latest evidence
+    against buy-and-hold, the forward paper-trading P&L of promoted strategies, and the most recent
+    experiment runs. Populated from the same SQLite file the loop writes (core/research_loop.py).
+    """
+    def _table(table_id, columns):
+        t = _rl_datatable(table_id, columns)
+        t.style_cell_conditional = [{"if": {"column_id": columns[0]["id"]}, "textAlign": "left", "fontWeight": "600"}]
+        t.style_data_conditional = [
+            {"if": {"row_index": "odd"}, "backgroundColor": "#0f1419"},
+            {"if": {"filter_query": "{status} = 'paper'", "column_id": "status"}, "color": "#7ee787", "fontWeight": "600"},
+            {"if": {"filter_query": "{status} = 'retired'", "column_id": "status"}, "color": "#ffa198", "fontWeight": "600"},
+            {"if": {"filter_query": "{status} = 'candidate'", "column_id": "status"}, "color": "#c9d1d9"},
+            {"if": {"filter_query": "{verdict} = 'PASS'", "column_id": "verdict"}, "color": "#7ee787", "fontWeight": "600"},
+        ]
+        return t
+
+    label = {**_LABEL_MUTED, "fontWeight": "600", "margin": "10px 0 4px"}
+    return dcc.Tab(
+        label="Research Loop",
+        value="research-loop-tab",
+        style=_TAB_STYLE,
+        selected_style=_TAB_SELECTED_STYLE,
+        children=[
+            html.Div(
+                style={**_PANEL_STYLE, "margin": "8px 0"},
+                children=[
+                    html.Div(
+                        style={"display": "flex", "alignItems": "center", "marginBottom": "6px"},
+                        children=[
+                            html.P("Research Loop", style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "0", "flex": "1"}),
+                            html.Button("Refresh", id="research-refresh-btn", n_clicks=0, style={
+                                "backgroundColor": THEME["bg_dark"], "color": THEME["accent"],
+                                "border": f"1px solid {THEME['accent']}", "borderRadius": "4px",
+                                "padding": "3px 12px", "fontSize": "11px", "cursor": "pointer"}),
+                        ],
+                    ),
+                    html.Div("", id="research-status",
+                             style={"color": THEME["text_muted"], "fontSize": "11px", "lineHeight": "1.5", "marginBottom": "6px"}),
+                    html.P("Candidate strategies vs buy-and-hold (latest evaluation)", style=label),
+                    _table("research-candidates-table", [
+                        {"name": "Candidate", "id": "candidate"}, {"name": "Status", "id": "status"},
+                        {"name": "Sharpe", "id": "sharpe"}, {"name": "B&H Sharpe", "id": "bh_sharpe"},
+                        {"name": "Diff", "id": "diff"}, {"name": "Interval", "id": "ci"},
+                        {"name": "Trades", "id": "trades"}, {"name": "Max DD", "id": "max_dd"},
+                        {"name": "Test", "id": "verdict"}, {"name": "Evaluated", "id": "evaluated"}]),
+                    html.P("Forward paper trading (positions recorded by earlier runs, marked to later prices)", style=label),
+                    _table("research-paper-table", [
+                        {"name": "Candidate", "id": "candidate"}, {"name": "Days", "id": "days"},
+                        {"name": "Return %", "id": "return_pct"}, {"name": "Position changes", "id": "trades"}]),
+                    html.P("Recent experiment runs", style=label),
+                    _table("research-runs-table", [
+                        {"name": "#", "id": "id"}, {"name": "When (UTC)", "id": "when"}, {"name": "Run", "id": "name"},
+                        {"name": "Model", "id": "model"}, {"name": "Key result", "id": "result"}, {"name": "Commit", "id": "commit"}]),
                 ],
             ),
         ],

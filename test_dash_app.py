@@ -2157,3 +2157,80 @@ class TestAgentMonitor:
         assert "agent-monitor-tab" in tab_values
         assert {"agent-start-btn", "agent-stop-btn", "agent-table", "agent-llm-summary",
                 "agent-status-label", "agent-interval"} <= ids
+
+
+class TestResearchLoopTab:
+    """Read-only Dash view of the research loop + experiment log."""
+
+    def test_empty_database_gives_a_helpful_message(self, tmp_path):
+        from dash_app.callbacks import _research_loop_view
+        view = _research_loop_view(str(tmp_path / "empty.sqlite3"))
+        assert view["candidates"] == [] and view["paper"] == [] and view["runs"] == []
+        assert "python -m core.research_loop run" in view["message"]
+
+    def test_populated_view_shows_status_evidence_paper_pnl_and_recent_runs(self, tmp_path):
+        from dash_app.callbacks import _research_loop_view
+        from core.experiment_log import ExperimentLog
+        from core.research_loop import ResearchState
+        path = str(tmp_path / "loop.sqlite3")
+        log, st = ExperimentLog(path), ResearchState(path)
+        git = {"commit": "a" * 40, "dirty": False}
+        rid = log.log_run(name="research-loop EMA Crossover", model_type="strategy", git=git, tags=["research-loop"],
+                          params={"candidate": "EMA Crossover"},
+                          metrics={"sharpe": 0.81, "bh_sharpe": 0.43, "sharpe_diff": 0.38, "ci_low": -1.4, "ci_high": 2.12,
+                                   "trades": 130, "max_drawdown": -0.34, "PASS": False})
+        st.apply("EMA Crossover", {"ci": [-1.4, 2.12], "sharpe_diff_halves": [0.1, -0.1], "trades": 130,
+                                   "strategy": {"max_drawdown": -0.34}, "buy_hold": {"max_drawdown": -0.3}},
+                 {"PASS": False}, rid)
+        st.record_paper_positions("d1", "EMA Crossover", {"A": 1}, {"A": 100.0})
+        st.record_paper_positions("d2", "EMA Crossover", {"A": 1}, {"A": 102.0})
+        log.log_run(name="H5 volatility", model_type="lightgbm", git=git, metrics={"auc_gbm": 0.73})
+        view = _research_loop_view(path)
+        c = view["candidates"][0]
+        assert c["candidate"] == "EMA Crossover" and c["status"] == "candidate" and c["verdict"] == "fail"
+        assert c["sharpe"] == "0.81" and c["diff"] == "+0.38" and c["ci"] == "[-1.40, +2.12]" and c["trades"] == 130
+        assert c["max_dd"] == "-34%"
+        assert view["paper"][0]["days"] == 1 and view["paper"][0]["return_pct"].startswith("+1.9")
+        assert [r["name"] for r in view["runs"]][:2] == ["H5 volatility", "research-loop EMA Crossover"]      # newest first
+        assert view["runs"][0]["result"] == "auc_gbm = 0.730" and view["runs"][0]["commit"] == "aaaaaaa"
+        assert "1 candidate(s)" in view["message"] and "None has yet passed" in view["message"]
+
+    def test_a_paper_and_a_retired_candidate_are_counted(self, tmp_path):
+        from dash_app.callbacks import _research_loop_view
+        from core.research_loop import ResearchState
+        path = str(tmp_path / "s.sqlite3")
+        st = ResearchState(path)
+        good = {"ci": [0.1, 0.9], "sharpe_diff_halves": [0.1, 0.1], "trades": 50,
+                "strategy": {"max_drawdown": -0.2}, "buy_hold": {"max_drawdown": -0.2}}
+        st.apply("Winner", good, {"PASS": True}, None)
+        bad = {**good, "ci": [-0.9, -0.2]}
+        st.apply("Loser", good, {"PASS": True}, None)
+        st.apply("Loser", bad, {"PASS": False}, None)
+        view = _research_loop_view(path)
+        states = {c["candidate"]: c["status"] for c in view["candidates"]}
+        assert states == {"Winner": "paper", "Loser": "retired"}
+        assert "1 in paper trading, 1 retired" in view["message"] and "None has yet passed" not in view["message"]
+
+    def test_a_broken_database_path_never_raises(self):
+        from dash_app.callbacks import _research_loop_view
+        view = _research_loop_view("/nonexistent_dir_xyz/cannot/create.sqlite3")
+        assert view["candidates"] == [] and "unavailable" in view["message"] or "No research-loop" in view["message"]
+
+    def test_layout_has_the_tab_and_tables(self):
+        from dash_app.layout import build_layout
+        from dash.development.base_component import Component
+        ids, tabs = set(), set()
+        def walk(c):
+            if isinstance(c, Component):
+                if getattr(c, "id", None):
+                    ids.add(c.id)
+                if type(c).__name__ == "Tab" and getattr(c, "value", None):
+                    tabs.add(c.value)
+                walk(getattr(c, "children", None))
+            elif isinstance(c, (list, tuple)):
+                for x in c:
+                    walk(x)
+        walk(build_layout())
+        assert "research-loop-tab" in tabs
+        assert {"research-refresh-btn", "research-status", "research-candidates-table",
+                "research-paper-table", "research-runs-table"} <= ids

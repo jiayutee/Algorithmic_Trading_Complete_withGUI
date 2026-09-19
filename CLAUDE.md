@@ -28,6 +28,8 @@ core/
   ml_validation.py        # Walk-forward splits + purge gap; walk_forward_predict() = OOS predictions
   trade_rationale.py      # Structured "why" record attached to every order/signal
   experiment_log.py       # SQLite log of training/eval runs (params, metrics, git commit): python -m core.experiment_log list
+  research_loop.py        # Autonomous research loop: evaluate candidates vs buy&hold, promote/retire, forward paper ledger
+  risk_sizing.py          # Volatility-targeting helpers (Phase 6.6; result: did not help)
   news_health.py          # Per-source circuit breaker so one rate-limited news source can't stall a refresh
 brokers/
   simulatedbroker.py      # Paper trading, order history, positions
@@ -72,6 +74,8 @@ scripts/
 - Run tests: `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -v`
 - News fetch budget: `NEWS_FETCH_DEADLINE_SECONDS` (default 6); sources still running when it expires are abandoned and
   skipped for a cool-down after repeated failures
+- Research loop: `python -m core.research_loop run|status` (also visible in the Dash "Research Loop" tab). Promote/retire
+  rules are fixed in the module docstring; retired strategies never revive automatically
 - Experiment log: `python -m core.experiment_log list|show|best|compare` (file: training_ground/results/experiments.sqlite3,
   override with `EXPERIMENT_LOG_PATH`)
 - Train/evaluate the ML model: `~/miniconda3/bin/python3 training_ground/train_gbm.py --symbol BTCUSDT --days 1500 --interval 1d`

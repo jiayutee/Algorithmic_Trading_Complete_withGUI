@@ -270,6 +270,61 @@ def _agent_monitor_state(supervisor, error: Optional[str] = None) -> tuple:
     return status_text, status_style, running, not running, rows, llm_text
 
 
+# ---------------------------------------------------------------------------
+# Research Loop tab (read-only view of core/research_loop.py + the experiment log)
+# ---------------------------------------------------------------------------
+
+def _research_loop_view(path: Optional[str] = None) -> dict:
+    """Rows for the Research Loop tab's three tables plus a status line. Never raises."""
+    empty = {"candidates": [], "paper": [], "runs": [],
+             "message": "No research-loop runs yet. Run  python -m core.research_loop run  in a terminal."}
+    try:
+        from core.experiment_log import ExperimentLog
+        from core.research_loop import ResearchState
+        log, state = ExperimentLog(path), ResearchState(path)
+        states = {r["candidate"]: r for r in state.all_states()}
+        latest = {}
+        for run in log.list_runs(tag="research-loop", limit=500):            # newest first
+            latest.setdefault(run["params"].get("candidate"), run)
+        candidates = []
+        for name in sorted(set(states) | set(latest)):
+            st, run = states.get(name), latest.get(name)
+            m = run["metrics"] if run else {}
+            f = lambda v, fmt="{:.2f}": fmt.format(v) if isinstance(v, (int, float)) else "—"
+            candidates.append({
+                "candidate": name, "status": st["status"] if st else "candidate",
+                "sharpe": f(m.get("sharpe")), "bh_sharpe": f(m.get("bh_sharpe")), "diff": f(m.get("sharpe_diff"), "{:+.2f}"),
+                "ci": f"[{m['ci_low']:+.2f}, {m['ci_high']:+.2f}]" if "ci_low" in m and "ci_high" in m else "—",
+                "trades": int(m["trades"]) if "trades" in m else "—",
+                "max_dd": f(m.get("max_drawdown") * 100 if "max_drawdown" in m else None, "{:.0f}%"),
+                "verdict": ("PASS" if m.get("PASS") else "fail") if m else "—",
+                "evaluated": run["created_at"][:16].replace("T", " ") if run else "—"})
+        paper = [{"candidate": r["candidate"], "days": r["days"], "return_pct": f"{r['return_pct']:+.2f}", "trades": r["trades"]}
+                 for r in state.paper_pnl().to_dict("records")]
+        runs = []
+        for r in log.list_runs(limit=15):
+            flat = {}
+            for k, v in r["metrics"].items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    flat[k] = v
+            key = next((k for k in ("auc", "auc_gbm", "sharpe_diff", "sharpe") if k in flat), next(iter(flat), None))
+            runs.append({"id": r["id"], "when": r["created_at"][:16].replace("T", " "), "name": r["name"][:44],
+                         "model": r["model_type"], "result": f"{key} = {flat[key]:.3f}" if key else "—",
+                         "commit": (r["git_commit"] or "")[:7] + ("*" if r["git_dirty"] else "")})
+        n_paper = sum(1 for c in candidates if c["status"] == "paper")
+        n_ret = sum(1 for c in candidates if c["status"] == "retired")
+        msg = (f"{len(candidates)} candidate(s): {n_paper} in paper trading, {n_ret} retired, "
+               f"{len(candidates) - n_paper - n_ret} still on trial. "
+               + ("" if n_paper else "None has yet passed every promotion test (interval lower bound > 0, both halves positive, "
+                                     ">= 30 trades, drawdown not much worse) -- which is the honest expected outcome for most ideas."))
+        if not candidates and not runs:
+            return empty
+        return {"candidates": candidates, "paper": paper, "runs": runs, "message": msg}
+    except Exception as exc:  # noqa: BLE001 -- a view problem must never break the page
+        logger.warning("[Dash] research loop view failed: %s", exc)
+        return {**empty, "message": f"Research loop data unavailable: {exc}"}
+
+
 def _build_pnl_card(broker) -> tuple:
     """``(total_text, total_style, breakdown_text, balance_text)`` for the P&L card.
 
@@ -2320,6 +2375,20 @@ def register_callbacks(app: dash.Dash) -> None:
             _build_position_size_div(),
             _build_gate_verdict_div(),
         )
+
+    # ------------------------------------------------------------------
+    # Research Loop tab
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("research-candidates-table", "data"),
+        Output("research-paper-table", "data"),
+        Output("research-runs-table", "data"),
+        Output("research-status", "children"),
+        Input("research-refresh-btn", "n_clicks"),
+    )
+    def research_loop_tab(_n_clicks):
+        view = _research_loop_view()
+        return view["candidates"], view["paper"], view["runs"], view["message"]
 
     # ------------------------------------------------------------------
     # Agent Monitor: start/stop the supervisor and refresh the table
