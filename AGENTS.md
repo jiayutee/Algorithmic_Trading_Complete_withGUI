@@ -10,6 +10,8 @@ of things that go wrong when several tools share one folder. If the two ever dis
   The execution service (`core/execution/`) is **paper only** by design; keep it that way.
 - **Never commit secrets.** `.env` and `config/settings.py` hold real keys and are git-ignored. Run `git status` before every commit.
 - **Never push to `main` unless the owner explicitly asks in that message.** Use a branch and a pull request.
+  (One exception exists by design: the overnight Claude routine is configured in `.github/agents/orchestrator.agent.md` to push to `main`
+  after the full test gate passes. Other tools must not copy that. If the owner wants the routine on branches instead, that file is where to change it.)
 - **Never stop, restart or reconfigure the background jobs** (below) without asking, and never `flatten`/`halt` the paper account as a test.
 - **Never claim a trading edge.** Nothing tested so far beats buy-and-hold on risk-adjusted return (Phases 6.5–6.9). Report results as they are.
 
@@ -42,7 +44,7 @@ Running `app.py`, the Dash app or the execution CLI touches the **same** account
   (`scripts/setup_py311_env.sh`). Code must stay Python 3.9-compatible (`from __future__ import annotations` for `X | None` type hints).
 - Run after every code change: `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -q`.
   Desktop GUI tests: `QT_QPA_PLATFORM=offscreen ~/miniconda3/bin/python3 -m pytest test_gui.py -q` (not run in CI).
-- Add tests with the change. Tests must not touch the real paper account, real journal, network keys or live brokers (use `tmp_path` and fakes).
+- Add tests with the change, in `tests/test_<thing>.py` (all tests live in `tests/` except `test_gui.py`, which stays at the root because every command and CI job uses `--ignore=test_gui.py`). Tests must not touch the real paper account, real journal, network keys or live brokers (use `tmp_path` and fakes).
 
 ## Research rules (this repo's house style)
 - **Pre-register before you run.** Write the hypotheses, fixed protocol, multiple-comparison correction and pass/fail rule in `docs/PHASE_*_PREREGISTRATION.md`,
