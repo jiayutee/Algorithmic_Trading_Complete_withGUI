@@ -743,3 +743,20 @@ def test_desktop_equity_curve_tab_uses_the_shared_builder_and_never_raises(qapp,
         assert "No equity data" in win._equity_note.text()
     finally:
         win.destroy()
+
+
+def test_desktop_symbol_box_is_searchable_editable_and_normalises_typed_symbols(qapp):
+    from unittest.mock import MagicMock
+    from core import ui_options
+    from ui.main_window import MainWindow
+    win = MainWindow(data_loader=MagicMock(), strategy_manager=MagicMock(), broker_manager=MagicMock(), missing_deps=[])
+    try:
+        cb = win.symbol_combo
+        assert cb.isEditable() and cb.count() == len(ui_options.SYMBOLS) >= 80
+        assert cb.itemData(cb.findText("AAPL"), 3) == "AAPL — Apple"                    # ToolTipRole
+        assert cb.completer().completionCount() >= 0 and cb.completer().filterMode() is not None
+        cb.lineEdit().setText("  pepeusdt ")
+        cb.lineEdit().editingFinished.emit()
+        assert cb.currentText() == "PEPEUSDT"                                                 # any symbol, upper-cased
+    finally:
+        win.destroy()
