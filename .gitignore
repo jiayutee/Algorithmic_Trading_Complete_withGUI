@@ -37,3 +37,6 @@ trained_models/
 # UI/Charts
 live_price_chart.html
 logs/
+
+# live-trading kill switch flag file (touch to stop all live orders)
+.kill_switch

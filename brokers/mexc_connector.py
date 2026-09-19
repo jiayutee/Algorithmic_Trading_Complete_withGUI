@@ -6,6 +6,8 @@ except ImportError:
     ccxt = None
 
 
+from brokers.execution_guard import guarded_live_order
+
 class MexcConnector:
     """MEXC connector supporting both live (via ccxt) and local paper-trading modes.
 
@@ -220,6 +222,7 @@ class MexcConnector:
     # Live methods (via ccxt)
     # ------------------------------------------------------------------
 
+    @guarded_live_order("MEXC")
     def submit_order(self, symbol, qty, side, order_type="market"):
         """Submit a live order to MEXC via ccxt. Not available in paper_mode."""
         if self.paper_mode:

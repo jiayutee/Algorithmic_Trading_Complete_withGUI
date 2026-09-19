@@ -6,6 +6,8 @@ except ImportError:
     ccxt = None
 
 
+from brokers.execution_guard import guarded_live_order
+
 class KuCoinConnector:
     """KuCoin connector supporting both live (via ccxt) and local paper-trading modes.
 
@@ -224,6 +226,7 @@ class KuCoinConnector:
     # Live methods (via ccxt)
     # ------------------------------------------------------------------
 
+    @guarded_live_order("KuCoin")
     def submit_order(self, symbol, qty, side, order_type="market"):
         """Submit a live order to KuCoin via ccxt. Not available in paper_mode."""
         if self.paper_mode:

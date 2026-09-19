@@ -7,6 +7,8 @@ except ImportError:
     BinanceAPIException = Exception
 
 
+from brokers.execution_guard import guarded_live_order
+
 class BinanceConnector:
     """Binance connector supporting both live/testnet and local paper-trading modes.
 
@@ -165,6 +167,7 @@ class BinanceConnector:
     # Live / testnet methods (unchanged from original)
     # ------------------------------------------------------------------
 
+    @guarded_live_order("Binance")
     def submit_order(self, symbol, qty, side, order_type='MARKET', futures=True):
         if self.paper_mode:
             # Convenience wrapper: delegate to place_order with a dummy price of 0

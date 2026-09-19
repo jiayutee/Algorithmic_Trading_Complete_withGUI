@@ -2,6 +2,8 @@ from ib_insync import IB, MarketOrder, Contract
 from typing import Optional, Union
 
 
+from brokers.execution_guard import guarded_live_order
+
 class IBKRConnector:
     """
     Interactive Brokers Connector for live trading
@@ -40,6 +42,7 @@ class IBKRConnector:
         """Context manager exit"""
         self.disconnect()
 
+    @guarded_live_order("IBKR")
     def submit_order(
             self,
             symbol: str,

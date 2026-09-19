@@ -71,6 +71,15 @@ scripts/
 - Train/evaluate the ML model: `~/miniconda3/bin/python3 training_ground/train_gbm.py --symbol BTCUSDT --days 1500 --interval 1d`
   (prints out-of-sample AUC with a confidence interval; read the VERDICT line before trusting any number)
 
+## Live trading safety (Phase 11.2)
+Every live connector's `submit_order` goes through `brokers/execution_guard.py` (inside the connector,
+so nothing can route around it). **By default all live orders are blocked.** Env vars (read per order):
+- `LIVE_TRADING_ENABLED=true` -- master switch (default off = kill switch ON)
+- `LIVE_DRY_RUN=false` -- default true: orders are logged as "would submit", not sent. Real orders need BOTH settings
+- `touch .kill_switch` -- stops all live trading instantly, no restart (delete the file to release)
+- `MAX_ORDER_NOTIONAL_USD` (100), `MAX_SESSION_NOTIONAL_USD` (500 per broker), `MAX_ORDERS_PER_MINUTE` (6)
+- An order whose value can't be determined (no price) is refused. Simulator and paper-mode connectors are unaffected.
+
 ## Coding Rules
 - **No `.env` in commits** — always check `git status` before committing
 - Run `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -q` after every code change

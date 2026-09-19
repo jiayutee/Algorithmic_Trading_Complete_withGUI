@@ -29,6 +29,7 @@ except ImportError:
     _MEXC_AVAILABLE = False
 
 from brokers.simulatedbroker import SimulatedBroker
+from brokers.execution_guard import get_guard
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,9 @@ class BrokerManager:
         except Exception as e:
             logger.warning("Failed to connect to MEXC: %s", e)
             self.brokers["MEXC"] = None
+
+        # Make the live-order safety state obvious in the log on every start.
+        logger.warning("Live order guard: %s", get_guard().describe())
 
     def get_broker(self, name):
         broker = self.brokers.get(name)
