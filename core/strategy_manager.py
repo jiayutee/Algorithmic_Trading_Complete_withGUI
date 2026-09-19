@@ -1,6 +1,7 @@
 from core.logger import logger
 from strategies.simple_strategies import MACD_RSI_Strategy, EMACrossoverStrategy, StochasticStrategy
 from strategies.ml_strategies import LSTMPredictor
+from strategies.gbm_strategy import GBMStrategy
 try:
     from strategies.FinRL_strategy import FinRLStrategy
 except ImportError:
@@ -38,6 +39,7 @@ class StrategyManager:
             "EMA Crossover": EMACrossoverStrategy,
             "Stochastic": StochasticStrategy,
             "LSTM Predictor": LSTMPredictor,
+            "GBM (LightGBM)": GBMStrategy,
         }
 
         if TD3Strategy is not None:

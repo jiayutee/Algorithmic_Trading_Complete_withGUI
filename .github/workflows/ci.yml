@@ -35,7 +35,7 @@ jobs:
           python -m pip install --upgrade pip
           # Core packages needed by all non-GUI tests
           pip install \
-            yfinance pandas numpy scikit-learn \
+            yfinance pandas numpy scikit-learn lightgbm \
             ta backtrader \
             requests python-dotenv \
             newsapi-python beautifulsoup4 \

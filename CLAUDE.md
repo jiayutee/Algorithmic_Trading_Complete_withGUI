@@ -24,6 +24,9 @@ core/
   news_sources.py         # OpenBBNewsSource, RSSSource, GDELTSource
   backtester.py           # backtrader engine, pyfolio reports
   broker_manager.py       # Broker routing/switching
+  feature_engineering.py  # ML feature matrix (technicals/news/macro/time), no-lookahead by construction
+  ml_validation.py        # Walk-forward splits + purge gap; walk_forward_predict() = OOS predictions
+  trade_rationale.py      # Structured "why" record attached to every order/signal
 brokers/
   simulatedbroker.py      # Paper trading, order history, positions
   binance_connector.py    # Live Binance (paper flag)
@@ -32,7 +35,8 @@ brokers/
   ib_connector.py         # Interactive Brokers (Phase 4.1, not yet wired into broker_manager)
 strategies/
   simple_strategies.py    # MACD/RSI, EMA crossover, Stochastic
-  ml_strategies.py
+  ml_strategies.py        # LSTM stub (TensorFlow not installed; Phase 6.3 decision pending)
+  gbm_strategy.py         # LightGBM direction model, retrained walk-forward (Phase 6.2)
   FinRL_strategy.py
   TD3_strategy.py
   ddpg_strategy.py
@@ -64,6 +68,8 @@ scripts/
 - Claude CLI: `/Users/jiayutee/.local/bin/claude`
 - `.env` is gitignored — contains all secrets (never commit)
 - Run tests: `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -v`
+- Train/evaluate the ML model: `~/miniconda3/bin/python3 training_ground/train_gbm.py --symbol BTCUSDT --days 1500 --interval 1d`
+  (prints out-of-sample AUC with a confidence interval; read the VERDICT line before trusting any number)
 
 ## Coding Rules
 - **No `.env` in commits** — always check `git status` before committing

@@ -113,7 +113,7 @@ _TAB_SELECTED_STYLE = {
 
 _SYMBOLS    = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AAPL", "TSLA", "SPY", "QQQ"]
 _INTERVALS  = ["1d", "1h", "15m", "5m", "1m"]
-_STRATEGIES = ["None", "MACD/RSI", "EMA Crossover", "Stochastic"]
+_STRATEGIES = ["None", "MACD/RSI", "EMA Crossover", "Stochastic", "GBM (LightGBM)"]
 
 
 def _muted(text: str) -> html.Span:

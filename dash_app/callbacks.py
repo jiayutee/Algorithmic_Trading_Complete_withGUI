@@ -1305,6 +1305,7 @@ def register_callbacks(app: dash.Dash) -> None:
         "MACD/RSI":      ("strategies.simple_strategies", "MACD_RSI_Strategy"),
         "EMA Crossover": ("strategies.simple_strategies", "EMACrossoverStrategy"),
         "Stochastic":    ("strategies.simple_strategies", "StochasticStrategy"),
+        "GBM (LightGBM)": ("strategies.gbm_strategy", "GBMStrategy"),
     }
 
     @app.callback(
