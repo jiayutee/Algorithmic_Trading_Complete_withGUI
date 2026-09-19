@@ -204,14 +204,20 @@ def walk_forward_predict_panel(
     train_dates: int,
     retrain_every: int,
     horizon: int = 1,
+    task: str = "classify",
 ) -> pd.Series:
     """Walk-forward for pooled multi-symbol data: ``X``/``y`` are indexed by (symbol, timestamp).
+
+    ``task="classify"`` returns P(up) via ``predict_proba``; ``task="regress"`` returns
+    ``predict`` values for a continuous target (e.g. next-day log volatility).
 
     Splits are made on the sorted *dates*, not on rows, so every symbol's rows for a given
     date land on the same side of any boundary. Requires all symbols to share one bar
     calendar (true for 24/7 crypto), so "label horizon in bars" = "horizon in dates".
     Returns P(up) per (symbol, timestamp), NaN where no model had been trained yet.
     """
+    if task not in ("classify", "regress"):
+        raise ValueError("task must be 'classify' or 'regress'")
     if not isinstance(X.index, pd.MultiIndex) or X.index.nlevels != 2:
         raise ValueError("X must be indexed by (symbol, timestamp)")
     dates = X.index.get_level_values(1)
@@ -232,8 +238,11 @@ def walk_forward_predict_panel(
         if len(tr_rows) < min_rows or len(np.unique(yv[tr_rows])) < 2 or not len(va_rows):
             continue
         model = model_factory().fit(Xv.iloc[tr_rows], yv[tr_rows])
-        up = list(model.classes_).index(1.0)
-        out.iloc[va_rows] = model.predict_proba(Xv.iloc[va_rows])[:, up]
+        if task == "regress":
+            out.iloc[va_rows] = model.predict(Xv.iloc[va_rows])
+        else:
+            up = list(model.classes_).index(1.0)
+            out.iloc[va_rows] = model.predict_proba(Xv.iloc[va_rows])[:, up]
     return out
 
 
@@ -302,3 +311,26 @@ def paired_block_bootstrap_auc_diff(y, p_a, p_b, dates, *, block: int = 10, n_bo
             diffs.append(da - db)
     a = (1 - level) / 2
     return float(np.quantile(diffs, a)), float(np.quantile(diffs, 1 - a))
+
+
+def paired_block_bootstrap_stat_diff(a, b, dates, stat, *, block: int = 10, n_boot: int = 2000,
+                                     level: float = 0.95, seed: int = 0) -> tuple:
+    """CI for ``stat(a) - stat(b)`` on aligned daily series, resampling dates in blocks (paired).
+
+    ``stat`` maps an array to a number (e.g. a Sharpe ratio). Both series are resampled with the
+    same dates, so common market moves cancel and only the *difference* between strategies is tested.
+    """
+    a, b, dates = np.asarray(a, float), np.asarray(b, float), np.asarray(dates)
+    keep = ~(np.isnan(a) | np.isnan(b))
+    a, b, dates = a[keep], b[keep], dates[keep]
+    order = np.argsort(dates)
+    a, b = a[order], b[order]
+    rng = np.random.default_rng(seed)
+    diffs = []
+    for _ in range(n_boot):
+        pick = _block_resample_dates(len(a), block, rng)
+        d = stat(a[pick]) - stat(b[pick])
+        if not np.isnan(d):
+            diffs.append(d)
+    q = (1 - level) / 2
+    return float(np.quantile(diffs, q)), float(np.quantile(diffs, 1 - q))
