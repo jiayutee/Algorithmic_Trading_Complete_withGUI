@@ -38,6 +38,14 @@ def ib_env(monkeypatch):
     mod.IB = mock.MagicMock(return_value=fake_ib)
     mod.MarketOrder = lambda action, qty: NS(action=action, totalQuantity=qty)
     mod.Contract = lambda **kw: NS(**kw)
+    # Phase 4.2: fake constructors for options chain tests
+    mod.Stock = lambda symbol, exchange="SMART", currency="USD": NS(
+        symbol=symbol, exchange=exchange, currency=currency, secType="STK", conId=0
+    )
+    mod.Option = lambda symbol, expiry="", strike=0.0, right="", exchange="SMART", currency="USD": NS(
+        symbol=symbol, lastTradeDateOrContractMonth=expiry, strike=float(strike),
+        right=right, exchange=exchange, secType="OPT", currency=currency, conId=0
+    )
     monkeypatch.setitem(sys.modules, "ib_insync", mod)
     import brokers.ib_connector as ibc
     import core.broker_manager as bm

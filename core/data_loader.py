@@ -859,6 +859,69 @@ class DataLoader:
             logger.warning("get_earnings_calendar(%s) FMP fetch failed, will try yfinance: %s", symbol, e)
             return []
 
+    # ------------------------------------------------------------------
+    # Phase 4.2: Options chain + Greeks retrieval via IBKR (read-only)
+    # ------------------------------------------------------------------
+
+    def get_options_chain(
+        self,
+        symbol: str,
+        expiry=None,
+        strikes_near_spot: int = 10,
+        broker_manager=None,
+    ) -> "pd.DataFrame":
+        """Fetch an options chain for *symbol* from IBKR (read-only market data).
+
+        Requires an IBKR connector to be connected via *broker_manager*.  When
+        IBKR is unavailable the method returns an empty DataFrame with the correct
+        column schema (zero rows) and logs the reason — it never raises into the UI
+        and never fabricates data.
+
+        Parameters
+        ----------
+        symbol : str
+            Underlying ticker (equity / ETF), e.g. ``"AAPL"``.
+        expiry : str, datetime.date, or None
+            Target expiry (YYYYMMDD or YYYY-MM-DD).  Defaults to the nearest
+            listed expiry when ``None``.
+        strikes_near_spot : int
+            Number of strikes above and below spot to include.  Default 10.
+        broker_manager : BrokerManager or None
+            Configured BrokerManager instance.  Must have an active IBKR broker
+            (``broker_manager.brokers['IBKR'] is not None``) for data to be
+            returned.
+
+        Returns
+        -------
+        pd.DataFrame
+            See ``core.options_chain.get_options_chain`` for the full column
+            schema.  Returns an empty DataFrame (zero rows, correct columns) when
+            IBKR is unavailable.
+        """
+        from core.options_chain import CHAIN_COLUMNS, get_options_chain as _fetch
+
+        def _empty(reason: str) -> pd.DataFrame:
+            logger.warning("DataLoader.get_options_chain: %s", reason)
+            return pd.DataFrame(columns=CHAIN_COLUMNS)
+
+        if broker_manager is None:
+            return _empty("no broker_manager supplied")
+
+        ibkr_connector = broker_manager.brokers.get("IBKR")
+        if ibkr_connector is None:
+            return _empty("IBKR connector not configured (set IBKR_ENABLED=1)")
+
+        ib = getattr(ibkr_connector, "ib", None)
+        if ib is None:
+            return _empty("IBKRConnector has no .ib attribute")
+
+        return _fetch(
+            ib,
+            symbol=symbol,
+            expiry=expiry,
+            strikes_near_spot=strikes_near_spot,
+        )
+
     def _get_earnings_calendar_yfinance(self, symbol: str) -> list:
         """Fallback path: yfinance's Ticker.earnings_dates. No revenue figures
         available from this source (see get_earnings_calendar()'s docstring)."""
