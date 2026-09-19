@@ -19,7 +19,9 @@ import datetime
 import dash_bootstrap_components as dbc
 from dash import dcc, html, dash_table
 
+from core import ui_options
 from core.chart_builder import THEME, build_candlestick_figure
+from core.strategy_manager import backtrader_strategies
 
 # ---------------------------------------------------------------------------
 # Inline CSS that matches the PyQt5 stylesheet hex palette
@@ -111,9 +113,9 @@ _TAB_SELECTED_STYLE = {
 # Component helpers
 # ---------------------------------------------------------------------------
 
-_SYMBOLS    = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AAPL", "TSLA", "SPY", "QQQ"]
-_INTERVALS  = ["1d", "1h", "15m", "5m", "1m"]
-_STRATEGIES = ["None", "MACD/RSI", "EMA Crossover", "Stochastic", "GBM (LightGBM)", "Trend Filter (28d)"]
+_SYMBOLS    = ui_options.SYMBOLS
+_INTERVALS  = ui_options.INTERVALS
+_STRATEGIES = ["None"] + list(backtrader_strategies())   # same registry the desktop app uses
 
 
 def _muted(text: str) -> html.Span:
@@ -131,7 +133,7 @@ def _topbar() -> html.Div:
             dcc.Dropdown(
                 id="symbol-dropdown",
                 options=[{"label": s, "value": s} for s in _SYMBOLS],
-                value="AAPL",
+                value=ui_options.DEFAULT_SYMBOL_DASH,
                 clearable=False,
                 style=_DROPDOWN_STYLE,
             ),
@@ -145,6 +147,19 @@ def _topbar() -> html.Div:
                 style={**_DROPDOWN_STYLE, "minWidth": "70px"},
             ),
 
+            _muted("Days"),
+            dcc.Input(
+                id="days-input",
+                type="number",
+                value=ui_options.DEFAULT_DAYS,
+                min=1,
+                max=10000,
+                step=1,
+                debounce=True,
+                style={**_DROPDOWN_STYLE, "width": "62px", "padding": "4px 6px", "border": f"1px solid {THEME['border']}",
+                       "borderRadius": "4px", "backgroundColor": THEME["bg_dark"], "color": THEME["text_main"]},
+            ),
+
             _muted("Strategy"),
             dcc.Dropdown(
                 id="strategy-dropdown",
@@ -154,12 +169,10 @@ def _topbar() -> html.Div:
                 style={**_DROPDOWN_STYLE, "minWidth": "130px"},
             ),
             html.Div(
-                title=("Only hold positions while the trailing 28-bar return is positive, else cash. "
-                       "Evidence (Phases 6.7-6.9): cut the worst drawdown in 3 tests; did NOT show higher return. "
-                       "Also stops the strategy from shorting. Daily bars, crypto only."),
+                title=ui_options.TREND_OVERLAY_TIP,
                 children=dcc.Checklist(
                     id="trend-overlay-check",
-                    options=[{"label": " Trend overlay", "value": "on"}],
+                    options=[{"label": " " + ui_options.TREND_OVERLAY_LABEL, "value": "on"}],
                     value=[],
                     inline=True,
                     style={"color": THEME["text_muted"], "fontSize": "12px", "whiteSpace": "nowrap"},
@@ -395,7 +408,7 @@ def _metrics_panel() -> dbc.Col:
                                 id="bt-cash-input",
                                 type="number",
                                 placeholder="Initial Cash",
-                                value=100000,
+                                value=ui_options.DEFAULT_CASH,
                                 min=1,
                                 step=1000,
                                 debounce=False,
@@ -428,6 +441,24 @@ def _metrics_panel() -> dbc.Col:
                                     "whiteSpace": "nowrap",
                                 },
                             ),
+                    # -- Fees (same fields and defaults as the desktop app's Parameters box) --
+                    html.Div(
+                        style={"display": "flex", "gap": "4px", "marginBottom": "6px", "alignItems": "center"},
+                        children=[
+                            _muted("Mkt fee %"),
+                            dcc.Input(id="bt-mkt-fee-input", type="number", value=ui_options.DEFAULT_MARKET_FEE_PCT,
+                                      min=0, max=10, step=0.01, debounce=True,
+                                      style={"backgroundColor": THEME["bg_dark"], "color": THEME["text_main"], "border": f"1px solid {THEME['border']}",
+                                       "borderRadius": "4px", "fontSize": "11px", "flex": "1", "minWidth": "0",
+                                       "padding": "4px 5px", "outline": "none", "boxSizing": "border-box"}),
+                            _muted("Lim fee %"),
+                            dcc.Input(id="bt-lim-fee-input", type="number", value=ui_options.DEFAULT_LIMIT_FEE_PCT,
+                                      min=0, max=10, step=0.01, debounce=True,
+                                      style={"backgroundColor": THEME["bg_dark"], "color": THEME["text_main"], "border": f"1px solid {THEME['border']}",
+                                       "borderRadius": "4px", "fontSize": "11px", "flex": "1", "minWidth": "0",
+                                       "padding": "4px 5px", "outline": "none", "boxSizing": "border-box"}),
+                        ],
+                    ),
                         ],
                     ),
                     # -- Metric rows (populated by run_backtest_callback) --------
