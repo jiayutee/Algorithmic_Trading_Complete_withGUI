@@ -19,5 +19,7 @@ GitHub: [PR #8](https://github.com/jiayutee/Algorithmic_Trading_Complete_withGUI
 - Live: `python scripts/smoke_news.py --symbols BTCUSDT AAPL --env-file /path/to/project/.env --output docs/artifacts/news-source-smoke-2026-09-19.json` — exit 0, both probes degraded, approximately 12 seconds total fetch time.
 - Python: local Miniconda base 3.9. Full tests require OpenBB access to its user log directory; the sandbox-only attempt failed on that permission and was rerun with approval.
 
+GitHub reported no automated checks on this branch at publication; the test results above are local. Documentation copies were placed in the current project folder for discovery before merge; source code remains on the PR branch. If Git blocks checkout because those files are untracked, preserve or compare them against the PR before removing the duplicates.
+
 ## Next action
 Follow item 1 in CONTINUATION_PLAN.md: typed provider failures and replayable fixtures. Do not infer provider causes from empty output. No paid feed was purchased, no news edge was proved, and no live trading was enabled. Historical plan items are not all completed.
