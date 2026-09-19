@@ -153,3 +153,21 @@ def test_ui_does_not_hardcode_rule_based_sentiment():
     of what was installed or configured."""
     source = Path(__file__).parent.joinpath("ui", "main_window.py").read_text()
     assert "force_rule_based=True" not in source
+
+
+def test_rule_based_scores_are_a_distribution_and_confidence_grows_with_evidence():
+    from core.sentiment import SentimentAnalyzer
+    a = SentimentAnalyzer(force_rule_based=True)
+    pos = sorted(a.POSITIVE_WORDS)[:3]
+    neg = sorted(a.NEGATIVE_WORDS)[:1]
+    cases = {"none": "the market was open today", "one": f"{pos[0]} noted", "three": " ".join(pos),
+             "tie": f"{pos[0]} but {neg[0]}"}
+    r = {k: a._analyze_rule_based(t) for k, t in cases.items()}
+    for x in r.values():
+        assert x.positive + x.negative + x.neutral == pytest.approx(1.0)        # a real distribution (was up to 1.5)
+        assert 0.0 <= x.confidence <= 1.0
+    assert r["one"].label == r["three"].label == "positive"
+    assert r["one"].confidence < r["three"].confidence < 1.0                    # more agreeing keywords, more confidence
+    assert r["one"].confidence < 0.5                                            # a single keyword was reported as 100%
+    assert r["tie"].label == "neutral"
+    assert r["none"].label == "neutral"

@@ -86,6 +86,14 @@ scripts/
   `logs/collectors.log`. Plist sources: `scripts/launchd/`; installed copies in `~/Library/LaunchAgents/`.
   Check: `launchctl list | grep collect`, `python -m core.news_collector status`, `python -m core.kalshi_collector status`.
   Stop: `launchctl bootout gui/$(id -u)/com.algotrader.collect-news` (same for `-kalshi`).
+- Paper account (Simulator broker): durable SQLite file `training_ground/paper/paper_account.sqlite3` (override `PAPER_ACCOUNT_PATH`),
+  shared by the desktop app and Dash, so it survives restarts. Real prices only: the old random-walk generator is opt-in
+  (`SimulatedBroker(simulate_prices=True)`), a market order with no/stale price is REJECTED with a reason (not filled at $100),
+  pending limit/stop orders re-check on every price update, and every open holding (not just the charted symbol) is marked
+  to a real price (`core/paper_marking.py`). Reset: `SimulatedBroker(persist_path=...).reset(100000)`.
+  Tests and agents that build `BrokerManager()`/`SimulatedBroker()` with no path keep the plain in-memory simulator.
+- Alpha/beta: one formula (`Backtester._alpha_beta_core`, sample stats, annualization 252, risk-free 0 -- both attributes on
+  `Backtester`); unavailable = `None` shown as "n/a" with a reason, never 0.
 - Research loop: `python -m core.research_loop run|status` (also visible in the Dash "Research Loop" tab). Promote/retire
   rules are fixed in the module docstring; retired strategies never revive automatically
 - Experiment log: `python -m core.experiment_log list|show|best|compare` (file: training_ground/results/experiments.sqlite3,
