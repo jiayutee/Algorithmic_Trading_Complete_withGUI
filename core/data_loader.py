@@ -353,6 +353,13 @@ class DataLoader:
 
         # If download returned no rows, return an empty OHLCV-shaped DataFrame
         if df.empty:
+            # The yfinance library path is the one that gets rate-limited (HTTP 429) and takes every stock/ETF/index/FX chart
+            # down with it; Yahoo's plain chart endpoint usually still answers. Try it before giving up.
+            from core.yahoo_chart import fetch_chart
+            fallback = fetch_chart(symbol, capped_days, interval)
+            if not fallback.empty:
+                logger.info(f"Yahoo library path was empty for {symbol}; loaded {len(fallback)} bars from the direct chart endpoint")
+                return fallback
             empty = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume'])
             empty.index.name = 'Datetime'
             logger.info(f"Yahoo Finance returned empty DataFrame for {symbol}")
