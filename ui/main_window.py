@@ -345,12 +345,12 @@ class MainWindow(QMainWindow):
                 # Fallback to known strategies if manager is unavailable
                 strategy_items += [
                     "MACD/RSI", "EMA Crossover", "Stochastic",
-                    "LSTM Predictor", "TD3 Strategy"
+                    "GBM (LightGBM)", "TD3 Strategy"
                 ]
         else:
             strategy_items += [
                 "MACD/RSI", "EMA Crossover", "Stochastic",
-                "LSTM Predictor", "TD3 Strategy"
+                "GBM (LightGBM)", "TD3 Strategy"
             ]
         self.strategy_combo.addItems(strategy_items)
         self.strategy_combo.setFixedWidth(130)

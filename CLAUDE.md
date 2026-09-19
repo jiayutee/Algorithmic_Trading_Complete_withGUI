@@ -35,7 +35,7 @@ brokers/
   ib_connector.py         # Interactive Brokers (Phase 4.1, not yet wired into broker_manager)
 strategies/
   simple_strategies.py    # MACD/RSI, EMA crossover, Stochastic
-  ml_strategies.py        # LSTM stub (TensorFlow not installed; Phase 6.3 decision pending)
+  ml_strategies.py        # DEPRECATED LSTM (hidden from UI; see docstring for why) -- use gbm_strategy.py
   gbm_strategy.py         # LightGBM direction model, retrained walk-forward (Phase 6.2)
   FinRL_strategy.py
   TD3_strategy.py

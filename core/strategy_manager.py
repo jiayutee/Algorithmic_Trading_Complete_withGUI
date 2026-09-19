@@ -38,9 +38,11 @@ class StrategyManager:
             "MACD/RSI": MACD_RSI_Strategy,
             "EMA Crossover": EMACrossoverStrategy,
             "Stochastic": StochasticStrategy,
-            "LSTM Predictor": LSTMPredictor,
             "GBM (LightGBM)": GBMStrategy,
         }
+        # Deprecated (Phase 6.3 decision, 2026-09-19): not offered in the UI, but still
+        # resolvable by name so old scripts/configs keep working. See strategies/ml_strategies.py.
+        self.deprecated_strategies = {"LSTM Predictor": LSTMPredictor}
 
         if TD3Strategy is not None:
             self.strategies["TD3 Strategy"] = TD3Strategy
@@ -51,7 +53,7 @@ class StrategyManager:
         self.backtester = Backtester()
 
     def get_available_strategies(self):
-        """Return list of available strategy names"""
+        """Return list of available strategy names (deprecated strategies are excluded)"""
         return list(self.strategies.keys())
 
     def get_strategy(self, name, **kwargs):
@@ -66,6 +68,9 @@ class StrategyManager:
             StrategyWrapper: A wrapper containing the strategy object and type info.
         """
         strategy_class = self.strategies.get(name)
+        if not strategy_class and name in self.deprecated_strategies:
+            logger.warning("Strategy %r is deprecated and hidden from the UI; use 'GBM (LightGBM)'.", name)
+            strategy_class = self.deprecated_strategies[name]
         if not strategy_class:
             logger.error(f"Strategy {name} not found.")
             return None

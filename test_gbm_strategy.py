@@ -169,3 +169,25 @@ def test_bootstrap_ci_brackets_the_point_estimate_and_is_wide_for_noise():
     assert lo < roc_auc_score(y, good) < hi and lo > 0.6
     lo2, hi2 = bootstrap_auc_ci(y, rng.uniform(0, 1, 400))
     assert lo2 < 0.5 < hi2
+
+
+# ------------------------------------------------ LSTM deprecation (Phase 6.3 decision)
+
+def test_lstm_is_hidden_from_the_ui_but_still_resolvable_with_a_warning():
+    from core.strategy_manager import StrategyManager
+    sm = StrategyManager()
+    assert "LSTM Predictor" not in sm.get_available_strategies()
+    wrapper = sm.get_strategy("LSTM Predictor")
+    assert wrapper is not None and wrapper.is_backtrader        # old configs keep working
+
+
+def test_instantiating_the_lstm_emits_a_deprecation_warning():
+    import warnings
+    from strategies.ml_strategies import LSTMPredictor
+    cerebro = bt.Cerebro()
+    cerebro.adddata(bt.feeds.PandasData(dataname=_random_walk(80)))
+    cerebro.addstrategy(LSTMPredictor, ticker="NO_MODEL_XYZ")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cerebro.run()
+    assert any(issubclass(w.category, DeprecationWarning) and "GBMStrategy" in str(w.message) for w in caught)
