@@ -90,7 +90,9 @@ class ExecutionService:
         self.gate = risk_gate or RiskGate(config.risk)
         self._clock = clock
         self.interval_s = interval_seconds(config.interval)
-        self.lease_ttl = config.lease_ttl_s or max(3 * config.poll_seconds, 60.0)
+        # short lease, renewed every ttl/3 even between ticks: after a hard crash another runner takes over within minutes,
+        # not after a whole poll interval
+        self.lease_ttl = config.lease_ttl_s or min(max(3 * config.poll_seconds, 60.0), 180.0)
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._errors = 0
@@ -167,7 +169,19 @@ class ExecutionService:
                 logger.error("execution tick failed (%d in a row): %s", self._errors, exc)
                 self._publish_status(running=True)
                 wait = min(300.0, self.cfg.poll_seconds * (2 ** min(self._errors, 5)))
-            self._stop.wait(wait)
+            self._wait_renewing_lease(wait)
+
+    def _wait_renewing_lease(self, seconds: float) -> None:
+        remaining = seconds
+        while remaining > 0 and not self._stop.is_set():
+            chunk = min(remaining, self.lease_ttl / 3.0)
+            if self._stop.wait(chunk):
+                return
+            remaining -= chunk
+            if not self.journal.acquire_lease(self.lease_ttl, self._clock()):
+                logger.error("execution: lost the lease to another runner; stopping this one")
+                self._stop.set()
+                return
 
     # ------------------------------------------------------------------ one pass
     def tick(self) -> dict:
@@ -399,6 +413,7 @@ def _cli(argv=None) -> int:
     r.add_argument("--allocation", type=float, default=0.20)
     r.add_argument("--trend-overlay", action="store_true")
     r.add_argument("--allow-short", action="store_true")
+    r.add_argument("--wait", action="store_true", help="if another runner holds the lease, keep retrying instead of exiting (for launchd)")
     for name in ("status", "resume", "flatten"):
         sub.add_parser(name)
     h = sub.add_parser("halt"); h.add_argument("reason", nargs="?", default="manual halt")
@@ -418,7 +433,18 @@ def _cli(argv=None) -> int:
         print("halted" if args.cmd == "halt" else "resumed")
         return 0
     from core.data_loader import DataLoader
-    from core.strategy_manager import backtrader_strategies
+    import backtrader as bt
+    from core.strategy_manager import StrategyManager
+
+    def backtrader_strategies() -> dict:
+        out = {}
+        for name, cls in StrategyManager().strategies.items():
+            try:
+                if issubclass(cls, bt.Strategy):
+                    out[name] = cls
+            except TypeError:
+                pass
+        return out
     broker = SimulatedBroker(persist_path=default_account_path(), strict_prices=True, max_price_age_s=300.0)
     if args.cmd == "flatten":
         svc = ExecutionService(broker, DataLoader(), BacktraderReplaySignal(list(backtrader_strategies().values())[0]),
@@ -432,10 +458,15 @@ def _cli(argv=None) -> int:
                           allocation_pct=args.allocation, allow_short=args.allow_short)
     svc = ExecutionService(broker, DataLoader(), BacktraderReplaySignal(strategies[args.strategy], name=args.strategy,
                                                                           trend_overlay=args.trend_overlay), cfg, journal)
-    if not svc.start():
-        raise SystemExit("another runner holds the lease (desktop app, Dash or another CLI is already trading this account)")
-    print(f"paper execution running: {cfg.symbols} {cfg.interval} {svc.signal.name}; Ctrl+C to stop")
+    import signal as _signal
+    _signal.signal(_signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))    # launchd stop -> clean shutdown, lease released
     try:
+        while not svc.start():
+            if not args.wait:
+                raise SystemExit("another runner holds the lease (desktop app, Dash or another CLI is already trading this account)")
+            print("another runner holds the lease; waiting...", flush=True)
+            time.sleep(max(15.0, args.poll))
+        print(f"paper execution running: {cfg.symbols} {cfg.interval} {svc.signal.name}; Ctrl+C to stop", flush=True)
         while svc.running:
             time.sleep(1)
     except KeyboardInterrupt:

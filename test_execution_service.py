@@ -418,3 +418,23 @@ def test_loop_survives_an_exception_and_backs_off(tmp_path):
     svc.tick = flaky
     svc.start(); time.sleep(0.6); svc.stop()
     assert calls["n"] >= 2 and "boom" in journal.get("status")["last_error"]
+
+
+def test_lease_is_renewed_between_ticks_and_a_lost_lease_stops_the_loop(tmp_path):
+    svc, broker, loader, clock, journal = make(tmp_path, poll_seconds=0.05, lease_ttl_s=0.3)
+    assert svc.lease_ttl == 0.3
+    svc.journal.acquire_lease(0.3, time.time())
+    t0 = journal.get("lease")["renewed"]
+    svc._clock = time.time
+    svc._wait_renewing_lease(0.35)                                      # long enough for at least one renewal (every ttl/3)
+    assert journal.get("lease")["renewed"] > t0
+    intruder = ExecutionJournal(journal.path)                           # another runner steals the lease after it lapses
+    time.sleep(0.35)
+    assert intruder.acquire_lease(60, time.time())
+    svc._wait_renewing_lease(0.5)
+    assert svc._stop.is_set()                                           # this runner noticed and stood down
+
+
+def test_default_lease_ttl_is_capped_so_a_crashed_runner_is_replaced_within_minutes(tmp_path):
+    svc, *_ = make(tmp_path, poll_seconds=300)
+    assert svc.lease_ttl == 180.0
