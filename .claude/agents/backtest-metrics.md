@@ -38,4 +38,4 @@ Key invariants:
 - results['sharpe'] == results['summary']['Sharpe Ratio'] (within 5e-5)
 - results['win_rate'] in [0, 100]
 - results['max_drawdown'] >= 0
-- Run `~/miniconda3/bin/python3 -m pytest test_backtester.py -q` to verify
+- Run `~/miniconda3/bin/python3 -m pytest tests/test_backtester.py -q` to verify

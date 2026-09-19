@@ -36,5 +36,5 @@ Out of scope:
 Key rules:
 - OpenBB is tried first for equities; Binance for crypto; Yahoo Finance is the fallback
 - The backup code (commented Yahoo Finance calls) must be preserved — do not delete
-- Run `~/miniconda3/bin/python3 -m pytest test_data_loading.py -q` to verify
+- Run `~/miniconda3/bin/python3 -m pytest tests/test_data_loading.py -q` to verify
 - openbb tests use pytest.importorskip — skip gracefully if not installed

@@ -41,7 +41,7 @@ def test_runtime_modules_have_no_bare_pep604_unions():
     import ast
     from pathlib import Path
 
-    runtime_dir = Path(__file__).parent / "core" / "runtime"
+    runtime_dir = Path(__file__).resolve().parents[1] / "core" / "runtime"
     for path in runtime_dir.glob("*.py"):
         source = path.read_text()
         tree = ast.parse(source, filename=str(path))

@@ -37,4 +37,4 @@ Key rules:
 - SimulatedBroker must never let balance go negative
 - order_history stores all orders regardless of status
 - filled_avg_price is None for pending/rejected orders
-- Run `~/miniconda3/bin/python3 -m pytest test_brokers.py -q` to verify
+- Run `~/miniconda3/bin/python3 -m pytest tests/test_brokers.py -q` to verify

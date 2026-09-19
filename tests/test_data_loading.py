@@ -1905,7 +1905,7 @@ def test_dash_chart_backtest_and_research_lab_skip_news():
     """Guard: the three Dash callers that only need candles must not pay for the news scrape."""
     import re
     from pathlib import Path
-    src = Path(__file__).parent.joinpath("dash_app", "callbacks.py").read_text()
+    src = Path(__file__).resolve().parents[1].joinpath("dash_app", "callbacks.py").read_text()
     calls = re.findall(r"df = loader\.load_data\((.*?)\n\s*\)", src, flags=re.S)
     assert len(calls) == 3
     assert all("include_news=False" in c for c in calls)
