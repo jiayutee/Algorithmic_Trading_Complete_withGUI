@@ -58,6 +58,9 @@ register_callbacks(app)
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Durable paper account shared with the desktop app (brokers/paper_store.py); real prices only.
+    from brokers.paper_store import default_account_path
+    os.environ.setdefault("PAPER_ACCOUNT_PATH", default_account_path())
     host = os.getenv("ALGOTRADER_HOST", "127.0.0.1")
     port = int(os.getenv("ALGOTRADER_PORT", "8050"))
     debug = os.getenv("ALGOTRADER_DEBUG", "false").lower() == "true"

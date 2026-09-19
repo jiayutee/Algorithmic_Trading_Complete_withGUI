@@ -102,6 +102,9 @@ class Backtester:
     Manages backtesting execution using Backtrader.
     """
     _benchmark_cache = {} # Class-level cache for benchmark data
+    ALPHA_BETA_ANNUALIZATION = 252      # periods per year used to annualize alpha (daily bars)
+    ALPHA_BETA_RISK_FREE = 0.0          # annual risk-free rate subtracted in Jensen's alpha (was a hardcoded 1%)
+    _alpha_beta_status = "not computed"
 
     def __init__(self):
         self.cerebro = bt.Cerebro()
@@ -222,6 +225,7 @@ class Backtester:
 
         # Calculate Alpha/Beta using cached benchmark
         alpha, beta = self._calculate_alpha_beta(returns, benchmark_ticker)
+        alpha_beta_status = self._alpha_beta_status
 
         # Trade Analysis
         trade_analysis = strategy.analyzers.trade_analyzer.get_analysis()
@@ -259,8 +263,8 @@ class Backtester:
             "Sharpe Ratio": round(sharpe, 4),
             "Max Drawdown (%)": round(max_drawdown_pct, 2),
             "Win Rate": f"{win_rate:.2f}%",
-            "Alpha": round(alpha, 4),
-            "Beta": round(beta, 4),
+            "Alpha": round(alpha, 4) if alpha is not None else None,     # None = could not be computed (NOT zero alpha)
+            "Beta": round(beta, 4) if beta is not None else None,
             "Number of Closed Trades": total_closed_trades,
             "Average Profit per Trade": round(np.mean(pnl_per_trade), 2) if pnl_per_trade else 0,
             "Median Profit per Trade": round(np.median(pnl_per_trade), 2) if pnl_per_trade else 0,
@@ -284,9 +288,13 @@ class Backtester:
             "max_drawdown": max_drawdown_pct,
             "win_rate": win_rate,
             # Alpha/Beta — top-level shorthand mirrors summary["Alpha"/"Beta"].
-            # Values are 0.0 when no benchmark is provided or data is unavailable.
+            # None (not 0.0) when no benchmark was given or its data was unavailable -- "unknown" must not read as
+            # "genuinely zero alpha". ``alpha_beta_status`` says which; ``alpha_beta_params`` is what was assumed.
             "alpha": alpha,
             "beta": beta,
+            "alpha_beta_status": alpha_beta_status,
+            "alpha_beta_params": {"annualization_factor": self.ALPHA_BETA_ANNUALIZATION,
+                                  "risk_free_rate_annual": self.ALPHA_BETA_RISK_FREE, "statistics": "sample (ddof=1)"},
             # Detailed summary for GUI display
             "summary": summary,
             "cumulative_pnl": np.cumsum(pnl_per_trade).tolist() if pnl_per_trade else [],
@@ -300,9 +308,15 @@ class Backtester:
         }
 
     def _calculate_alpha_beta(self, returns, benchmark_ticker):
-        """Calculate Alpha and Beta against a benchmark with caching"""
+        """Alpha and beta against a benchmark (downloaded once, cached). Returns ``(None, None)`` -- never a fake
+        ``(0, 0)`` -- when they cannot be computed; the reason is left in ``self._alpha_beta_status``."""
+        self._alpha_beta_status = "not computed"
+        if not benchmark_ticker:
+            self._alpha_beta_status = "no benchmark selected"
+            return None, None
         if self.df is None or len(self.df) == 0:
-            return 0, 0
+            self._alpha_beta_status = "no data"
+            return None, None
 
         try:
             start_date = self.df.index[0].strftime('%Y-%m-%d')
@@ -320,7 +334,8 @@ class Backtester:
                 )
                 if benchmark_data.empty:
                     logger.warning(f"Benchmark data for {benchmark_ticker} is empty.")
-                    return 0, 0
+                    self._alpha_beta_status = f"benchmark {benchmark_ticker} unavailable"
+                    return None, None
 
                 # Handle MultiIndex if present
                 if isinstance(benchmark_data.columns, pd.MultiIndex):
@@ -349,79 +364,69 @@ class Backtester:
 
             aligned_returns, aligned_benchmark = returns_tz_naive.align(benchmark_returns_tz_naive, join='inner')
 
-            if len(aligned_returns) < 2:
-                return 0, 0
-
-            # Calculation
-            cov = np.cov(aligned_returns, aligned_benchmark)[0, 1]
-            var = np.var(aligned_benchmark)
-            beta = cov / var if var != 0 else 0
-
-            risk_free_rate = 0.01
-            avg_return = np.mean(aligned_returns) * 252
-            avg_benchmark_return = np.mean(aligned_benchmark) * 252
-            alpha = avg_return - (risk_free_rate + beta * (avg_benchmark_return - risk_free_rate))
-
-            return alpha, beta
+            core = self._alpha_beta_core(aligned_returns.to_numpy(), aligned_benchmark.to_numpy(),
+                                         self.ALPHA_BETA_ANNUALIZATION, self.ALPHA_BETA_RISK_FREE)
+            if core is None:
+                self._alpha_beta_status = "too few overlapping bars or flat benchmark"
+                return None, None
+            self._alpha_beta_status = f"ok ({len(aligned_returns)} overlapping bars vs {benchmark_ticker})"
+            return core
 
         except Exception as e:
             logger.error(f"Alpha/Beta calculation failed: {e}")
-            return 0, 0
+            self._alpha_beta_status = f"failed: {e}"
+            return None, None
+
+    @staticmethod
+    def _alpha_beta_core(strategy_returns, benchmark_returns, annualization_factor: float, risk_free_annual: float = 0.0):
+        """THE alpha/beta formula, shared by the backtest report and ``compute_alpha_beta`` (they used to differ:
+        sample vs population variance, a hardcoded 1% risk-free rate vs none).
+
+        beta  = cov(strategy, benchmark) / var(benchmark)              (both sample statistics, ddof=1)
+        alpha = N * [ mean(r) - rf/N  -  beta * (mean(b) - rf/N) ]     (annualized Jensen's alpha, N periods/year)
+
+        Returns ``(alpha, beta)`` or ``None`` when it is undefined (fewer than 2 aligned points, or a benchmark with no variance).
+        """
+        strat = np.asarray(strategy_returns, dtype=float)
+        bench = np.asarray(benchmark_returns, dtype=float)
+        if len(strat) < 2 or len(strat) != len(bench):
+            return None
+        bench_var = np.var(bench, ddof=1)
+        if not np.isfinite(bench_var) or bench_var == 0.0:
+            return None
+        beta = float(np.cov(strat, bench, ddof=1)[0, 1] / bench_var)
+        rf_period = risk_free_annual / annualization_factor
+        alpha = float(annualization_factor * ((np.mean(strat) - rf_period) - beta * (np.mean(bench) - rf_period)))
+        return alpha, beta
 
     @staticmethod
     def compute_alpha_beta(
         strategy_returns,
         benchmark_returns,
         annualization_factor: int = 252,
+        risk_free_annual: float = 0.0,
     ):
-        """Compute CAPM-style alpha and beta from two daily return series.
-
-        Formula
-        -------
-        beta  = cov(strategy, benchmark) / var(benchmark)   [sample statistics]
-        alpha = mean(strategy) * N - beta * mean(benchmark) * N
-
-        where N is ``annualization_factor`` (default 252 trading days/year),
-        matching the ``* 252`` convention already used in
-        :py:meth:`_calculate_alpha_beta` and backtrader's
-        ``SharpeRatio(timeframe=bt.TimeFrame.Days)`` analyser.
-
-        This method is purely computational — it takes pre-aligned arrays
-        directly and never touches the network.  For full backtest integration
-        (fetching a live benchmark and caching) use
-        :py:meth:`_calculate_alpha_beta` instead.
-
-        Args:
-            strategy_returns:    array-like of daily returns for the strategy.
-            benchmark_returns:   array-like of daily returns for the benchmark.
-                                 Must already be in return form (not prices).
-            annualization_factor: trading-days-per-year multiplier (default 252).
-
-        Returns:
-            (alpha, beta) — both ``float``.  Returns ``(0.0, 0.0)`` when the
-            benchmark has zero variance or fewer than 2 observations.
-        """
-        strat = np.asarray(strategy_returns, dtype=float)
-        bench = np.asarray(benchmark_returns, dtype=float)
-
-        if len(strat) < 2 or len(bench) < 2 or len(strat) != len(bench):
-            return 0.0, 0.0
-
-        bench_var = np.var(bench, ddof=1)
-        if bench_var == 0.0:
-            return 0.0, 0.0
-
-        beta = float(np.cov(strat, bench, ddof=1)[0, 1] / bench_var)
-        alpha = float(
-            np.mean(strat) * annualization_factor
-            - beta * np.mean(bench) * annualization_factor
-        )
-        return alpha, beta
+        """Pure computation on two aligned return series (never touches the network). Same formula as the backtest
+        report (:py:meth:`_alpha_beta_core`). Legacy contract kept: returns ``(0.0, 0.0)`` when undefined; use
+        ``_alpha_beta_core`` if you need to tell "undefined" from "genuinely zero"."""
+        core = Backtester._alpha_beta_core(strategy_returns, benchmark_returns, annualization_factor, risk_free_annual)
+        return (0.0, 0.0) if core is None else core
 
     def get_signals(self):
         if self.cerebro.strats and hasattr(self.cerebro.strats[0][0], 'signals'):
             return self.cerebro.strats[0][0].signals
         return []
+
+
+def alpha_beta_display(results: dict) -> tuple:
+    """(alpha_text, beta_text, note) for any UI. Unknown alpha/beta shows "n/a" plus the reason -- never a fake 0.0."""
+    a, b = results.get("alpha"), results.get("beta")
+    summary = results.get("summary") or {}
+    a = summary.get("Alpha", a) if "Alpha" in summary else a
+    b = summary.get("Beta", b) if "Beta" in summary else b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return f"{a:.4f}", f"{b:.4f}", ""
+    return "n/a", "n/a", results.get("alpha_beta_status") or "benchmark data unavailable"
 
 
 # ---------------------------------------------------------------------------

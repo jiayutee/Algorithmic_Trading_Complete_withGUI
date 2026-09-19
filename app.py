@@ -18,6 +18,7 @@ from PyQt5.QtCore import Qt
 from core.data_loader import DataLoader
 from core.strategy_manager import StrategyManager
 from core.broker_manager import BrokerManager
+from brokers.paper_store import default_account_path
 from ui.main_window import MainWindow
 from config.settings import (
     ALPACA_API_KEY, ALPACA_SECRET_KEY,
@@ -83,6 +84,8 @@ class TradingApp:
             kucoin_password=KUCOIN_PASSWORD,
             mexc_key=MEXC_API_KEY,
             mexc_secret=MEXC_SECRET_KEY,
+            # Durable paper account shared with the Dash view (brokers/paper_store.py); real prices only.
+            paper_account_path=default_account_path(),
         )
 
         # Create main window

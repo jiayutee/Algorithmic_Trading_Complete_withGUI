@@ -47,9 +47,16 @@ class BrokerManager:
                  binance_key=None, binance_secret=None, binance_testnet_key=None, binance_testnet_secret=None,
                  kucoin_key=None, kucoin_secret=None, kucoin_password=None,
                  mexc_key=None, mexc_secret=None,
-                 ibkr_enabled=None, ibkr_host=None, ibkr_port=None, ibkr_client_id=None):
+                 ibkr_enabled=None, ibkr_host=None, ibkr_port=None, ibkr_client_id=None,
+                 paper_account_path=None, strict_paper_prices=None):
+        # App entry points pass a path so the paper account survives restarts (and is shared by desktop + Dash) and
+        # strict prices (orders without a real price are rejected, not filled at a made-up $100). Tests and
+        # agents that build a BrokerManager() with no arguments keep the plain in-memory simulator.
+        if strict_paper_prices is None:
+            strict_paper_prices = paper_account_path is not None
         self.brokers = {
-            "Simulator": SimulatedBroker(),
+            "Simulator": SimulatedBroker(persist_path=paper_account_path, strict_prices=strict_paper_prices,
+                                         max_price_age_s=300.0 if strict_paper_prices else None),
         }
 
         # Alpaca connector (requires alpaca-trade-api / alpaca-py package)

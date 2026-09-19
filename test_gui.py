@@ -686,3 +686,14 @@ def test_data_load_result_reaches_main_thread_and_updates_status(qapp):
         win._data_load_worker.wait(2000)
         win.destroy()
     assert not failures, f"data-load hand-off failed in {len(failures)}/10 runs: {failures}"
+
+
+def test_desktop_shows_alpha_beta_and_marks_other_holdings(qapp):
+    from unittest.mock import MagicMock
+    from ui.main_window import MainWindow
+    win = MainWindow(data_loader=MagicMock(), strategy_manager=MagicMock(), broker_manager=MagicMock(), missing_deps=[])
+    try:
+        assert win.bt_alpha_label.text() == "—" and win.bt_beta_label.text() == "—"      # placeholders until a backtest runs
+        assert win._held_marker is not None
+    finally:
+        win.destroy()

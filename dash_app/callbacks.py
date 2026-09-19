@@ -37,6 +37,7 @@ Later phases will add order-entry, live P&L, backtest triggers, etc.
 from __future__ import annotations
 
 import calendar as calendar_mod
+import os
 import datetime as dt_mod
 import threading
 from typing import Optional
@@ -100,8 +101,10 @@ def _get_broker():
     global _broker
     if _broker is None:
         from brokers.simulatedbroker import SimulatedBroker
-        _broker = SimulatedBroker()
-        logger.info("[Dash] SimulatedBroker singleton created")
+        path = os.environ.get("PAPER_ACCOUNT_PATH")      # set by dash_app/app.py when run as the app (unset in tests)
+        _broker = SimulatedBroker(persist_path=path, strict_prices=path is not None,
+                                  max_price_age_s=300.0 if path is not None else None)
+        logger.info("[Dash] SimulatedBroker created (%s)", f"durable account at {path}" if path else "in-memory")
     return _broker
 
 
@@ -111,8 +114,11 @@ def _broker_or_none():
     Unlike ``_get_broker()``, this never initialises the broker.  Used by
     display-only callbacks (positions panel, PnL calendar) so the broker's
     background price-simulation thread is not started on page load before
-    the user places any order.
+    the user places any order -- except when a durable account is configured, in which case the saved account
+    is loaded on first display so a restart shows the positions and orders that were there before.
     """
+    if _broker is None and os.environ.get("PAPER_ACCOUNT_PATH"):
+        return _get_broker()
     return _broker
 
 
@@ -822,6 +828,33 @@ def _latest_price(symbol: Optional[str]) -> Optional[float]:
         return None
 
 
+_held_marker = None
+
+
+def _mark_other_holdings(broker, active_symbol: Optional[str]) -> None:
+    """Keep positions in symbols OTHER than the charted one marked to real prices (crypto: websocket cache, keeping the
+    stream subscribed while the position is open; equities: throttled REST). Never raises."""
+    global _held_marker
+    if broker is None:
+        return
+    try:
+        from core.paper_marking import HeldPriceMarker
+        if _held_marker is None:
+            def fetch(sym: str) -> Optional[float]:
+                if is_crypto_symbol(sym):
+                    svc = _get_live_svc()
+                    if sym not in svc.subscribed_symbols():
+                        svc.subscribe(sym)
+                    price = svc.get_price(sym)
+                else:
+                    price = _get_equity_loader().get_latest_price(sym)
+                return float(price) if price else None
+            _held_marker = HeldPriceMarker(fetch, interval_for=lambda sym: 0.0 if is_crypto_symbol(sym) else 30.0)
+        _held_marker.refresh(broker, skip=[active_symbol] if active_symbol else [])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[Dash] marking other holdings failed: %s", exc)
+
+
 def _sync_broker_price(broker, symbol: Optional[str], price: Optional[float]) -> None:
     """Mark the simulated broker to a real price so fills and P&L use it.
 
@@ -831,8 +864,11 @@ def _sync_broker_price(broker, symbol: Optional[str], price: Optional[float]) ->
     if broker is None or not symbol or not price:
         return
     try:
-        with broker._lock:
-            broker.market_data[symbol] = float(price)
+        if hasattr(broker, "update_price"):
+            broker.update_price(symbol, float(price))       # timestamps it and re-checks pending limit/stop orders
+        else:
+            with broker._lock:
+                broker.market_data[symbol] = float(price)
     except Exception as exc:  # noqa: BLE001
         logger.debug("[Dash] broker price sync failed for %s: %s", symbol, exc)
 
@@ -961,13 +997,14 @@ def _extract_backtest_metrics(results: dict) -> tuple:
     sharpe_str  = f"{sharpe:.2f}"  if isinstance(sharpe,   (int, float)) else "N/A"
     maxdd_str   = f"{max_dd:.2f}%" if isinstance(max_dd,   (int, float)) else "N/A"
     winrate_str = win_rate         if isinstance(win_rate, str)          else f"{win_rate:.2f}%"
-    alpha_str   = f"{alpha:.4f}"   if isinstance(alpha,    (int, float)) else "N/A"
-    beta_str    = f"{beta:.4f}"    if isinstance(beta,     (int, float)) else "N/A"
+    from core.backtester import alpha_beta_display
+    alpha_str, beta_str, ab_note = alpha_beta_display(results)
 
     status_msg = (
         f"Backtest complete | Final: ${final_val:,.2f} | "
         f"P&L: ${total_pnl:+,.2f} | Sharpe: {sharpe_str} | "
         f"MaxDD: {maxdd_str} | Win Rate: {winrate_str}"
+        + (f" | Alpha/Beta: n/a ({ab_note})" if ab_note else "")
     )
     return sharpe_str, winrate_str, maxdd_str, alpha_str, beta_str, status_msg
 
@@ -1054,7 +1091,10 @@ def register_callbacks(app: dash.Dash) -> None:
 
         # -- Subscription housekeeping --------------------------------------
         if prev_symbol and is_crypto_symbol(prev_symbol) and prev_symbol != symbol:
-            _unsubscribe_async(prev_symbol)
+            # Keep streaming a symbol we still hold: dropping it would freeze that position's mark.
+            from core.paper_marking import HeldPriceMarker
+            if prev_symbol not in HeldPriceMarker.held_symbols(_broker_or_none()):
+                _unsubscribe_async(prev_symbol)
 
         _equity_tick_count = 0
         _equity_last_price = None
@@ -1158,7 +1198,9 @@ def register_callbacks(app: dash.Dash) -> None:
 
         # Keep an existing paper broker marked to the real price so unrealized
         # P&L reflects the market (no-op until the first order creates it).
-        _sync_broker_price(_broker_or_none(), symbol, price)
+        broker = _broker_or_none()
+        _sync_broker_price(broker, symbol, price)
+        _mark_other_holdings(broker, symbol)
 
         # -- Partial figure update via Patch() ------------------------------
         # We only update the last trace (the live-tick scatter appended by
@@ -1340,13 +1382,14 @@ def register_callbacks(app: dash.Dash) -> None:
     @app.callback(
         Output("positions-content", "children"),
         Input("order-status", "children"),
+        Input("price-interval", "n_intervals"),
     )
-    def update_positions(order_status: object):
+    def update_positions(order_status: object, n_intervals: object = None):
         """Rebuild the open positions list after an order is placed or on page load.
 
         Mirrors ``update_positions_display()`` in ui/main_window.py.
-        Listening to order-status children means this fires immediately after
-        every buy/sell submission — no separate polling interval needed.
+        Fires immediately after every buy/sell submission (order-status) AND on each price tick, so the
+        per-position figures never lag the headline P&L card, which refreshes on the same tick.
         """
         return _build_positions_content(_broker_or_none())
 
