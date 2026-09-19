@@ -3,12 +3,15 @@ from datetime import datetime, date as date_cls
 from typing import Dict, List, Optional, Union
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 import random
 import threading
+from contextlib import contextmanager
 import numpy as np
 from collections import defaultdict
 from core.logger import get_logger
 from core.trade_rationale import unspecified_rationale
+from brokers.paper_store import PaperStore
 
 logger = get_logger(__name__)
 
@@ -50,6 +53,7 @@ class Order:
     realized_pnl: float = 0.0  # this order's own contribution to closing/reducing a position; 0 for opens
     fee: float = 0.0  # commission paid on this fill
     rationale: Dict = field(default_factory=unspecified_rationale)  # structured "why" (core/trade_rationale.py)
+    reject_reason: str = ""  # why a REJECTED order was rejected (empty otherwise)
 
 
 @dataclass
@@ -64,28 +68,159 @@ class Position:
 
 class SimulatedBroker:
     """
-    Simulated broker for paper trading with market data generation.
-    Supports market/limit/stop orders, leverage, and PnL tracking.
+    Paper-trading broker: market/limit/stop orders, leverage flag, realized/unrealized P&L, fees.
+
+    Prices come from the caller (``update_price`` / ``execution_price``); by default nothing is invented.
+      * ``simulate_prices=True`` restores the old random-walk generator (upward-biased -- for demos/tests only).
+      * ``strict_prices=True``: a market order for a symbol with no known (or, with ``max_price_age_s``, a stale) price is
+        REJECTED with a reason instead of silently filling at a made-up $100.
+      * ``persist_path``: keep the account in a SQLite file (see brokers/paper_store.py) so it survives restarts and can be
+        shared by the desktop app and the Dash view.
+    Pending limit/stop orders are re-checked whenever ``update_price`` delivers a new price.
     """
 
-    def __init__(self, initial_balance: float = 100000.0, market_fee: float = 0.001, limit_fee: float = 0.0005):
+    def __init__(self, initial_balance: float = 100000.0, market_fee: float = 0.001, limit_fee: float = 0.0005,
+                 *, simulate_prices: bool = False, strict_prices: bool = False,
+                 max_price_age_s: Optional[float] = None, persist_path: Optional[str] = None):
         self.initial_balance = initial_balance
         self.balance = initial_balance
         self.market_fee = market_fee
         self.limit_fee = limit_fee
+        self.strict_prices = strict_prices
+        self.max_price_age_s = max_price_age_s
         self.positions: Dict[str, Position] = {}
         self.orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
         self.portfolio_value = initial_balance
         self.realized_pnl: float = 0.0
         self.market_data: Dict[str, float] = defaultdict(lambda: 100.0)
+        self._price_time: Dict[str, float] = {}      # when update_price last set each symbol
+        self._dirty_orders: set = set()              # order ids created/changed during the current operation
         self._running = True
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._store: Optional[PaperStore] = PaperStore(persist_path) if persist_path else None
+        if self._store is not None:
+            with self._lock:
+                if self._store.has_state():
+                    self._load_from_store_locked()
+                else:
+                    with self._store.transaction():
+                        self._persist_locked()
 
-        # Start market data simulation thread
-        self._data_thread = threading.Thread(target=self._simulate_market_data)
-        self._data_thread.daemon = True
-        self._data_thread.start()
+        # The random-walk generator is opt-in: it invents prices, so paper P&L built on it is not a market result.
+        self._data_thread = threading.Thread(target=self._simulate_market_data, daemon=True)
+        if simulate_prices:
+            self._data_thread.start()
+
+    # ------------------------------------------------------------------
+    # Durable account (no-ops when persist_path is None)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _order_to_dict(o: "Order") -> dict:
+        d = dict(o.__dict__)
+        d["side"], d["order_type"], d["status"] = o.side.value, o.order_type.value, o.status.value
+        return d
+
+    @staticmethod
+    def _order_from_dict(d: dict) -> "Order":
+        d = dict(d)
+        d["side"], d["order_type"], d["status"] = OrderSide(d["side"]), OrderType(d["order_type"]), OrderStatus(d["status"])
+        known = {f for f in Order.__dataclass_fields__}
+        return Order(**{k: v for k, v in d.items() if k in known})
+
+    def _persist_locked(self) -> None:
+        """Write account state + the orders touched by this operation. Caller holds the lock and a store transaction."""
+        if self._store is None:
+            return
+        meta = {"balance": self.balance, "initial_balance": self.initial_balance, "realized_pnl": self.realized_pnl,
+                "market_fee": self.market_fee, "limit_fee": self.limit_fee}
+        positions = [{"symbol": p.symbol, "qty": p.qty, "avg_price": p.avg_price, "leverage": p.leverage}
+                     for p in self.positions.values()]
+        touched = [self._order_to_dict(self.orders[i]) for i in self._dirty_orders if i in self.orders]
+        self._store.save(meta, positions, touched)
+        self._dirty_orders.clear()
+
+    def _load_from_store_locked(self) -> None:
+        state = self._store.load()
+        m = state["meta"]
+        self.balance = float(m.get("balance", self.balance))
+        self.initial_balance = float(m.get("initial_balance", self.initial_balance))
+        self.realized_pnl = float(m.get("realized_pnl", 0.0))
+        self.positions = {p["symbol"]: Position(symbol=p["symbol"], qty=p["qty"], avg_price=p["avg_price"], leverage=p["leverage"],
+                                                last_price=self.market_data.get(p["symbol"], 0) if p["symbol"] in self.market_data else 0)
+                          for p in state["positions"]}
+        self.order_history = [self._order_from_dict(o) for o in state["orders"]]
+        self.orders = {o.id: o for o in self.order_history}
+        self._update_portfolio_value()
+
+    def _refresh_locked(self) -> None:
+        """Pick up commits made by another process (e.g. the Dash view while the desktop app is open)."""
+        if self._store is not None and self._store.changed_externally():
+            self._load_from_store_locked()
+
+    @contextmanager
+    def _operation(self):
+        """One atomic read-modify-write on the account. With a store: BEGIN IMMEDIATE, reload, run, save, commit."""
+        with self._lock:
+            if self._store is None:
+                yield
+                return
+            with self._store.transaction():
+                self._load_from_store_locked()
+                yield
+                self._persist_locked()
+
+    def reset(self, initial_balance: Optional[float] = None) -> None:
+        """Wipe the account back to a fresh balance (positions, orders, realized P&L). Prices are kept."""
+        with self._lock:
+            if initial_balance is not None:
+                self.initial_balance = float(initial_balance)
+            self.balance = self.initial_balance
+            self.positions, self.orders, self.order_history = {}, {}, []
+            self.realized_pnl = 0.0
+            self._dirty_orders.clear()
+            self._update_portfolio_value()
+            if self._store is not None:
+                with self._store.transaction():
+                    self._store.wipe()
+                    self._persist_locked()
+
+    # ------------------------------------------------------------------
+    # Prices
+    # ------------------------------------------------------------------
+
+    def update_price(self, symbol: str, price: float) -> None:
+        """Feed a REAL market price. Marks positions to it and re-checks pending limit/stop orders for that symbol."""
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            return
+        if not symbol or not math.isfinite(price) or price <= 0:
+            return
+        with self._lock:
+            self.market_data[symbol] = price
+            self._price_time[symbol] = time.time()
+            if symbol in self.positions:
+                pos = self.positions[symbol]
+                pos.last_price = price
+                pos.pnl = pos.qty * (price - pos.avg_price)
+            if any(o.status == OrderStatus.PENDING and o.symbol == symbol for o in self.orders.values()):
+                with self._operation():                       # reloads state, so pick the pending orders AFTER entering
+                    for o in [o for o in self.orders.values() if o.status == OrderStatus.PENDING and o.symbol == symbol]:
+                        before = o.status
+                        if o.order_type == OrderType.LIMIT:
+                            self._process_limit_order(o)
+                        elif o.order_type == OrderType.STOP:
+                            self._process_stop_order(o)
+                        if o.status != before:
+                            self._dirty_orders.add(o.id)
+            self._update_portfolio_value()
+
+    def price_age(self, symbol: str) -> Optional[float]:
+        """Seconds since ``update_price`` last set this symbol; None if it was never fed (or set directly)."""
+        t = self._price_time.get(symbol)
+        return None if t is None else time.time() - t
 
     def _simulate_market_data(self):
         """Background thread to simulate changing market prices"""
@@ -128,9 +263,19 @@ class SimulatedBroker:
         """Generate unique order ID"""
         return f"simorder_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
 
-    def _get_market_price(self, symbol: str) -> float:
-        """Get current simulated market price"""
-        return self.market_data.get(symbol, 100.0)
+    def _get_market_price(self, symbol: str) -> Optional[float]:
+        """Current price for ``symbol``.
+
+        Non-strict (default, for backward compatibility): unknown symbols fall back to 100.0.
+        Strict: None when the price is unknown, or older than ``max_price_age_s`` -- callers must not invent one.
+        """
+        if symbol in self.market_data:
+            if self.strict_prices and self.max_price_age_s is not None:
+                age = self.price_age(symbol)
+                if age is not None and age > self.max_price_age_s:
+                    return None
+            return self.market_data[symbol]
+        return None if self.strict_prices else 100.0
 
     def submit_order(
             self,
@@ -162,7 +307,7 @@ class SimulatedBroker:
         Returns:
             Order object with status
         """
-        with self._lock:
+        with self._operation():
             # Convert string inputs to enums
             if isinstance(side, str):
                 side = OrderSide(side.lower())
@@ -176,7 +321,7 @@ class SimulatedBroker:
                 current_price = execution_price
                 logger.debug("Using execution price: $%.2f", execution_price)
             else:
-                current_price = self._get_market_price(symbol)
+                current_price = self._get_market_price(symbol)      # None only in strict mode (unknown / stale price)
 
             order = Order(
                 id=order_id,
@@ -192,27 +337,38 @@ class SimulatedBroker:
             )
 
             # Process order based on type
-            if order_type == OrderType.MARKET:
+            if order_type == OrderType.MARKET and current_price is None:
+                order.status = OrderStatus.REJECTED
+                order.reject_reason = (f"no current price for {symbol}" if symbol not in self.market_data
+                                       else f"price for {symbol} is stale (> {self.max_price_age_s:.0f}s old)")
+                logger.warning("Rejected market order for %s: %s", symbol, order.reject_reason)
+            elif order_type == OrderType.MARKET:
                 self._process_market_order(order)
             elif order_type == OrderType.LIMIT:
-                self._process_limit_order(order)
+                self._process_limit_order(order)     # stays PENDING until a price update crosses the limit
             elif order_type == OrderType.STOP:
                 self._process_stop_order(order)
 
             # Store order
             self.orders[order_id] = order
             self.order_history.append(order)
-
+            self._dirty_orders.add(order_id)
             return order
 
     def _process_market_order(self, order: Order):
         """Execute market order immediately"""
         fill_price = self._get_market_price(order.symbol)
+        if fill_price is None:
+            order.status = OrderStatus.REJECTED
+            order.reject_reason = f"no current price for {order.symbol}"
+            return
         self._fill_order(order, fill_price)
 
     def _process_limit_order(self, order: Order):
         """Process limit order (may not fill immediately)"""
         current_price = self._get_market_price(order.symbol)
+        if current_price is None:
+            return                                   # cannot evaluate without a price: stay pending
 
         if order.side == OrderSide.BUY and order.limit_price >= current_price:
             self._fill_order(order, min(order.limit_price, current_price))
@@ -222,6 +378,8 @@ class SimulatedBroker:
     def _process_stop_order(self, order: Order):
         """Process stop order (may not fill immediately)"""
         current_price = self._get_market_price(order.symbol)
+        if current_price is None:
+            return
 
         if order.side == OrderSide.BUY and order.stop_price <= current_price:
             self._fill_order(order, current_price)
@@ -253,6 +411,7 @@ class SimulatedBroker:
             if executable_qty <= 0:
                 logger.warning("Insufficient funds to buy %s (incl. fees)", order.symbol)
                 order.status = OrderStatus.REJECTED
+                order.reject_reason = "insufficient funds (including fees)"
                 return
             if executable_qty < order.qty:
                 logger.debug("Adjusting buy qty %.6f -> %.6f (max affordable)", order.qty, executable_qty)
@@ -285,6 +444,7 @@ class SimulatedBroker:
         if order.side == OrderSide.BUY and total_cost > self.balance:
             logger.warning("Insufficient funds: need $%.2f, have $%.2f", total_cost, self.balance)
             order.status = OrderStatus.REJECTED
+            order.reject_reason = f"insufficient funds: need ${total_cost:,.2f}, have ${self.balance:,.2f}"
             return
 
         # Update position
@@ -337,21 +497,24 @@ class SimulatedBroker:
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an open order"""
-        with self._lock:
+        with self._operation():
             if order_id in self.orders and self.orders[order_id].status == OrderStatus.PENDING:
                 self.orders[order_id].status = OrderStatus.CANCELED
                 self.orders[order_id].updated_at = time.time()
+                self._dirty_orders.add(order_id)
                 return True
             return False
 
     def get_position(self, symbol: str) -> Optional[Position]:
         """Get current position for a symbol (thread-safe)"""
         with self._lock:
+            self._refresh_locked()
             return self.positions.get(symbol)
 
     def get_orders(self, status: Optional[OrderStatus] = None) -> List[Order]:
         """Get orders filtered by status (thread-safe snapshot)"""
         with self._lock:
+            self._refresh_locked()
             if status is None:
                 return list(self.orders.values())
             return [o for o in self.orders.values() if o.status == status]
@@ -359,6 +522,7 @@ class SimulatedBroker:
     def get_account_info(self) -> dict:
         """Get current account information (thread-safe snapshot)"""
         with self._lock:
+            self._refresh_locked()
             self._update_portfolio_value()
             unrealized = self._get_unrealized_pnl_locked()
             return {
@@ -391,6 +555,7 @@ class SimulatedBroker:
     def get_realized_pnl(self) -> float:
         """Return total PnL locked in from closed / partially-closed positions."""
         with self._lock:
+            self._refresh_locked()
             return self.realized_pnl
 
     def get_unrealized_pnl(self, prices: Optional[Dict[str, float]] = None) -> float:
@@ -402,11 +567,13 @@ class SimulatedBroker:
                     deterministic values in tests to avoid flakiness.
         """
         with self._lock:
+            self._refresh_locked()
             return self._get_unrealized_pnl_locked(prices=prices)
 
     def get_total_pnl(self, prices: Optional[Dict[str, float]] = None) -> float:
         """Return realized + unrealized PnL in a single consistent snapshot."""
         with self._lock:
+            self._refresh_locked()
             return self.realized_pnl + self._get_unrealized_pnl_locked(prices=prices)
 
     def get_pnl_by_day(self) -> Dict[date_cls, float]:
@@ -426,6 +593,7 @@ class SimulatedBroker:
         not a bug: opening a position is a real cash outflow on that day.
         """
         with self._lock:
+            self._refresh_locked()
             by_day: Dict[date_cls, float] = defaultdict(float)
             for order in self.order_history:
                 if order.status != OrderStatus.FILLED:
@@ -438,4 +606,6 @@ class SimulatedBroker:
         """Clean up the broker"""
         self._running = False
         if self._data_thread.is_alive():
-            self._data_thread.join()
+            self._data_thread.join(timeout=3)
+        if self._store is not None:
+            self._store.close()

@@ -922,17 +922,16 @@ class TestAlphaBetaComputation:
         assert "alpha" in results, "Missing top-level 'alpha' key in results dict"
         assert "beta" in results, "Missing top-level 'beta' key in results dict"
 
-    def test_alpha_beta_are_numeric(self):
-        """Top-level 'alpha' and 'beta' must be numeric (int or float)."""
+    def test_alpha_beta_are_numeric_or_explicitly_unavailable(self):
+        """Top-level 'alpha'/'beta' are numbers, or None when the benchmark could not be used (never a fake 0)."""
         df = _make_ohlcv(252)
         results = _run_backtest(EMACrossoverStrategy, df)
         assert "error" not in results, f"Backtest errored: {results.get('error')}"
-        assert isinstance(results["alpha"], (int, float)), (
-            f"'alpha' must be numeric; got {type(results['alpha'])}"
-        )
-        assert isinstance(results["beta"], (int, float)), (
-            f"'beta' must be numeric; got {type(results['beta'])}"
-        )
+        for k in ("alpha", "beta"):
+            assert results[k] is None or isinstance(results[k], (int, float)), f"'{k}' must be numeric or None"
+        if results["alpha"] is None:
+            assert results["alpha_beta_status"] != "not computed" and not results["alpha_beta_status"].startswith("ok")
+        assert results["alpha_beta_params"]["statistics"] == "sample (ddof=1)"
 
     def test_negative_beta_inverse_correlated_strategy(self):
         """When strategy returns are exactly the inverse of benchmark returns,
@@ -974,6 +973,68 @@ class TestAlphaBetaComputation:
                 f"Key '{key}' missing from results when benchmark_ticker=None"
             )
 
-        # With an invalid/None benchmark, _calculate_alpha_beta returns (0, 0)
-        assert isinstance(results["alpha"], (int, float))
-        assert isinstance(results["beta"], (int, float))
+        # No benchmark => alpha/beta are UNKNOWN (None), not a plausible-looking 0.0
+        assert results["alpha"] is None and results["beta"] is None
+        assert results["alpha_beta_status"] == "no benchmark selected"
+        assert results["summary"]["Alpha"] is None
+
+
+class TestAlphaBetaSingleFormula:
+    """The report path and compute_alpha_beta() share one formula (they used to differ)."""
+
+    def _series(self, seed=1, n=300):
+        r = np.random.default_rng(seed)
+        bench = r.normal(0.0004, 0.01, n)
+        return 0.0002 + 1.3 * bench + r.normal(0, 0.004, n), bench
+
+    def test_core_matches_the_public_helper_and_recovers_planted_beta(self):
+        strat, bench = self._series()
+        core = Backtester._alpha_beta_core(strat, bench, 252, 0.0)
+        assert core == Backtester.compute_alpha_beta(strat, bench)
+        assert core[1] == pytest.approx(1.3, abs=0.1)
+
+    def test_sample_statistics_beta_is_exact_ols_slope(self):
+        strat, bench = self._series(seed=5)
+        slope = np.polyfit(bench, strat, 1)[0]
+        assert Backtester._alpha_beta_core(strat, bench, 252)[1] == pytest.approx(slope)
+
+    def test_risk_free_rate_is_a_parameter_and_follows_jensens_alpha(self):
+        strat, bench = self._series()
+        a0 = Backtester._alpha_beta_core(strat, bench, 252, 0.0)
+        a4 = Backtester._alpha_beta_core(strat, bench, 252, 0.04)
+        beta = a0[1]
+        assert a4[0] == pytest.approx(a0[0] - 0.04 * (1 - beta))
+
+    def test_undefined_is_none_in_the_core_and_zero_only_in_the_legacy_helper(self):
+        assert Backtester._alpha_beta_core([0.01], [0.01], 252) is None
+        assert Backtester._alpha_beta_core([0.01, 0.02, 0.03], [0.0, 0.0, 0.0], 252) is None
+        assert Backtester.compute_alpha_beta([0.01], [0.01]) == (0.0, 0.0)
+
+    def test_unavailable_benchmark_gives_none_with_a_reason_not_zero(self, monkeypatch):
+        import core.backtester as bt_mod
+        monkeypatch.setattr(bt_mod, "download_with_retry", lambda *a, **k: pd.DataFrame())
+        b = Backtester()
+        b.add_data(_make_ohlcv(80, seed=3))
+        b.add_strategy(EMACrossoverStrategy)
+        Backtester._benchmark_cache.clear()
+        res = b.run_backtest(cash=100_000, benchmark_ticker="SPY")
+        assert res["alpha"] is None and res["beta"] is None
+        assert "unavailable" in res["alpha_beta_status"]
+
+
+class TestAlphaBetaDisplay:
+    def test_known_values_are_formatted_and_unknown_is_na_with_a_reason(self):
+        from core.backtester import alpha_beta_display
+        assert alpha_beta_display({"alpha": 0.12345, "beta": 0.9, "summary": {"Alpha": 0.1235, "Beta": 0.9}}) == ("0.1235", "0.9000", "")
+        a, b, note = alpha_beta_display({"alpha": None, "beta": None, "summary": {"Alpha": None, "Beta": None},
+                                         "alpha_beta_status": "benchmark SPY unavailable"})
+        assert (a, b) == ("n/a", "n/a") and "SPY unavailable" in note
+        assert alpha_beta_display({})[0] == "n/a"                         # nothing at all: still "n/a", never 0.0000
+
+    def test_dash_status_line_states_why_alpha_is_missing(self):
+        from dash_app.callbacks import _extract_backtest_metrics
+        res = {"summary": {"Sharpe Ratio": 1.0, "Max Drawdown (%)": 2.0, "Win Rate": "50.00%", "Alpha": None, "Beta": None,
+                           "Final Value": 101_000.0, "P&L": 1_000.0}, "alpha": None, "beta": None,
+               "alpha_beta_status": "no benchmark selected"}
+        *_, alpha_s, beta_s, msg = _extract_backtest_metrics(res)
+        assert (alpha_s, beta_s) == ("n/a", "n/a") and "Alpha/Beta: n/a (no benchmark selected)" in msg

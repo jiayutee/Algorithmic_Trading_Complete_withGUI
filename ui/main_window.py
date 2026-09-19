@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QTableWidgetItem, QHeaderView, QApplication, QFormLayout,
                              QFrame, QSizePolicy, QGridLayout, QCheckBox)
 from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor
+from core.paper_marking import HeldPriceMarker
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView
@@ -273,6 +274,7 @@ class MainWindow(QMainWindow):
         self.sell_signal_plotted = False
 
         # Broker timer (started in __init__ after widgets exist)
+        self._held_marker = HeldPriceMarker(lambda sym: self.data_loader.get_latest_price(sym), interval_for=lambda sym: 20.0)
         self.broker_timer = QTimer()
         self.broker_timer.timeout.connect(self.refresh_account_info)
 
@@ -522,6 +524,14 @@ class MainWindow(QMainWindow):
         self.bt_maxdd_label = QLabel("—")
         self.bt_maxdd_label.setStyleSheet("color: #f85149;")
         results_layout.addRow("Max DD:", self.bt_maxdd_label)
+
+        self.bt_alpha_label = QLabel("—")
+        self.bt_alpha_label.setStyleSheet("color: #a5d6ff;")
+        results_layout.addRow("Alpha:", self.bt_alpha_label)
+
+        self.bt_beta_label = QLabel("—")
+        self.bt_beta_label.setStyleSheet("color: #a5d6ff;")
+        results_layout.addRow("Beta:", self.bt_beta_label)
 
         results_group.setLayout(results_layout)
         layout.addWidget(results_group)
@@ -1500,6 +1510,13 @@ class MainWindow(QMainWindow):
             self.bt_sharpe_label.setText(sharpe_str)
             self.bt_winrate_label.setText(win_rate if isinstance(win_rate, str) else f"{win_rate:.2f}%")
             self.bt_maxdd_label.setText(dd_str)
+            from core.backtester import alpha_beta_display
+            alpha_txt, beta_txt, ab_note = alpha_beta_display(results)
+            self.bt_alpha_label.setText(alpha_txt)
+            self.bt_beta_label.setText(beta_txt)
+            tip = ab_note or "Annualized Jensen's alpha and beta vs the benchmark (sample statistics)."
+            self.bt_alpha_label.setToolTip(tip)
+            self.bt_beta_label.setToolTip(tip)
 
             self.plot_signals(results.get('signals', []))
 
@@ -1544,6 +1561,8 @@ class MainWindow(QMainWindow):
         """Refresh and display account information"""
         try:
             if self.current_broker:
+                # Keep every open holding (not just the charted symbol) marked to a real price; runs off the UI thread.
+                self._held_marker.refresh_async(self.current_broker, skip=[self.symbol_combo.currentText()])
                 account_info = self.current_broker.get_account_info()
 
                 logger.debug("Broker: balance=$%.2f pv=$%.2f pnl=$%.2f", account_info.get('balance', 0), account_info.get('portfolio_value', 0), account_info.get('pnl', 0))
@@ -1628,7 +1647,10 @@ class MainWindow(QMainWindow):
                 market_price = None
             if market_price and hasattr(self.current_broker, 'market_data'):
                 with self.current_broker._lock:
-                    self.current_broker.market_data[symbol] = market_price
+                    if hasattr(self.current_broker, 'update_price'):
+                        self.current_broker.update_price(symbol, market_price)   # timestamps it and re-checks pending orders
+                    else:
+                        self.current_broker.market_data[symbol] = market_price
             decision_price = limit_price or stop_price or market_price
             extra = {}
             if market_price and order_type == "market" and hasattr(self.current_broker, 'market_data'):
