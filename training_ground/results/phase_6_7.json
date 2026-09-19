@@ -1,0 +1,111 @@
+{
+  "run_at": "2026-09-19T10:30:56.106652+00:00",
+  "window": [
+    "2022-09-10",
+    "2026-09-18"
+  ],
+  "days": 1470,
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "LTCUSDT",
+    "DOGEUSDT",
+    "SOLUSDT"
+  ],
+  "stats": {
+    "ew": {
+      "ann_return": 0.2549159520609652,
+      "ann_vol": 0.6057448906828258,
+      "sharpe": 0.6778893857302544,
+      "max_drawdown": -0.6697059916661318,
+      "calmar": 0.38063860146565376,
+      "total_return": 1.495515839214125,
+      "rebalances": 210,
+      "annual_turnover": 2.2587730882260275
+    },
+    "xsmom": {
+      "ann_return": 0.3978623206100329,
+      "ann_vol": 0.6409612623805714,
+      "sharpe": 0.8409971680830174,
+      "max_drawdown": -0.7251092804668297,
+      "calmar": 0.5486929092314013,
+      "total_return": 2.8533895964184093,
+      "rebalances": 210,
+      "annual_turnover": 31.743250716969467
+    },
+    "tsmom": {
+      "ann_return": 0.28362077488150716,
+      "ann_vol": 0.3833340562350834,
+      "sharpe": 0.8437805901105276,
+      "max_drawdown": -0.3753386737845906,
+      "calmar": 0.7556396254660371,
+      "total_return": 1.7334920740231188,
+      "rebalances": 210,
+      "annual_turnover": 13.436493882471977
+    }
+  },
+  "comparisons": [
+    {
+      "comparison": "M1 XSMOM vs equal weight",
+      "sharpe_diff": 0.16310778235276302,
+      "ci": [
+        -0.2385574647749173,
+        0.5317211016646022
+      ],
+      "ci_level": 0.975,
+      "sharpe_diff_halves": [
+        0.27954927870705537,
+        0.036646326470710144
+      ],
+      "criteria": {
+        "1_ci_lower_above_zero": false,
+        "2_positive_in_both_halves": true,
+        "3_drawdown_within_5pp": false,
+        "FINDING": false
+      }
+    },
+    {
+      "comparison": "M2 TSMOM vs equal weight",
+      "sharpe_diff": 0.16589120438027327,
+      "ci": [
+        -0.5921987235552252,
+        0.8525236564992402
+      ],
+      "ci_level": 0.975,
+      "sharpe_diff_halves": [
+        -0.08082168944298496,
+        0.39700105336737485
+      ],
+      "criteria": {
+        "1_ci_lower_above_zero": false,
+        "2_positive_in_both_halves": false,
+        "3_drawdown_within_5pp": true,
+        "FINDING": false
+      }
+    }
+  ],
+  "context_sharpe_other_lookbacks": {
+    "L=14": {
+      "ew": 0.7096266213004807,
+      "xsmom": 1.0883937778998034,
+      "tsmom": 0.6618464818587125
+    },
+    "L=56": {
+      "ew": 0.7017104367934677,
+      "xsmom": 0.9376594379378618,
+      "tsmom": 0.5984703320540775
+    }
+  },
+  "protocol": {
+    "lookback": 28,
+    "top_k": 3,
+    "rebalance": 7,
+    "fee": 0.001,
+    "block": 10,
+    "n_boot": 2000,
+    "ci_level": 0.975
+  }
+}
