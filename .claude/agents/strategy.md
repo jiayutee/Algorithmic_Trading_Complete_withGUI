@@ -33,4 +33,4 @@ Out of scope:
 - UI rendering concerns
 
 Signal types emitted must be one of: buy, sell, buy_cover, sell_short
-Run `~/miniconda3/bin/python3 -m pytest test_strategies.py -q` to verify.
+Run `~/miniconda3/bin/python3 -m pytest tests/test_strategies.py -q` to verify.

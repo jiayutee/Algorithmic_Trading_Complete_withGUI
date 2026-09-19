@@ -151,7 +151,7 @@ def test_ui_does_not_hardcode_rule_based_sentiment():
     override NewsPipeline's sentiment_analyzer with force_rule_based=True,
     which silently disabled the real (FinBERT/LLM) sentiment path regardless
     of what was installed or configured."""
-    source = Path(__file__).parent.joinpath("ui", "main_window.py").read_text()
+    source = Path(__file__).resolve().parents[1].joinpath("ui", "main_window.py").read_text()
     assert "force_rule_based=True" not in source
 
 

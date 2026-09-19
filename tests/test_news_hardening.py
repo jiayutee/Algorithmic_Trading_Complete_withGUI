@@ -59,7 +59,7 @@ def pipeline(sources, tmp_path, analyzer=None, deadline=1.0, health=None):
 @pytest.fixture(autouse=True)
 def _cwd_for_migrations(monkeypatch):
     import os
-    monkeypatch.chdir(os.path.dirname(os.path.abspath(__file__)))     # NewsStore reads migrations/ relative to CWD
+    monkeypatch.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))     # NewsStore reads migrations/ relative to CWD
 
 
 # ------------------------------------------------------------- circuit breaker

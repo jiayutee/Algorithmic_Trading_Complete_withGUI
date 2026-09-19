@@ -63,6 +63,15 @@ scripts/
 .github/agents/           # Source-of-truth agent definitions (also mirrored to .claude/agents/)
 ```
 
+## Repo layout (where things go)
+- `tests/` — all tests except the GUI test. New tests go here, as `tests/test_<thing>.py`. `test_gui.py` deliberately stays at the repo root:
+  every documented command and CI job uses `--ignore=test_gui.py`, so moving it would make display-less automation try to run GUI tests.
+- `data/` — small input datasets the training scripts read (`train_data.csv`, `trade_data.csv`). `artifacts/` — generated outputs
+  (`ddpg_*_test.csv`, `tmp_ddpg/` old training output). `trained_models/` and `results/` are used by code at those paths: do not move them.
+- `scripts/` — runnable helpers (collectors, launchd wrappers, `verify_core.py`, env setup). `docs/` — plans, pre-registrations, handoffs.
+- `training_ground/` — experiments and their results (`training_ground/results/*.json` are committed evidence).
+- Local-only, git-ignored: `logs/`, `datasets/`, `news_store.sqlite3*`, `.env`, `config/settings.py`, model weights (`*.pt`).
+
 ## Sprint Context
 - Launch: 2026-08-18 (revised, was 2026-07-28) | Day counter: `python3 -c "from datetime import date; print(51-(date(2026,8,18)-date.today()).days+1)"`
 - Notion hub: https://app.notion.com/p/36ad2ab050d980439d4ce7d7d235c9af

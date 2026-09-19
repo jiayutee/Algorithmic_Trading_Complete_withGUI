@@ -43,3 +43,6 @@ logs/
 
 # macOS Finder metadata
 .DS_Store
+
+# linter cache
+.ruff_cache/

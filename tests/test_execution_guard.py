@@ -207,7 +207,7 @@ def test_paper_mode_connectors_bypass_the_guard(path, name):
 # ------------------------------------------------ structural: no unguarded live path
 
 def _submit_order_defs():
-    for path in sorted(Path(__file__).parent.joinpath("brokers").glob("*.py")):
+    for path in sorted(Path(__file__).resolve().parents[1].joinpath("brokers").glob("*.py")):
         tree = ast.parse(path.read_text())
         for cls in [n for n in tree.body if isinstance(n, ast.ClassDef)]:
             for fn in [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "submit_order"]:

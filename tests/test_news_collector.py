@@ -11,7 +11,7 @@ from core.news_store import NewsStore
 
 @pytest.fixture(autouse=True)
 def _cwd(monkeypatch):
-    monkeypatch.chdir(os.path.dirname(os.path.abspath(__file__)))          # NewsStore reads migrations/ relative to CWD
+    monkeypatch.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))          # NewsStore reads migrations/ relative to CWD
 
 
 def _store(tmp_path):
