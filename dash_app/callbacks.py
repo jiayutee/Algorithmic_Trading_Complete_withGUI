@@ -293,6 +293,12 @@ def _fee_fraction(pct, default_pct: float) -> float:
     return max(0.0, min(v, 10.0)) / 100.0
 
 
+def _resolve_symbol(custom: Optional[str], selected: Optional[str]) -> Optional[str]:
+    """The symbol to load: what was typed into the custom box (trimmed, upper-cased) if anything, else the dropdown value."""
+    typed = (custom or "").strip().upper()
+    return typed or selected
+
+
 def _research_loop_view(path: Optional[str] = None) -> dict:
     """Thin wrapper: the builder lives in core.research_loop so the desktop app shows identical data."""
     from core.research_loop import research_loop_view
@@ -976,9 +982,11 @@ def register_callbacks(app: dash.Dash) -> None:
         State("interval-dropdown", "value"),
         State("active-symbol-store", "data"),
         State("days-input", "value"),
+        State("custom-symbol-input", "value"),
         prevent_initial_call=True,
     )
-    def load_chart(n_clicks: int, symbol: str, interval: str, prev_symbol: Optional[str], days: Optional[int] = None):
+    def load_chart(n_clicks: int, symbol: str, interval: str, prev_symbol: Optional[str], days: Optional[int] = None,
+                   custom_symbol: Optional[str] = None):
         """Fetch OHLCV data for *symbol* and re-render the candlestick chart.
 
         Phase 1.2 additions vs Phase 1.1:
@@ -993,6 +1001,8 @@ def register_callbacks(app: dash.Dash) -> None:
 
         if not n_clicks:
             return no_update, no_update, no_update, no_update, no_update, no_update
+
+        symbol = _resolve_symbol(custom_symbol, symbol)                # a typed symbol overrides the list
 
         # -- Subscription housekeeping --------------------------------------
         if prev_symbol and is_crypto_symbol(prev_symbol) and prev_symbol != symbol:

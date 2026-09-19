@@ -132,10 +132,22 @@ def _topbar() -> html.Div:
             _muted("Symbol"),
             dcc.Dropdown(
                 id="symbol-dropdown",
-                options=[{"label": s, "value": s} for s in _SYMBOLS],
+                options=[{"label": ui_options.SYMBOL_LABELS[s], "value": s} for s in _SYMBOLS],   # searchable by symbol or name
                 value=ui_options.DEFAULT_SYMBOL_DASH,
                 clearable=False,
                 style=_DROPDOWN_STYLE,
+            ),
+
+            html.Div(
+                title="Any Binance USDT pair (e.g. PEPEUSDT) or Yahoo ticker (NVDA, ^GSPC, GC=F, EURUSD=X). Overrides the list on Load Chart.",
+                children=dcc.Input(
+                    id="custom-symbol-input",
+                    type="text",
+                    placeholder="or type any symbol",
+                    debounce=True,
+                    style={**_DROPDOWN_STYLE, "width": "120px", "padding": "4px 6px", "border": f"1px solid {THEME['border']}",
+                           "borderRadius": "4px", "backgroundColor": THEME["bg_dark"], "color": THEME["text_main"], "fontSize": "12px"},
+                ),
             ),
 
             _muted("Interval"),
