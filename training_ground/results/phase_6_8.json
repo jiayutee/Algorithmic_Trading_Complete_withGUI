@@ -1,0 +1,67 @@
+{
+  "run_at": "2026-09-19T10:32:38.102601+00:00",
+  "void": false,
+  "window": [
+    "2022-09-10",
+    "2026-09-18"
+  ],
+  "days": 1470,
+  "symbols": [
+    "LINKUSDT",
+    "DOTUSDT",
+    "AVAXUSDT",
+    "ATOMUSDT",
+    "TRXUSDT",
+    "NEARUSDT",
+    "UNIUSDT",
+    "FILUSDT"
+  ],
+  "stats": {
+    "tsmom": {
+      "ann_return": 0.14611796796421417,
+      "ann_vol": 0.4428852006835449,
+      "sharpe": 0.5292277917344665,
+      "max_drawdown": -0.6373934532819975,
+      "calmar": 0.22924296949057027,
+      "total_return": 0.7319685659778417
+    },
+    "ew": {
+      "ann_return": -0.03456272540366434,
+      "ann_vol": 0.6964629619876139,
+      "sharpe": 0.2986914624170073,
+      "max_drawdown": -0.7831984020086948,
+      "calmar": -0.044130229728533886,
+      "total_return": -0.13208392705788763
+    }
+  },
+  "D1_maxdd_diff": {
+    "value": 0.14580494872669736,
+    "ci": [
+      0.01238682235523874,
+      0.4143486305920451
+    ],
+    "halves": [
+      0.24268713617252358,
+      0.1458049487266979
+    ]
+  },
+  "D2_sharpe_diff": {
+    "value": 0.23053632931745927,
+    "ci": [
+      -0.39821028628971,
+      0.7203416597545336
+    ]
+  },
+  "criteria": {
+    "1_D1_ci_lower_above_zero": true,
+    "2_D1_shallower_in_both_halves": true,
+    "3_D2_sharpe_not_materially_worse": true,
+    "CONFIRMED": true
+  },
+  "protocol": {
+    "block": 30,
+    "level": 0.975,
+    "n_boot": 2000,
+    "noninferiority": -0.5
+  }
+}
