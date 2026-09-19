@@ -53,6 +53,7 @@ from core.chart_builder import (
     is_crypto_symbol,
     overlay_signals,
 )
+from core import ui_options
 from core.logger import logger
 from core.trade_rationale import format_rationale, manual_rationale, submit_with_rationale
 
@@ -323,52 +324,28 @@ def _research_loop_view(path: Optional[str] = None) -> dict:
     """Rows for the Research Loop tab's three tables plus a status line. Never raises."""
     empty = {"candidates": [], "paper": [], "runs": [],
              "message": "No research-loop runs yet. Run  python -m core.research_loop run  in a terminal."}
+def _days_or_default(days) -> int:
+    """The Days box, clamped to the same 1..10000 range as the desktop app; falls back to the default if blank/invalid."""
     try:
-        from core.experiment_log import ExperimentLog
-        from core.research_loop import ResearchState
-        log, state = ExperimentLog(path), ResearchState(path)
-        states = {r["candidate"]: r for r in state.all_states()}
-        latest = {}
-        for run in log.list_runs(tag="research-loop", limit=500):            # newest first
-            latest.setdefault(run["params"].get("candidate"), run)
-        candidates = []
-        for name in sorted(set(states) | set(latest)):
-            st, run = states.get(name), latest.get(name)
-            m = run["metrics"] if run else {}
-            f = lambda v, fmt="{:.2f}": fmt.format(v) if isinstance(v, (int, float)) else "—"
-            candidates.append({
-                "candidate": name, "status": st["status"] if st else "candidate",
-                "sharpe": f(m.get("sharpe")), "bh_sharpe": f(m.get("bh_sharpe")), "diff": f(m.get("sharpe_diff"), "{:+.2f}"),
-                "ci": f"[{m['ci_low']:+.2f}, {m['ci_high']:+.2f}]" if "ci_low" in m and "ci_high" in m else "—",
-                "trades": int(m["trades"]) if "trades" in m else "—",
-                "max_dd": f(m.get("max_drawdown") * 100 if "max_drawdown" in m else None, "{:.0f}%"),
-                "verdict": ("PASS" if m.get("PASS") else "fail") if m else "—",
-                "evaluated": run["created_at"][:16].replace("T", " ") if run else "—"})
-        paper = [{"candidate": r["candidate"], "days": r["days"], "return_pct": f"{r['return_pct']:+.2f}", "trades": r["trades"]}
-                 for r in state.paper_pnl().to_dict("records")]
-        runs = []
-        for r in log.list_runs(limit=15):
-            flat = {}
-            for k, v in r["metrics"].items():
-                if isinstance(v, (int, float)) and not isinstance(v, bool):
-                    flat[k] = v
-            key = next((k for k in ("auc", "auc_gbm", "sharpe_diff", "sharpe") if k in flat), next(iter(flat), None))
-            runs.append({"id": r["id"], "when": r["created_at"][:16].replace("T", " "), "name": r["name"][:44],
-                         "model": r["model_type"], "result": f"{key} = {flat[key]:.3f}" if key else "—",
-                         "commit": (r["git_commit"] or "")[:7] + ("*" if r["git_dirty"] else "")})
-        n_paper = sum(1 for c in candidates if c["status"] == "paper")
-        n_ret = sum(1 for c in candidates if c["status"] == "retired")
-        msg = (f"{len(candidates)} candidate(s): {n_paper} in paper trading, {n_ret} retired, "
-               f"{len(candidates) - n_paper - n_ret} still on trial. "
-               + ("" if n_paper else "None has yet passed every promotion test (interval lower bound > 0, both halves positive, "
-                                     ">= 30 trades, drawdown not much worse) -- which is the honest expected outcome for most ideas."))
-        if not candidates and not runs:
-            return empty
-        return {"candidates": candidates, "paper": paper, "runs": runs, "message": msg}
-    except Exception as exc:  # noqa: BLE001 -- a view problem must never break the page
-        logger.warning("[Dash] research loop view failed: %s", exc)
-        return {**empty, "message": f"Research loop data unavailable: {exc}"}
+        d = int(days)
+    except (TypeError, ValueError):
+        return ui_options.DEFAULT_DAYS
+    return d if 1 <= d <= 10000 else ui_options.DEFAULT_DAYS
 
+
+def _fee_fraction(pct, default_pct: float) -> float:
+    """A fee typed as a percent (0.1 = 0.1%) as a fraction, defaulting like the desktop app when blank/invalid."""
+    try:
+        v = float(pct)
+    except (TypeError, ValueError):
+        v = default_pct
+    return max(0.0, min(v, 10.0)) / 100.0
+
+
+def _research_loop_view(path: Optional[str] = None) -> dict:
+    """Thin wrapper: the builder lives in core.research_loop so the desktop app shows identical data."""
+    from core.research_loop import research_loop_view
+    return research_loop_view(path)
 
 def _build_pnl_card(broker) -> tuple:
     """``(total_text, total_style, breakdown_text, balance_text)`` for the P&L card.
@@ -1049,41 +1026,9 @@ def _extract_backtest_metrics(results: dict) -> tuple:
 
 
 def _build_equity_curve_figure(total_asset_value: list):
-    """Build a dark-themed equity-curve line chart from *total_asset_value*.
-
-    Called by ``run_backtest_callback`` in ``register_callbacks``.  Returns an
-    empty placeholder figure when *total_asset_value* is falsy (empty list or
-    None) so the chart area never shows a broken layout.
-    """
-    import plotly.graph_objects as go
-
-    fig = go.Figure()
-    if total_asset_value:
-        fig.add_trace(go.Scatter(
-            y=total_asset_value,
-            mode="lines",
-            line=dict(color=THEME["accent"], width=2),
-            name="Portfolio Value",
-            fill="tozeroy",
-            fillcolor="rgba(88, 166, 255, 0.08)",  # THEME["accent"] @ 8% opacity
-        ))
-    fig.update_layout(
-        paper_bgcolor=THEME["bg_dark"],
-        plot_bgcolor=THEME["bg_card"],
-        font=dict(color=THEME["text_muted"], size=11),
-        margin=dict(l=50, r=10, t=10, b=30),
-        height=200,
-        xaxis=dict(showgrid=False, color=THEME["text_muted"], zeroline=False),
-        yaxis=dict(
-            showgrid=True,
-            gridcolor=THEME["border"],
-            color=THEME["text_muted"],
-            zeroline=False,
-            tickformat="$,.0f",
-        ),
-        showlegend=False,
-    )
-    return fig
+    """Thin wrapper: the builder lives in core.chart_builder so the desktop app draws the same chart."""
+    from core.chart_builder import build_equity_curve_figure
+    return build_equity_curve_figure(total_asset_value)
 
 
 # ---------------------------------------------------------------------------
@@ -1110,9 +1055,10 @@ def register_callbacks(app: dash.Dash) -> None:
         State("symbol-dropdown", "value"),
         State("interval-dropdown", "value"),
         State("active-symbol-store", "data"),
+        State("days-input", "value"),
         prevent_initial_call=True,
     )
-    def load_chart(n_clicks: int, symbol: str, interval: str, prev_symbol: Optional[str]):
+    def load_chart(n_clicks: int, symbol: str, interval: str, prev_symbol: Optional[str], days: Optional[int] = None):
         """Fetch OHLCV data for *symbol* and re-render the candlestick chart.
 
         Phase 1.2 additions vs Phase 1.1:
@@ -1154,7 +1100,7 @@ def register_callbacks(app: dash.Dash) -> None:
                 symbol=symbol,
                 source="Historical",
                 live=False,
-                days=365,
+                days=_days_or_default(days),
                 interval=interval,
                 include_news=False,
             )
@@ -1439,11 +1385,7 @@ def register_callbacks(app: dash.Dash) -> None:
 
     #: Strategy dropdown label → (module, class) for importlib.import_module
     _STRATEGY_CLASS_MAP = {
-        "MACD/RSI":      ("strategies.simple_strategies", "MACD_RSI_Strategy"),
-        "EMA Crossover": ("strategies.simple_strategies", "EMACrossoverStrategy"),
-        "Stochastic":    ("strategies.simple_strategies", "StochasticStrategy"),
-        "GBM (LightGBM)": ("strategies.gbm_strategy", "GBMStrategy"),
-        "Trend Filter (28d)": ("strategies.trend_filter_strategy", "TrendFilterStrategy"),
+        name: (cls.__module__, cls.__name__) for name, cls in __import__("core.strategy_manager", fromlist=["x"]).backtrader_strategies().items()
     }
 
     @app.callback(
@@ -1461,6 +1403,10 @@ def register_callbacks(app: dash.Dash) -> None:
         State("strategy-dropdown", "value"),
         State("bt-cash-input", "value"),
         State("trend-overlay-check", "value"),
+        State("interval-dropdown", "value"),
+        State("days-input", "value"),
+        State("bt-mkt-fee-input", "value"),
+        State("bt-lim-fee-input", "value"),
         prevent_initial_call=True,
     )
     def run_backtest_callback(
@@ -1469,6 +1415,10 @@ def register_callbacks(app: dash.Dash) -> None:
         strategy_name: Optional[str],
         cash: Optional[float],
         trend_overlay: Optional[list] = None,
+        interval: Optional[str] = None,
+        days: Optional[int] = None,
+        mkt_fee_pct: Optional[float] = None,
+        lim_fee_pct: Optional[float] = None,
     ):
         """Run a backtest and update the Backtest Results panel + Equity Curve tab.
 
@@ -1531,7 +1481,8 @@ def register_callbacks(app: dash.Dash) -> None:
                 symbol=symbol,
                 source="Historical",
                 live=False,
-                days=365,
+                days=_days_or_default(days),
+                interval=interval or "1d",     # the SAME interval/days the chart shows, so you test what you inspect
                 include_news=False,  # rule-based strategies / research lab use OHLCV only
             )
             if df is None or df.empty:
@@ -1548,7 +1499,11 @@ def register_callbacks(app: dash.Dash) -> None:
             backtester = Backtester()
             backtester.add_data(df.copy())
             backtester.add_strategy(strategy_cls)
-            results = backtester.run_backtest(cash=initial_cash)
+            results = backtester.run_backtest(
+                cash=initial_cash,
+                market_fee=_fee_fraction(mkt_fee_pct, ui_options.DEFAULT_MARKET_FEE_PCT),
+                limit_fee=_fee_fraction(lim_fee_pct, ui_options.DEFAULT_LIMIT_FEE_PCT),
+            )
 
         except Exception as exc:  # noqa: BLE001
             logger.error("[Dash] run_backtest error: %s", exc)
@@ -1565,9 +1520,7 @@ def register_callbacks(app: dash.Dash) -> None:
         # -- Rebuild main chart with signal markers -------------------------
         signals = results.get("signals", [])
         try:
-            # interval='1d': the loader.load_data() call above this try-block
-            # doesn't pass interval either, so it defaults to '1d' too.
-            chart_fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False, interval='1d')
+            chart_fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False, interval=interval or "1d")
             add_live_tick_trace(chart_fig)
             if signals:
                 overlay_signals(chart_fig, signals)
@@ -1677,6 +1630,8 @@ def register_callbacks(app: dash.Dash) -> None:
         State("active-symbol-store",      "data"),
         State("strategy-dropdown",        "value"),
         State("bt-cash-input",            "value"),
+        State("interval-dropdown",        "value"),
+        State("days-input",               "value"),
         prevent_initial_call=True,
     )
     def run_research_lab(
@@ -1684,6 +1639,8 @@ def register_callbacks(app: dash.Dash) -> None:
         symbol: Optional[str],
         strategy_name: Optional[str],
         cash: Optional[float],
+        interval: Optional[str] = None,
+        days: Optional[int] = None,
     ):
         """Run all Research Lab analytics for the loaded symbol/strategy.
 
@@ -1790,7 +1747,8 @@ def register_callbacks(app: dash.Dash) -> None:
                 symbol=symbol,
                 source="Historical",
                 live=False,
-                days=365,
+                days=_days_or_default(days),
+                interval=interval or "1d",
                 include_news=False,  # rule-based strategies / research lab use OHLCV only
             )
             if df is None or df.empty:

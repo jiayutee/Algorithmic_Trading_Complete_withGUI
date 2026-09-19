@@ -330,3 +330,41 @@ def _empty_figure(height: int = 600) -> go.Figure:
         margin=dict(l=20, r=20, t=20, b=20),
     )
     return fig
+
+
+def build_equity_curve_figure(total_asset_value: list):
+    """Build a dark-themed equity-curve line chart from *total_asset_value*.
+
+    Shared by the Dash Equity Curve tab and the desktop app's Equity Curve tab.  Returns an
+    empty placeholder figure when *total_asset_value* is falsy (empty list or
+    None) so the chart area never shows a broken layout.
+    """
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    if total_asset_value:
+        fig.add_trace(go.Scatter(
+            y=total_asset_value,
+            mode="lines",
+            line=dict(color=THEME["accent"], width=2),
+            name="Portfolio Value",
+            fill="tozeroy",
+            fillcolor="rgba(88, 166, 255, 0.08)",  # THEME["accent"] @ 8% opacity
+        ))
+    fig.update_layout(
+        paper_bgcolor=THEME["bg_dark"],
+        plot_bgcolor=THEME["bg_card"],
+        font=dict(color=THEME["text_muted"], size=11),
+        margin=dict(l=50, r=10, t=10, b=30),
+        height=200,
+        xaxis=dict(showgrid=False, color=THEME["text_muted"], zeroline=False),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor=THEME["border"],
+            color=THEME["text_muted"],
+            zeroline=False,
+            tickformat="$,.0f",
+        ),
+        showlegend=False,
+    )
+    return fig
