@@ -17,3 +17,35 @@ not rule out that the effect belongs to that one regime. This tests the identica
 - Survivorship: all 8 coins survive to today. The 2019-2022 period includes several coins' largest run-ups.
 - An interval that includes zero means the earlier period neither supports nor refutes the effect; it does not falsify 6.8.
 - A result here applies to crypto only; nothing is implied about equities or other assets.
+
+---
+
+# Results (run 2026-09-19; protocol exactly as above, nothing tuned)
+
+`training_ground/results/phase_6_9.json`. Reproduce: `python training_ground/experiments_6_9.py`.
+All 8 symbols had data. Window 2019-02-14 -> 2022-09-09 (1,304 days), nothing after the cutoff used.
+
+| | Sharpe | ann. return | ann. vol | max drawdown |
+|---|---|---|---|---|
+| Equal weight | 1.25 | 100.8% | 87.3% | -74.3% |
+| TSMOM (28-day trend filter) | 1.70 | 125.9% | 58.0% | -47.7% |
+
+| test | value | 97.5% interval | halves |
+|---|---|---|---|
+| D1 maxDD(TSMOM) - maxDD(EW) | **+26.5 pp shallower** | [+4.3, +46.0] pp | +24.9 / +26.5 pp |
+| D2 Sharpe(TSMOM) - Sharpe(EW) | +0.45 | [-0.15, +1.07] (bound -0.50) | - |
+
+**Verdict: drawdown reduction CONFIRMED** on all three pre-registered criteria, in a period disjoint from Phases 6.7/6.8.
+
+## Reading it
+- **The drawdown effect now has three looks:** observed on the original 8 (6.7: -67% -> -37.5%), confirmed on 8 other coins in the
+  same period (6.8: +14.6 pp), and confirmed in an earlier period (6.9: +26.5 pp, lower bound clearly above zero this time).
+  Same sign, same mechanism (sitting in cash through down-trends), varying size.
+- **Still a smoother ride, not proven extra return:** the Sharpe difference interval [-0.15, +1.07] includes zero here too.
+  The absolute numbers (EW Sharpe 1.25, +100%/yr) show this period was an extraordinary bull run for survivors; the
+  filter's Sharpe gain is plausibly regime-dependent and is not claimed.
+- **Limits that remain:** crypto only; survivorship (every coin here survived to today, and 2019-2022 flatters them);
+  the rule was fixed in advance but was *chosen* after seeing 2022-2026, so 28 days is not independently validated as
+  optimal (it was never tuned, but nor was any alternative tested). A max drawdown of -47.7% is still very large.
+- What would be worth doing with this: offer a trend-filter *overlay* (hold a position only while its 28-day return is
+  positive) as a risk-reduction option in the app, described as drawdown reduction and not as alpha.

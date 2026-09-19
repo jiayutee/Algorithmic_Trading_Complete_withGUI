@@ -1,0 +1,68 @@
+{
+  "run_at": "2026-09-19T10:38:08.040412+00:00",
+  "void": false,
+  "window": [
+    "2019-02-14",
+    "2022-09-09"
+  ],
+  "days": 1304,
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "LTCUSDT",
+    "LINKUSDT",
+    "TRXUSDT"
+  ],
+  "stats": {
+    "tsmom": {
+      "ann_return": 1.2591623855992857,
+      "ann_vol": 0.5804935608573142,
+      "sharpe": 1.6980118469813292,
+      "max_drawdown": -0.47747240702573435,
+      "calmar": 2.637141679961876,
+      "total_return": 17.38711635910116
+    },
+    "ew": {
+      "ann_return": 1.0078289656041033,
+      "ann_vol": 0.8734497064678926,
+      "sharpe": 1.2514431990878179,
+      "max_drawdown": -0.7426717165295476,
+      "calmar": 1.357031570171565,
+      "total_return": 11.064860150815734
+    }
+  },
+  "D1_maxdd_diff": {
+    "value": 0.2651993095038132,
+    "ci": [
+      0.04264947966257066,
+      0.4597877885311816
+    ],
+    "halves": [
+      0.24938058283586018,
+      0.2651993095038123
+    ]
+  },
+  "D2_sharpe_diff": {
+    "value": 0.44656864789351136,
+    "ci": [
+      -0.15077889805159678,
+      1.06944703937951
+    ]
+  },
+  "criteria": {
+    "1_D1_ci_lower_above_zero": true,
+    "2_D1_shallower_in_both_halves": true,
+    "3_D2_sharpe_not_materially_worse": true,
+    "CONFIRMED": true
+  },
+  "protocol": {
+    "block": 30,
+    "level": 0.975,
+    "n_boot": 2000,
+    "noninferiority": -0.5
+  },
+  "cutoff": "2022-09-09"
+}
