@@ -132,6 +132,9 @@ def normalize_query(query: str) -> str:
 class BaseNewsSource:
     name = "base"
     reliability = 0.5
+    # "text": free-text search engines (Brave, DuckDuckGo, GDELT, RSS filters) -- search by NAME ("Bitcoin").
+    # "ticker": ticker-based data APIs (OpenBB/yfinance) -- must be given the symbol ("BTCUSDT"), not a name.
+    query_style = "text"
 
     def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
         raise NotImplementedError
@@ -568,6 +571,7 @@ class OpenBBNewsSource(BaseNewsSource):
     # BACKUP NOTE: original news sources (Brave, DDG, GDELT, RSS) remain
     # active — this source is additive, not a replacement.
     """
+    query_style = "ticker"
     name = "openbb_news"
     reliability = 0.85
 

@@ -290,3 +290,22 @@ def test_default_budget_is_six_seconds_and_can_be_overridden(monkeypatch):
     monkeypatch.setenv("NEWS_FETCH_DEADLINE_SECONDS", "3")
     assert NewsPipeline(sources=[]).deadline_seconds == 3.0
     assert NewsPipeline(sources=[], deadline_seconds=1.5).deadline_seconds == 1.5
+
+
+# ------------------------------------------------ ticker-based sources need the symbol, not a name
+
+class TickerSource(FakeSource):
+    query_style = "ticker"
+
+
+def test_ticker_based_sources_get_the_symbol_and_text_sources_get_the_name(tmp_path):
+    text = FakeSource("brave", [item("Bitcoin news today", "https://a.com/1")])
+    ticker = TickerSource("openbb_news", [item("BTC ETF flows", "https://a.com/2")])
+    pipeline([text, ticker], tmp_path).fetch_news_items("BTCUSDT")
+    assert text.queries == ["Bitcoin"] and ticker.queries == ["BTCUSDT"]
+
+
+def test_the_real_openbb_source_is_declared_ticker_style_and_search_engines_text_style():
+    from core.news_sources import BraveSearchSource, DuckDuckGoSource, GDELTSource, OpenBBNewsSource, RssSource
+    assert OpenBBNewsSource.query_style == "ticker"
+    assert all(cls.query_style == "text" for cls in (BraveSearchSource, DuckDuckGoSource, GDELTSource, RssSource))

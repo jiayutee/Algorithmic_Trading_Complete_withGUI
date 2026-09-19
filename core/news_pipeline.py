@@ -340,8 +340,12 @@ class NewsPipeline:
 
         return cls(sources=sources)
 
-    def _fetch_all_sources(self, query: str, limit: int) -> list[NewsItem]:
-        """Run every healthy source in parallel under one time budget."""
+    def _fetch_all_sources(self, query: str, limit: int, ticker_query: str | None = None) -> list[NewsItem]:
+        """Run every healthy source in parallel under one time budget.
+
+        Text-search sources get ``query`` (a name such as "Bitcoin"); ticker-based sources
+        (``query_style == "ticker"``, e.g. OpenBB) get ``ticker_query`` (the symbol as given).
+        """
         active = []
         for source in self.sources:
             if self.health.allow(source.name):
@@ -359,7 +363,8 @@ class NewsPipeline:
         def worker(source: BaseNewsSource) -> None:
             t0 = time.monotonic()
             try:
-                items, err = list(source.fetch(query, limit) or []), ""
+                q = ticker_query if (ticker_query and getattr(source, "query_style", "text") == "ticker") else query
+                items, err = list(source.fetch(q, limit) or []), ""
             except Exception as exc:  # noqa: BLE001
                 items, err = [], f"{type(exc).__name__}: {exc}"[:120]
             with lock:
@@ -398,7 +403,7 @@ class NewsPipeline:
             logger.warning("No news sources configured. Returning an empty result set.")
             return []
 
-        gathered = self._fetch_all_sources(query_variants[0], limit)
+        gathered = self._fetch_all_sources(query_variants[0], limit, ticker_query=symbol)
         store = self._open_store()
         try:
             items = self._enrich_and_deduplicate(gathered, symbol=symbol, company_name=company_name, store=store)
