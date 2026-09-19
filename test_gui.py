@@ -639,3 +639,50 @@ if __name__ == "__main__":
     window = MockTradingGUI()
     window.show()
     sys.exit(app.exec_())
+
+
+# ---------------------------------------------------------------------------
+# DataLoadWorker -> chart/status-bar hand-off (Issue Tracker: intermittent freeze)
+# ---------------------------------------------------------------------------
+
+def test_data_load_result_reaches_main_thread_and_updates_status(qapp):
+    """Each load must deliver results_ready to _on_data_loaded ON THE MAIN THREAD and update the status bar
+    within a bounded wait. Repeated 10x because the reported freeze was intermittent. Finding so far
+    (2026-09-19, offscreen): 10/10 pass -- the freeze has not been reproduced here, so no fix was made.
+    NOTE: teardown uses destroy(); close() on a MainWindow with a WebEngine view killed the interpreter."""
+    import threading
+    import time
+    from unittest.mock import MagicMock
+
+    import numpy as np
+    import pandas as pd
+    from PyQt5.QtCore import QThread
+    from ui.main_window import MainWindow
+
+    def frame(n=120):
+        idx = pd.date_range("2026-01-01", periods=n, freq="D")
+        p = 100 + np.cumsum(np.random.randn(n))
+        return pd.DataFrame({"Open": p, "High": p + 1, "Low": p - 1, "Close": p, "Volume": 1000.0}, index=idx)
+
+    sm = MagicMock()
+    sm.get_available_strategies.return_value = ["MACD/RSI", "EMA Crossover"]
+    failures = []
+    for i in range(10):
+        dl = MagicMock()
+        dl.load_data.side_effect = lambda **kw: (time.sleep(0.02), frame())[1]
+        win = MainWindow(data_loader=dl, strategy_manager=sm, broker_manager=MagicMock(), missing_deps=[])
+        threads = []
+        orig = win._on_data_loaded
+        win._on_data_loaded = lambda df, sym, orig=orig, threads=threads: (
+            threads.append(QThread.currentThread() == qapp.thread()), orig(df, sym))[1]
+        win.load_data()
+        deadline = time.time() + 5
+        while time.time() < deadline and not win.statusBar().currentMessage().startswith(("Loaded", "Error")):
+            qapp.processEvents()
+            time.sleep(0.01)
+        msg = win.statusBar().currentMessage()
+        if not msg.startswith("Loaded") or threads != [True]:
+            failures.append((i, msg, threads))
+        win._data_load_worker.wait(2000)
+        win.destroy()
+    assert not failures, f"data-load hand-off failed in {len(failures)}/10 runs: {failures}"
