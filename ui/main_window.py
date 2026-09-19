@@ -316,7 +316,23 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._muted_label("Symbol"))
         self.symbol_combo = QComboBox()
         self.symbol_combo.addItems(ui_options.SYMBOLS)
-        self.symbol_combo.setFixedWidth(110)
+        for _i, _sym in enumerate(ui_options.SYMBOLS):
+            self.symbol_combo.setItemData(_i, ui_options.SYMBOL_LABELS[_sym], Qt.ToolTipRole)    # "AAPL - Apple"
+        # Editable: type ANY symbol (a Binance USDT pair, a Yahoo ticker such as NVDA, ^GSPC, GC=F, EURUSD=X); the box
+        # autocompletes on the catalogue and matches names too, and the text is always upper-cased.
+        self.symbol_combo.setEditable(True)
+        self.symbol_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.symbol_combo.setMaxVisibleItems(20)
+        self.symbol_combo.lineEdit().setPlaceholderText("symbol")
+        self.symbol_combo.lineEdit().editingFinished.connect(
+            lambda: self.symbol_combo.setCurrentText(self.symbol_combo.currentText().strip().upper()))
+        from PyQt5.QtWidgets import QCompleter
+        _completer = QCompleter([ui_options.SYMBOL_LABELS[s] for s in ui_options.SYMBOLS] + list(ui_options.SYMBOLS), self.symbol_combo)
+        _completer.setCaseSensitivity(Qt.CaseInsensitive)
+        _completer.setFilterMode(Qt.MatchContains)
+        _completer.activated[str].connect(lambda t: self.symbol_combo.setCurrentText(t.split(" \u2014 ")[0]))
+        self.symbol_combo.setCompleter(_completer)
+        self.symbol_combo.setFixedWidth(130)
         layout.addWidget(self.symbol_combo)
 
         # Interval

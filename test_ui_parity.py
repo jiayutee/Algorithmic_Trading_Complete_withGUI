@@ -77,3 +77,18 @@ def test_research_loop_view_is_shared_between_the_uis():
     from dash_app.callbacks import _research_loop_view
     from core.research_loop import research_loop_view
     assert _research_loop_view().keys() == research_loop_view().keys()
+
+
+def test_dash_symbol_dropdown_shows_names_and_a_custom_symbol_box_overrides_it(dash_module):
+    ids = _by_id(dash_module.app.layout)
+    opts = {o["value"]: o["label"] for o in ids["symbol-dropdown"].options}
+    assert len(opts) >= 80 and opts["AAPL"] == "AAPL — Apple"
+    assert "custom-symbol-input" in ids
+    load_states = {s["id"] for k, cb in dash_module.app.callback_map.items() if "main-chart" in k and "chart-status" in k for s in cb["state"]}
+    assert "custom-symbol-input" in load_states
+
+
+def test_typed_symbol_wins_over_the_dropdown_and_is_normalised():
+    from dash_app.callbacks import _resolve_symbol
+    assert _resolve_symbol("  nvda ", "AAPL") == "NVDA" and _resolve_symbol("^gspc", None) == "^GSPC"
+    assert _resolve_symbol("", "AAPL") == "AAPL" and _resolve_symbol(None, "AAPL") == "AAPL" and _resolve_symbol("   ", "SPY") == "SPY"

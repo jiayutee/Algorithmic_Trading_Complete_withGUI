@@ -5,7 +5,10 @@ Change a list here and both UIs change; tests/test_ui_parity.py fails if either 
 """
 from __future__ import annotations
 
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "AAPL", "TSLA", "GOLD", "SPY", "QQQ"]
+from core.instruments import all_symbols, label_of
+
+SYMBOLS = all_symbols()          # 81 verified instruments (core/instruments.py); the desktop box also accepts any typed symbol
+SYMBOL_LABELS = {s: label_of(s) for s in SYMBOLS}
 INTERVALS = ["1d", "1h", "15m", "5m", "1m"]
 DEFAULT_SYMBOL_DASH = "AAPL"
 DEFAULT_DAYS = 365
