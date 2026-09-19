@@ -56,3 +56,11 @@ def test_bootstrap_resamples_events_not_rows():
 def test_calibration_table_shape():
     t = e.calibration_table(frame(300, 0.08, 0.08, 100))
     assert t and t[0]["n"] == 300
+
+
+def test_one_sided_books_are_excluded():
+    df = frame(10, 0.99, 0.5, 5)
+    df["yes_bid"] = 0.0                                          # empty bid -> ask 0.99 is a placeholder, not an offer
+    assert e.two_sided(df).empty
+    ok = frame(10, 0.60, 0.5, 5)
+    assert len(e.two_sided(ok)) == 10

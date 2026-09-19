@@ -30,6 +30,7 @@ N_BOOT = 5000
 K = 2
 LEVEL = 1 - 0.05 / K
 MIN_MARKETS, MIN_EVENTS = 100, 30
+MIN_BID, MAX_SPREAD = 0.01, 0.10     # amendment 2: two-sided book required (empty books show ask ~0.99 / bid ~0)
 SEED = 0
 
 
@@ -141,18 +142,25 @@ def calibration_table(df: pd.DataFrame) -> list:
     return [{"bucket": str(k), "n": int(r.n), "mean_ask": float(r.mean_ask), "hit_rate": float(r.hit_rate)} for k, r in t.iterrows()]
 
 
+def two_sided(df: pd.DataFrame) -> pd.DataFrame:
+    """Amendment 2: keep only snapshots with a real two-sided book (bid >= 0.01 and ask - bid <= 0.10)."""
+    return df[(df["yes_bid"] >= MIN_BID) & (df["yes_ask"] - df["yes_bid"] <= MAX_SPREAD)].reset_index(drop=True)
+
+
 def run(df: pd.DataFrame, n_boot: int = N_BOOT) -> dict:
+    n_before = len(df)
+    df = two_sided(df)
     hyps = [test_bucket(df, "L longshots (ask<=0.10): mean edge < 0", df["yes_ask"] <= LONGSHOT, "negative", n_boot),
             test_bucket(df, "F favorites (ask>=0.90): mean edge > 0", df["yes_ask"] >= FAVORITE, "positive", n_boot)]
     return {"n_markets": int(len(df)), "n_events": int(df["event"].nunique()) if len(df) else 0,
             "window": [str(pd.to_datetime(df["close_ts"].min(), unit="s")), str(pd.to_datetime(df["close_ts"].max(), unit="s"))] if len(df) else None,
-            "dropped": int(df.attrs.get("dropped", 0)), "hypotheses": hyps, "calibration": calibration_table(df) if len(df) else [],
+            "dropped": int(df.attrs.get("dropped", 0)), "dropped_one_sided": int(n_before - len(df)), "hypotheses": hyps, "calibration": calibration_table(df) if len(df) else [],
             "protocol": {"min_volume": MIN_VOLUME, "min_life_h": MIN_LIFE_H, "sample": SAMPLE, "lead_h": LEAD_H,
                          "longshot": LONGSHOT, "favorite": FAVORITE, "level": LEVEL, "n_boot": n_boot, "seed": SEED}}
 
 
 def _fmt(res: dict) -> str:
-    lines = [f"{res['n_markets']} markets / {res['n_events']} events, window {res['window']}, dropped {res['dropped']}", ""]
+    lines = [f"{res['n_markets']} markets / {res['n_events']} events, window {res['window']}, dropped {res['dropped']} (+{res['dropped_one_sided']} one-sided books)", ""]
     for h in res["hypotheses"]:
         if h.get("mean_edge") is None and h.get("mean_net") is None:
             lines.append(f"{h['id']}: n={h['n_markets']} -- {h.get('note')}")
