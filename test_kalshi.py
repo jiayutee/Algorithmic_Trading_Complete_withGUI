@@ -203,3 +203,12 @@ def test_scan_end_to_end_skips_broken_event_and_sorts():
     }
     sigs = scan(client(routes, max_retries=1))
     assert [s.market_id for s in sigs] == ["E-2"] and sigs[0].kind == "event_buy_all_yes"
+
+
+def test_candlesticks_series_from_ticker_prefix_and_empty():
+    s = FakeSession({"/series/KXABC/markets/KXABC-26-X/candlesticks": FakeResp(payload={"candlesticks": [{"end_period_ts": 5}]}),
+                     "/series/S2/markets/KXABC-26-X/candlesticks": FakeResp(payload={})})
+    c = KalshiClient(session=s, min_interval=0, sleep=lambda x: None)
+    assert c.get_candlesticks("KXABC-26-X", 0, 10)[0]["end_period_ts"] == 5
+    assert s.calls[0][1] == {"start_ts": 0, "end_ts": 10, "period_interval": 60}
+    assert c.get_candlesticks("KXABC-26-X", 0, 10, series_ticker="S2") == []

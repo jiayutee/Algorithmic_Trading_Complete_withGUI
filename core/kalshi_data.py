@@ -243,6 +243,16 @@ class KalshiClient:
                      mutually_exclusive=bool(ev.get("mutually_exclusive")), category=ev.get("category", ""),
                      markets=[parse_market(m) for m in raw_markets])
 
+    def get_candlesticks(self, ticker: str, start_ts: int, end_ts: int, period_minutes: int = 60,
+                         series_ticker: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Historical candles (period 1, 60 or 1440 minutes). ``series_ticker`` defaults to the ticker's prefix
+        before the first '-', which matches Kalshi's naming (verified 2026-09-19). Each candle has
+        ``end_period_ts`` plus ``price`` / ``yes_bid`` / ``yes_ask`` blocks of ``*_dollars`` strings."""
+        series = series_ticker or ticker.split("-")[0]
+        data = self._get(f"/series/{series}/markets/{ticker}/candlesticks",
+                         {"start_ts": int(start_ts), "end_ts": int(end_ts), "period_interval": int(period_minutes)})
+        return data.get("candlesticks") or []
+
     def settled_markets(self, *, event_ticker: Optional[str] = None, series_ticker: Optional[str] = None,
                         limit: int = 100) -> List[Market]:
         """Historical outcomes: settled markets with ``result`` True (YES) / False (NO)."""
