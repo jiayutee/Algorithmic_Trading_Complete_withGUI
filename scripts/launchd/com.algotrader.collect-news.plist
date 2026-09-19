@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.algotrader.collect-news</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/jiayutee/Dev/Projects/Algorithmic_Trading_Complete_withGUI/scripts/run_collectors.sh</string>
+        <string>news</string>
+    </array>
+    <!-- local time; if the Mac was asleep at the scheduled time launchd runs the job on wake -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>20</integer></dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/jiayutee/Dev/Projects/Algorithmic_Trading_Complete_withGUI/logs/collectors-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jiayutee/Dev/Projects/Algorithmic_Trading_Complete_withGUI/logs/collectors-launchd.log</string>
+</dict>
+</plist>

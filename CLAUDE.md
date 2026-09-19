@@ -81,6 +81,11 @@ scripts/
 - News fetch budget: `NEWS_FETCH_DEADLINE_SECONDS` (default 6); sources still running when it expires are abandoned and
   skipped for a cool-down after repeated failures
 - IBKR (Phase 4.1): opt-in. Set `IBKR_ENABLED=1` (+ optional `IBKR_HOST`/`IBKR_PORT` (default 7497 = TWS paper; Gateway paper 4002)/`IBKR_CLIENT_ID`) and run TWS/Gateway with API enabled; needs `pip install ib_insync`. Tests use a mocked `ib_insync`; a live connection is only for manual verification. Orders always go through the live-order guard.
+- Daily data collectors (launchd, plain Python, no Claude tokens): `com.algotrader.collect-news` (07:20) and
+  `com.algotrader.collect-kalshi` (07:05, 12:05, 17:05, local time) run `scripts/run_collectors.sh news|kalshi`, log to
+  `logs/collectors.log`. Plist sources: `scripts/launchd/`; installed copies in `~/Library/LaunchAgents/`.
+  Check: `launchctl list | grep collect`, `python -m core.news_collector status`, `python -m core.kalshi_collector status`.
+  Stop: `launchctl bootout gui/$(id -u)/com.algotrader.collect-news` (same for `-kalshi`).
 - Research loop: `python -m core.research_loop run|status` (also visible in the Dash "Research Loop" tab). Promote/retire
   rules are fixed in the module docstring; retired strategies never revive automatically
 - Experiment log: `python -m core.experiment_log list|show|best|compare` (file: training_ground/results/experiments.sqlite3,
