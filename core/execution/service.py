@@ -41,6 +41,20 @@ _INTERVAL_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "
 _DEFAULT_HISTORY_DAYS = {"1m": 3, "5m": 10, "15m": 20, "30m": 30, "1h": 60, "4h": 120, "1d": 500}
 
 
+def paper_refusal(symbol: str) -> str:
+    """Plain-words reason the service will not trade ``symbol`` in paper, or "" if it will. Indices, futures and FX are for
+    charts and backtests only: they cannot be bought directly / need contract, margin or lot models the paper broker lacks.
+    (Mirrors core/instruments.py; kept here so the service is safe on its own.)"""
+    s = symbol.strip().upper()
+    if s.startswith("^"):
+        return f"{symbol} is chart/backtest-only: an index cannot be bought directly (use an ETF such as SPY or QQQ)"
+    if s.endswith("=F"):
+        return f"{symbol} is chart/backtest-only: futures need contract and margin handling that the paper broker does not model"
+    if s.endswith("=X"):
+        return f"{symbol} is chart/backtest-only: FX needs lot sizes, leverage and rollover that the paper broker does not model"
+    return ""
+
+
 def interval_seconds(interval: str) -> int:
     if interval not in _INTERVAL_SECONDS:
         raise ValueError(f"unsupported interval {interval!r}; use one of {sorted(_INTERVAL_SECONDS)}")
@@ -85,6 +99,10 @@ class ExecutionService:
             raise PaperOnlyError(f"paper only: refusing to trade through {type(broker).__name__}")
         if not broker.strict_prices:
             raise PaperOnlyError("the paper broker must be created with strict_prices=True (otherwise it fills at invented prices)")
+        for sym in config.symbols:
+            reason = paper_refusal(sym)
+            if reason:
+                raise ValueError(reason)
         self.broker, self.loader, self.signal, self.cfg = broker, data_loader, signal, config
         self.journal = journal or ExecutionJournal()
         self.gate = risk_gate or RiskGate(config.risk)

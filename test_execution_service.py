@@ -438,3 +438,14 @@ def test_lease_is_renewed_between_ticks_and_a_lost_lease_stops_the_loop(tmp_path
 def test_default_lease_ttl_is_capped_so_a_crashed_runner_is_replaced_within_minutes(tmp_path):
     svc, *_ = make(tmp_path, poll_seconds=300)
     assert svc.lease_ttl == 180.0
+
+
+@pytest.mark.parametrize("sym,word", [("^GSPC", "index"), ("GC=F", "futures"), ("EURUSD=X", "FX")])
+def test_instruments_that_cannot_really_be_bought_are_refused_up_front(tmp_path, sym, word):
+    with pytest.raises(ValueError, match=f"chart/backtest-only.*{word}"):
+        make(tmp_path, symbols=(sym,))
+
+
+def test_stocks_etfs_and_any_crypto_pair_are_accepted(tmp_path):
+    svc, *_ = make(tmp_path, symbols=("AAPL", "SPY", "PEPEUSDT"))
+    assert svc.cfg.symbols == ["AAPL", "SPY", "PEPEUSDT"]
