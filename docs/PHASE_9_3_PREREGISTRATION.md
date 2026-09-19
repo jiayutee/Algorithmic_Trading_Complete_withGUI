@@ -16,11 +16,19 @@ tuned, deviations labelled exploratory.
 - Outcome: `result` ("yes" = 1, "no" = 0). Fee: `core.kalshi_arbitrage.taker_fee` (assumed schedule, per contract).
 
 ## Hypotheses (K = 2, Bonferroni -> 97.5% intervals)
-Net return per contract = `outcome - ask - fee` for a BUY of the relevant side.
+Mispricing edge per contract = `outcome - ask` (BEFORE fees) for a BUY of YES. Net edge = `outcome - ask - fee`.
 | id | claim | statistic |
 |----|-------|-----------|
-| L | Longshots are overpriced: buying YES when ask <= 0.10 has negative mean net return | mean(YES net) among ask <= 0.10 |
-| F | Favorites are underpriced: buying YES when ask >= 0.90 has positive mean net return | mean(YES net) among ask >= 0.90 |
+| L | Longshots are overpriced: buying YES when ask <= 0.10 has negative mean edge | mean(outcome - ask) among ask <= 0.10 |
+| F | Favorites are underpriced: buying YES when ask >= 0.90 has positive mean edge | mean(outcome - ask) among ask >= 0.90 |
+
+> **Amendment (2026-09-19, before any real-data run):** the first draft defined the statistic NET of fees.
+> Writing the test showed that made L trivially "true" for a perfectly calibrated market (any fair-priced
+> contract loses the fee), so it would have measured fees, not mispricing. The finding criteria now use the
+> pre-fee edge; the net-of-fee mean and its interval are reported alongside, and a finding is additionally
+> labelled **tradable** only if the net-of-fee interval also clears zero in the claimed direction
+> (for L that means the *short* side: sell YES / buy NO -- see below).
+> For L the tradable question is whether buying NO at `1 - yes_bid` beats fees; that mean is reported too.
 
 Intervals: bootstrap resampling **events** (markets in one event are correlated), 5,000 resamples.
 
