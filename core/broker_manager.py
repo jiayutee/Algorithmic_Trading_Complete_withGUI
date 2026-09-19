@@ -1,4 +1,5 @@
 import logging
+import os
 
 try:
     from brokers.alpaca_connector import AlpacaConnector
@@ -28,6 +29,13 @@ except ImportError:
     MexcConnector = None
     _MEXC_AVAILABLE = False
 
+try:
+    from brokers.ib_connector import IBKRConnector
+    _IBKR_AVAILABLE = True
+except ImportError:                      # ib_insync not installed
+    IBKRConnector = None
+    _IBKR_AVAILABLE = False
+
 from brokers.simulatedbroker import SimulatedBroker
 from brokers.execution_guard import get_guard
 
@@ -38,7 +46,8 @@ class BrokerManager:
     def __init__(self, alpaca_key=None, alpaca_secret=None,
                  binance_key=None, binance_secret=None, binance_testnet_key=None, binance_testnet_secret=None,
                  kucoin_key=None, kucoin_secret=None, kucoin_password=None,
-                 mexc_key=None, mexc_secret=None):
+                 mexc_key=None, mexc_secret=None,
+                 ibkr_enabled=None, ibkr_host=None, ibkr_port=None, ibkr_client_id=None):
         self.brokers = {
             "Simulator": SimulatedBroker(),
         }
@@ -93,6 +102,24 @@ class BrokerManager:
         except Exception as e:
             logger.warning("Failed to connect to MEXC: %s", e)
             self.brokers["MEXC"] = None
+
+        # Interactive Brokers (needs ib_insync AND a running TWS/Gateway). Opt-in: connecting opens a socket, so it is
+        # never attempted unless IBKR_ENABLED=1 (or ibkr_enabled=True). Settings: IBKR_HOST/IBKR_PORT/IBKR_CLIENT_ID.
+        if ibkr_enabled is None:
+            ibkr_enabled = os.getenv("IBKR_ENABLED", "").strip().lower() in ("1", "true", "yes")
+        self.brokers["IBKR"] = None
+        if ibkr_enabled:
+            if not _IBKR_AVAILABLE:
+                logger.warning("IBKR enabled but ib_insync is not installed (pip install ib_insync)")
+            else:
+                try:
+                    self.brokers["IBKR"] = IBKRConnector(
+                        host=ibkr_host or os.getenv("IBKR_HOST", "127.0.0.1"),
+                        port=int(ibkr_port or os.getenv("IBKR_PORT", "7497")),
+                        client_id=int(ibkr_client_id or os.getenv("IBKR_CLIENT_ID", "1")))
+                except Exception as e:      # TWS/Gateway not running, API disabled, port wrong...
+                    logger.warning("Failed to connect to IBKR (is TWS/Gateway running with API enabled?): %s", e)
+                    self.brokers["IBKR"] = None
 
         # Make the live-order safety state obvious in the log on every start.
         logger.warning("Live order guard: %s", get_guard().describe())
@@ -149,6 +176,13 @@ class BrokerManager:
 # Internal helpers — kept outside the class to stay testable in isolation
 # ---------------------------------------------------------------------------
 
+def _to_float(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_portfolio(broker_name: str, broker) -> dict:
     """Pull cash + positions from a single broker connector.
 
@@ -157,7 +191,7 @@ def _extract_portfolio(broker_name: str, broker) -> dict:
     - AlpacaConnector  → TradingClient; no account-level helper yet
     - BinanceConnector → no account-level helper yet
     - KuCoinConnector / MexcConnector → ccxt client; unified fetch_balance()
-    - IBKRConnector    → get_account_info() (not currently wired into BrokerManager)
+    - IBKRConnector    → get_account_info() + get_positions() (opt-in via IBKR_ENABLED)
 
     For connectors that don't expose an account method we return what we can
     and mark the rest as None rather than raising.
@@ -183,12 +217,15 @@ def _extract_portfolio(broker_name: str, broker) -> dict:
             entry["error"] = str(exc)
         return entry
 
-    # --- IBKRConnector (has get_account_info but no .positions dict) ---
+    # --- IBKRConnector (get_account_info + get_positions; IB reports numbers as strings) ---
     if hasattr(broker, "get_account_info"):
         try:
             info = broker.get_account_info()
-            entry["cash"] = info.get("available_funds") or info.get("buying_power")
+            entry["cash"] = _to_float(info.get("available_funds") or info.get("buying_power"))
+            entry["portfolio_value"] = _to_float(info.get("net_liquidation"))
             entry["account_info"] = info
+            if hasattr(broker, "get_positions"):
+                entry["positions"] = broker.get_positions()
         except Exception as exc:
             logger.warning("get_portfolio: %s get_account_info failed: %s", broker_name, exc)
             entry["error"] = str(exc)
