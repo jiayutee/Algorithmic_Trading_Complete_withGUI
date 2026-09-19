@@ -20,6 +20,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.experiment_log import ExperimentLog  # noqa: E402
 from core.feature_engineering import build_features, make_target  # noqa: E402
 from core.ml_validation import (  # noqa: E402
     _auc, block_bootstrap_auc_ci, paired_block_bootstrap_auc_diff, walk_forward_predict,
@@ -228,11 +229,32 @@ def _fmt(key: str, r: dict) -> str:
             f"{'*** FINDING ***' if c['FINDING'] else 'no evidence'}")
 
 
+def log_results(results: dict, n_boot: int) -> list:
+    """Record every experiment as one run in the local experiment log. Never raises."""
+    ids = []
+    try:
+        log = ExperimentLog()
+        protocol = {"days": DAYS, "train": TRAIN, "retrain_every": RETRAIN, "fee": FEE, "block": BLOCK,
+                    "n_boot": n_boot, "ci_level_directional": LEVEL_ADJ, "symbols": SYMBOLS}
+        for key, r in results.items():
+            metrics = {k: v for k, v in r.items() if k not in ("name", "auc_per_symbol")}
+            metrics["FINDING"] = bool(r.get("criteria", {}).get("FINDING", r.get("gbm_adds_value", False)))
+            ids.append(log.log_run(
+                name=r.get("name", key), model_type="lightgbm", params={**protocol, "experiment": key,
+                                                                         "horizon": r.get("horizon", 1)},
+                metrics=metrics, dataset={"symbols": SYMBOLS, "days": DAYS, "source": "binance spot 1d"},
+                tags=["phase-6.5", key], notes="pre-registered: docs/PHASE_6_5_PREREGISTRATION.md"))
+    except Exception as exc:  # noqa: BLE001
+        print(f"(experiment log unavailable: {exc})")
+    return ids
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", default=None, help="comma list, e.g. H2a,H5")
     ap.add_argument("--n-boot", type=int, default=N_BOOT)
     ap.add_argument("--out", default=os.path.join("training_ground", "results", "phase_6_5.json"))
+    ap.add_argument("--no-log", action="store_true", help="do not record runs in the experiment log")
     args = ap.parse_args(argv)
     only = set(args.only.split(",")) if args.only else None
     results = run_all(only, args.n_boot)
@@ -241,6 +263,8 @@ def main(argv=None) -> int:
         json.dump({"run_at": datetime.now(timezone.utc).isoformat(), "symbols": SYMBOLS, "protocol": {
             "days": DAYS, "train": TRAIN, "retrain_every": RETRAIN, "fee": FEE, "ci_level_directional": LEVEL_ADJ,
             "block": BLOCK, "n_boot": args.n_boot}, "results": results}, fh, indent=2, default=float)
+    if not args.no_log:
+        log_results(results, args.n_boot)
     print("\n=== PHASE 6.5 RESULTS (pre-registered protocol) ===")
     for k, r in results.items():
         print(_fmt(k, r))

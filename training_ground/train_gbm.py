@@ -30,6 +30,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.feature_engineering import build_features, clean_xy, make_target  # noqa: E402
+from core.experiment_log import ExperimentLog  # noqa: E402
 from core.ml_validation import evaluate_predictions, walk_forward_predict  # noqa: E402
 from strategies.gbm_strategy import DEFAULT_LGBM_PARAMS, make_lgbm_classifier  # noqa: E402
 
@@ -81,6 +82,7 @@ def main(argv=None) -> int:
     ap.add_argument("--short-threshold", type=float, default=0.45)
     ap.add_argument("--fee", type=float, default=0.001, help="per-side fee as a fraction (0.001 = 0.1%%)")
     ap.add_argument("--out", default=None, help="output prefix (default trained_models/gbm_<symbol>_<interval>)")
+    ap.add_argument("--no-log", action="store_true", help="do not record this run in the experiment log")
     args = ap.parse_args(argv)
 
     from core.data_loader import DataLoader
@@ -152,6 +154,20 @@ def main(argv=None) -> int:
     print(f"\n  saved {prefix}.txt and {prefix}.json")
 
     skill = lo > 0.5
+    if not args.no_log:
+        try:
+            run_id = ExperimentLog().log_run(
+                name=f"gbm {args.symbol} {args.interval} h{args.horizon}", model_type="lightgbm",
+                params={**DEFAULT_LGBM_PARAMS, "horizon": args.horizon, "train_size": args.train_size,
+                        "retrain_every": args.retrain_every, "long_threshold": args.long_threshold,
+                        "short_threshold": args.short_threshold, "fee": args.fee},
+                metrics={**m, "auc_ci95_low": lo, "auc_ci95_high": hi, **{f"rule.{k}": v for k, v in perf.items()}},
+                dataset={"symbol": args.symbol, "interval": args.interval, "bars": len(df),
+                         "start": str(df.index[0]), "end": str(df.index[-1]), "features": list(Xc.columns)},
+                tags=["train_gbm"], notes="skill" if skill else "no evidence of skill (CI includes 0.5)")
+            print(f"  logged as experiment run #{run_id}  (python -m core.experiment_log show {run_id})")
+        except Exception as exc:  # noqa: BLE001 -- bookkeeping must never fail a training run
+            print(f"  (experiment log unavailable: {exc})")
     print("\nVERDICT:", "AUC confidence interval is above 0.50 -- some evidence of predictive skill (verify on other periods/symbols)."
           if skill else "AUC confidence interval includes 0.50 -- NO evidence of predictive skill on this sample. "
                         "Do not trade this; it is the honest baseline the next iteration must beat.")

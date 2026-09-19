@@ -5,6 +5,11 @@ import pytest
 
 pytest.importorskip("lightgbm")
 
+
+@pytest.fixture(autouse=True)
+def _isolated_experiment_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXPERIMENT_LOG_PATH", str(tmp_path / "experiments.sqlite3"))
+
 import training_ground.experiments_6_5 as ex
 
 
@@ -103,3 +108,14 @@ def test_main_writes_results_json(tmp_path, monkeypatch):
     import json
     data = json.loads(out.read_text())
     assert "H4a" in data["results"] and data["protocol"]["train"] == 400
+
+
+def test_main_records_every_experiment_in_the_experiment_log(tmp_path, monkeypatch):
+    from core.experiment_log import ExperimentLog
+    monkeypatch.setattr(ex, "load_universe", lambda *a, **k: _universe(planted=True))
+    assert ex.main(["--only", "H4a,H2a", "--n-boot", "50", "--out", str(tmp_path / "r.json")]) == 0
+    runs = ExperimentLog().list_runs(tag="phase-6.5")
+    assert {r["name"] for r in runs} == {"H4a pooled h=1 + taker flow", "H2a pooled h=1"}
+    h4a = next(r for r in runs if "H4a" in r["tags"])
+    assert h4a["metrics"]["auc"] > 0.6 and "criteria.FINDING" not in h4a["metrics"] and h4a["params"]["train"] == 400
+    assert ExperimentLog().best("auc", n=1)[0]["id"] == h4a["id"]

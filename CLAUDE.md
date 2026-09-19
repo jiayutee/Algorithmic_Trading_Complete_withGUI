@@ -27,6 +27,8 @@ core/
   feature_engineering.py  # ML feature matrix (technicals/news/macro/time), no-lookahead by construction
   ml_validation.py        # Walk-forward splits + purge gap; walk_forward_predict() = OOS predictions
   trade_rationale.py      # Structured "why" record attached to every order/signal
+  experiment_log.py       # SQLite log of training/eval runs (params, metrics, git commit): python -m core.experiment_log list
+  news_health.py          # Per-source circuit breaker so one rate-limited news source can't stall a refresh
 brokers/
   simulatedbroker.py      # Paper trading, order history, positions
   binance_connector.py    # Live Binance (paper flag)
@@ -68,6 +70,10 @@ scripts/
 - Claude CLI: `/Users/jiayutee/.local/bin/claude`
 - `.env` is gitignored — contains all secrets (never commit)
 - Run tests: `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -v`
+- News fetch budget: `NEWS_FETCH_DEADLINE_SECONDS` (default 6); sources still running when it expires are abandoned and
+  skipped for a cool-down after repeated failures
+- Experiment log: `python -m core.experiment_log list|show|best|compare` (file: training_ground/results/experiments.sqlite3,
+  override with `EXPERIMENT_LOG_PATH`)
 - Train/evaluate the ML model: `~/miniconda3/bin/python3 training_ground/train_gbm.py --symbol BTCUSDT --days 1500 --interval 1d`
   (prints out-of-sample AUC with a confidence interval; read the VERDICT line before trusting any number)
 

@@ -8,6 +8,11 @@ import pytest
 
 pytest.importorskip("lightgbm")
 
+
+@pytest.fixture(autouse=True)
+def _isolated_experiment_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXPERIMENT_LOG_PATH", str(tmp_path / "experiments.sqlite3"))
+
 from core.feature_engineering import build_features, make_target
 from core.ml_validation import evaluate_predictions, walk_forward_predict
 from strategies.gbm_strategy import GBMStrategy, explain_row, make_lgbm_classifier
@@ -191,3 +196,23 @@ def test_instantiating_the_lstm_emits_a_deprecation_warning():
         warnings.simplefilter("always")
         cerebro.run()
     assert any(issubclass(w.category, DeprecationWarning) and "GBMStrategy" in str(w.message) for w in caught)
+
+
+def test_training_script_logs_the_run_with_metrics_and_git_commit(tmp_path, monkeypatch):
+    import training_ground.train_gbm as tg
+    from core.experiment_log import ExperimentLog
+    df = _momentum_series(700)
+
+    class FakeLoader:
+        def load_data(self, *a, **k):
+            return df
+    monkeypatch.setattr("core.data_loader.DataLoader", FakeLoader)
+    assert tg.main(["--symbol", "TEST", "--train-size", "250", "--retrain-every", "25", "--out", str(tmp_path / "m")]) == 0
+    runs = ExperimentLog().list_runs(model_type="lightgbm")
+    assert len(runs) == 1
+    r = runs[0]
+    assert r["metrics"]["auc"] > 0.55 and "auc_ci95_low" in r["metrics"] and r["params"]["n_estimators"] == 150
+    assert r["dataset"]["symbol"] == "TEST" and len(r["git_commit"]) == 40
+    assert tg.main(["--symbol", "TEST", "--train-size", "250", "--retrain-every", "25", "--out", str(tmp_path / "m2"),
+                    "--no-log"]) == 0
+    assert len(ExperimentLog().list_runs()) == 1              # --no-log respected
