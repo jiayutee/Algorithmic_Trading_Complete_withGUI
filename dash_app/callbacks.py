@@ -320,10 +320,6 @@ def _execution_action(trigger, symbol, interval, strategy_name) -> str:
     return ""
 
 
-def _research_loop_view(path: Optional[str] = None) -> dict:
-    """Rows for the Research Loop tab's three tables plus a status line. Never raises."""
-    empty = {"candidates": [], "paper": [], "runs": [],
-             "message": "No research-loop runs yet. Run  python -m core.research_loop run  in a terminal."}
 def _days_or_default(days) -> int:
     """The Days box, clamped to the same 1..10000 range as the desktop app; falls back to the default if blank/invalid."""
     try:
