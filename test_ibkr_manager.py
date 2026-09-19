@@ -1,32 +1,7 @@
 """IBKRConnector wiring into BrokerManager, against a MOCKED ib_insync (no TWS/Gateway needed)."""
-import importlib
-import sys
-import types
 from types import SimpleNamespace as NS
-from unittest import mock
 
 import pytest
-
-
-@pytest.fixture
-def ib_env(monkeypatch):
-    """Install a fake ib_insync module, reload the connector + manager so they import it."""
-    fake_ib = mock.MagicMock(name="IB()")
-    fake_ib.isConnected.return_value = False
-    mod = types.ModuleType("ib_insync")
-    mod.IB = mock.MagicMock(return_value=fake_ib)
-    mod.MarketOrder = lambda action, qty: NS(action=action, totalQuantity=qty)
-    mod.Contract = lambda **kw: NS(**kw)
-    monkeypatch.setitem(sys.modules, "ib_insync", mod)
-    import brokers.ib_connector as ibc
-    import core.broker_manager as bm
-    importlib.reload(ibc)
-    importlib.reload(bm)
-    yield NS(ib=fake_ib, mod=mod, bm=bm, ibc=ibc)
-    monkeypatch.delitem(sys.modules, "ib_insync", raising=False)
-    sys.modules.pop("brokers.ib_connector", None)                # drop the copy bound to the fake ib_insync
-    # restore the "ib_insync not installed" state so later tests see the real environment
-    importlib.reload(importlib.import_module("core.broker_manager"))
 
 
 def make_position(sym, qty, cost, sec="STK"):
@@ -98,3 +73,71 @@ def test_ibkr_orders_still_blocked_by_guard(ib_env, monkeypatch):
         ib_env.ib.placeOrder.assert_not_called()
     finally:
         set_guard(None)
+
+
+# ---------------------------------------------------------------- connector-level behaviour (guard bypassed via paper_mode)
+
+@pytest.fixture
+def conn(ib_env):
+    c = ib_env.ibc.IBKRConnector()
+    c.paper_mode = True                       # exercise the order logic itself; guard behaviour is tested above
+    return c
+
+
+def _trade(ib_env, status="Filled"):
+    return NS(order=NS(orderId=42), orderStatus=NS(status=status, filled=5, remaining=0, avgFillPrice=101.5))
+
+
+@pytest.mark.parametrize("side,qty,expected", [("buy", 5, "BUY"), ("long", 5, "BUY"), ("sell", 5, "SELL"), ("short", 5, "SELL")])
+def test_submit_order_side_mapping(ib_env, conn, side, qty, expected):
+    ib_env.ib.placeOrder.return_value = _trade(ib_env)
+    r = conn.submit_order("AAPL", qty, side)
+    order = ib_env.ib.placeOrder.call_args[0][1]
+    assert order.action == expected and order.totalQuantity == 5
+    assert r["side"] == expected and r["order_id"] == 42 and r["avg_fill_price"] == 101.5
+
+
+def test_submit_order_builds_contract_with_given_venue(ib_env, conn):
+    ib_env.ib.placeOrder.return_value = _trade(ib_env)
+    conn.submit_order("EUR", 1, "buy", sec_type="CASH", currency="USD", exchange="IDEALPRO")
+    contract = ib_env.ib.placeOrder.call_args[0][0]
+    assert (contract.symbol, contract.secType, contract.currency, contract.exchange) == ("EUR", "CASH", "USD", "IDEALPRO")
+
+
+def test_get_position_matches_on_symbol_type_and_currency(ib_env, conn):
+    ib_env.ib.positions.return_value = [make_position("AAPL", 3, 10.0, "OPT"), make_position("AAPL", 7, 150.0)]
+    assert conn.get_position("AAPL")["position"] == 7            # the STK one, not the option
+    assert conn.get_position("AAPL", sec_type="OPT")["position"] == 3
+    assert conn.get_position("MSFT") is None
+
+
+def test_account_info_missing_tags_are_none(ib_env, conn):
+    ib_env.ib.accountSummary.return_value = [NS(tag="NetLiquidation", value="1")]
+    info = conn.get_account_info()
+    assert info["net_liquidation"] == "1" and info["buying_power"] is None
+
+
+def test_connect_is_idempotent_and_context_manager_disconnects(ib_env):
+    ib_env.ib.isConnected.return_value = True
+    with ib_env.ibc.IBKRConnector() as c:
+        assert c is not None
+    ib_env.ib.connect.assert_not_called()                        # already connected -> no second connect
+    ib_env.ib.disconnect.assert_called_once()
+
+
+def test_no_live_connection_is_ever_attempted_by_the_suite():
+    """4.5 audit: the only ib.connect() call site is IBKRConnector.connect; tests always mock ib_insync."""
+    import ast, pathlib
+    calls = []
+    for p in pathlib.Path(".").rglob("*.py"):
+        if any(part in (".git", ".claude", "node_modules") for part in p.parts):
+            continue
+        try:
+            tree = ast.parse(p.read_text())
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "connect" \
+                    and isinstance(n.func.value, ast.Attribute) and n.func.value.attr == "ib":
+                calls.append(str(p))
+    assert calls == ["brokers/ib_connector.py"]
