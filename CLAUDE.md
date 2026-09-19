@@ -31,6 +31,7 @@ core/
   kalshi_data.py          # Read-only Kalshi public-API client (no auth, no order path; NOT a broker)
   kalshi_arbitrage.py     # Kalshi mispricing SIGNALS only (YES+NO<$1, exclusive-event sets), after assumed fees
   kalshi_collector.py     # Daily Kalshi snapshot collector + outcome resolver (python -m core.kalshi_collector collect|resolve|status)
+  execution/              # PAPER-ONLY execution service: bar -> signal -> sizing -> risk -> order -> fill -> reconcile (journal.py, risk.py, signals.py, service.py, launcher.py, view.py)
   research_loop.py        # Autonomous research loop: evaluate candidates vs buy&hold, promote/retire, forward paper ledger
   trend_overlay.py        # Trend-filter rule (28-bar, weekly): drawdown reduction, NOT alpha (Phases 6.7-6.9)
   risk_sizing.py          # Volatility-targeting helpers (Phase 6.6; result: did not help)
@@ -94,6 +95,17 @@ scripts/
   Tests and agents that build `BrokerManager()`/`SimulatedBroker()` with no path keep the plain in-memory simulator.
 - Alpha/beta: one formula (`Backtester._alpha_beta_core`, sample stats, annualization 252, risk-free 0 -- both attributes on
   `Backtester`); unavailable = `None` shown as "n/a" with a reason, never 0.
+- Paper execution service (`core/execution/`): runs a rule-based strategy on the paper account automatically. Start it from the desktop
+  "Start Paper" button, the Dash "Execution" tab, or `python -m core.execution.service run --symbols BTCUSDT --strategy "EMA Crossover" --interval 1h`;
+  `status | halt "why" | resume | flatten` also work. PAPER ONLY (it refuses any broker but the strict SimulatedBroker). One runner at a time
+  (lease in the journal `training_ground/paper/execution.sqlite3`, override `EXECUTION_DB_PATH`); one decision per completed bar so restarts
+  cannot repeat an order; risk gate blocks/shrinks ENTRIES only (per-symbol/gross exposure, daily loss, drawdown, order count, stale data,
+  `halt`) and never blocks exits; long/flat by default. Not a profit claim: no strategy tested so far shows an edge (Phases 6.5-6.9).
+- Always-on paper execution (launchd `com.algotrader.paper-execution`, starts at login, restarts if it dies): runs
+  `scripts/run_execution.sh`, settings in `scripts/execution.env` (default: Trend Filter (28d), daily bars, BTC/ETH/SOL/BNB, 15% each).
+  Apply edits: `launchctl kickstart -k gui/$(id -u)/com.algotrader.paper-execution`. Stop: `launchctl bootout gui/$(id -u)/com.algotrader.paper-execution`
+  (needed before the desktop/Dash "Start Paper" buttons can run, since only one runner may trade the account). Log: `logs/execution.log`;
+  status: `python -m core.execution.service status`. It runs the code in THIS checkout, so keep this checkout on a branch that has `core/execution/`.
 - Research loop: `python -m core.research_loop run|status` (also visible in the Dash "Research Loop" tab). Promote/retire
   rules are fixed in the module docstring; retired strategies never revive automatically
 - Experiment log: `python -m core.experiment_log list|show|best|compare` (file: training_ground/results/experiments.sqlite3,

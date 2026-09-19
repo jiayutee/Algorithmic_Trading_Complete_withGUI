@@ -280,6 +280,45 @@ def _agent_monitor_state(supervisor, error: Optional[str] = None) -> tuple:
 # Research Loop tab (read-only view of core/research_loop.py + the experiment log)
 # ---------------------------------------------------------------------------
 
+_exec_service = None      # the in-process paper execution service, if this Dash process started one
+
+
+def _execution_action(trigger, symbol, interval, strategy_name) -> str:
+    """Run the button that was pressed. Returns a message for the user. Paper only; every path goes through core.execution."""
+    global _exec_service
+    from core.execution.journal import ExecutionJournal
+    from core.execution.launcher import flatten_paper, start_paper_execution
+    broker = _get_broker()
+    if trigger == "exec-start-btn":
+        if _exec_service is not None and _exec_service.running:
+            return "Already running."
+        from core.strategy_manager import StrategyManager
+        cls = StrategyManager().strategies.get(strategy_name or "")
+        if cls is None:
+            return "Not started: pick a rule-based strategy in the top bar first."
+        from core.data_loader import DataLoader
+        svc, msg = start_paper_execution(broker, DataLoader(), cls, strategy_name, symbol or "BTCUSDT", interval or "1d")
+        _exec_service = svc
+        return msg
+    if trigger == "exec-stop-btn":
+        if _exec_service is not None:
+            _exec_service.stop()
+            _exec_service = None
+            return "Stopped. Open positions were left as they are (use Flatten all to close them)."
+        return "Not running in this window."
+    if trigger == "exec-halt-btn":
+        ExecutionJournal().halt("halted from the Dash Execution tab")
+        return "Halted: no new positions until you press Resume. Exits still work."
+    if trigger == "exec-resume-btn":
+        ExecutionJournal().resume()
+        return "Resumed."
+    if trigger == "exec-flatten-btn":
+        from core.data_loader import DataLoader
+        closed = flatten_paper(broker, DataLoader(), reason="Flatten all pressed in Dash")
+        return f"Closed: {', '.join(closed)}. New entries are halted until you press Resume." if closed else "Nothing to close. New entries are halted."
+    return ""
+
+
 def _research_loop_view(path: Optional[str] = None) -> dict:
     """Rows for the Research Loop tab's three tables plus a status line. Never raises."""
     empty = {"candidates": [], "paper": [], "runs": [],
@@ -2438,6 +2477,39 @@ def register_callbacks(app: dash.Dash) -> None:
     def research_loop_tab(_n_clicks):
         view = _research_loop_view()
         return view["candidates"], view["paper"], view["runs"], view["message"]
+
+    # ------------------------------------------------------------------
+    # Execution tab: paper execution service controls + live view of the journal
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("exec-headline", "children"),
+        Output("exec-issues", "children"),
+        Output("exec-symbols-table", "data"),
+        Output("exec-decisions-table", "data"),
+        Output("exec-message", "children"),
+        Input("exec-interval", "n_intervals"),
+        Input("exec-start-btn", "n_clicks"),
+        Input("exec-stop-btn", "n_clicks"),
+        Input("exec-halt-btn", "n_clicks"),
+        Input("exec-resume-btn", "n_clicks"),
+        Input("exec-flatten-btn", "n_clicks"),
+        State("symbol-dropdown", "value"),
+        State("interval-dropdown", "value"),
+        State("strategy-dropdown", "value"),
+    )
+    def execution_tab(_tick, *rest):
+        symbol, interval, strategy_name = rest[-3:]
+        message = ""
+        trig = dash.ctx.triggered_id
+        if isinstance(trig, str) and trig.startswith("exec-") and trig.endswith("-btn"):
+            try:
+                message = _execution_action(trig, symbol, interval, strategy_name)
+            except Exception as exc:  # noqa: BLE001 -- surface it, never crash the tab
+                logger.error("[Dash] execution action %s failed: %s", trig, exc)
+                message = f"Failed: {exc}"
+        from core.execution.view import execution_view
+        v = execution_view()
+        return v["headline"], "\n".join(v["issues"]), v["symbols"], v["decisions"], message
 
     # ------------------------------------------------------------------
     # Agent Monitor: start/stop the supervisor and refresh the table
