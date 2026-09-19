@@ -18,6 +18,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Dict
 
 
@@ -29,6 +30,11 @@ class _State:
     last_reason: str = ""
     successes: int = 0
     failures: int = 0
+    last_checked_at: str = ""
+    last_success_at: str = ""
+    last_status: str = "not_checked"
+    last_item_count: int = 0
+    last_elapsed_seconds: float = 0.0
 
 
 class SourceHealthRegistry:
@@ -59,6 +65,10 @@ class SourceHealthRegistry:
         failed = bool(error) or (n_items == 0 and seconds > self.slow_empty_seconds)
         with self._lock:
             st = self._state(name)
+            st.last_checked_at = datetime.now(timezone.utc).isoformat()
+            st.last_item_count = n_items
+            st.last_elapsed_seconds = seconds
+            st.last_status = "error" if error else ("ok" if n_items else ("slow_empty" if failed else "empty"))
             if failed:
                 st.failures += 1
                 st.consecutive_failures += 1
@@ -71,17 +81,26 @@ class SourceHealthRegistry:
                 st.consecutive_failures = 0
                 st.cooldown = 0.0
                 st.open_until = 0.0
+                st.last_reason = ""
+                # A fast empty response is not a failure, but also not proof of news delivery.
+                if n_items:
+                    st.last_success_at = st.last_checked_at
         return failed
 
     def record_timeout(self, name: str, budget: float) -> None:
         self.record(name, 0, budget, error=f"timed out after {budget:.0f}s")
+        with self._lock:
+            self._state(name).last_status = "timeout"
 
     def snapshot(self) -> Dict[str, dict]:
         now = self._clock()
         with self._lock:
             return {n: {"open": now < s.open_until, "retry_in": max(0.0, s.open_until - now),
                         "consecutive_failures": s.consecutive_failures, "last_reason": s.last_reason,
-                        "successes": s.successes, "failures": s.failures}
+                        "successes": s.successes, "failures": s.failures,
+                        "last_checked_at": s.last_checked_at, "last_success_at": s.last_success_at,
+                        "last_status": s.last_status, "last_item_count": s.last_item_count,
+                        "last_elapsed_seconds": s.last_elapsed_seconds}
                     for n, s in self._states.items()}
 
     def reset(self) -> None:

@@ -276,6 +276,31 @@ class NewsPipeline:
         )
         self.health = health or HEALTH
         self.store_path = store_path
+        self.disabled_sources: list[dict] = []
+
+    def source_status(self) -> list[dict]:
+        """Configuration and latest fetch health, without credentials or raw exception text.
+
+        Empty results are not proof of healthy delivery. A cooldown retains the previous
+        result and is explicitly marked, rather than pretending the source was retried.
+        """
+        health = self.health.snapshot()
+        rows = []
+        for source in self.sources:
+            state = health.get(source.name, {})
+            rows.append({
+                "name": source.name, "enabled": True, "reason": "configured",
+                "query_style": source.query_style,
+                "status": "cooldown" if state.get("open") else state.get("last_status", "not_checked"),
+                "last_result": state.get("last_status", "not_checked"),
+                "item_count": state.get("last_item_count", 0),
+                "elapsed_seconds": state.get("last_elapsed_seconds"),
+                "last_checked_at": state.get("last_checked_at") or None,
+                "last_success_at": state.get("last_success_at") or None,
+                "retry_in_seconds": state.get("retry_in", 0.0),
+                "failures": state.get("failures", 0),
+            })
+        return rows + [dict(row) for row in self.disabled_sources]
 
     def _open_store(self) -> NewsStore | None:
         try:
@@ -287,18 +312,26 @@ class NewsPipeline:
     @classmethod
     def from_env(cls) -> "NewsPipeline":
         sources: list[BaseNewsSource] = []
+        disabled = []
+
+        def unavailable(name, reason):
+            disabled.append({"name": name, "enabled": False, "status": "disabled", "reason": reason})
 
         # Brave Search (best quality, needs API key)
         brave_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip() or os.getenv("BRAVE_API_KEY", "").strip()
         if brave_key:
             sources.append(BraveSearchSource(api_key=brave_key))
             logger.info("News source: Brave Search enabled")
+        else:
+            unavailable("brave", "Set BRAVE_SEARCH_API_KEY or BRAVE_API_KEY")
 
         # NewsAPI (needs API key from newsapi.org)
         newsapi_key = os.getenv("NEWSAPI_API_KEY", "").strip()
         if newsapi_key:
             sources.append(NewsApiSource(api_key=newsapi_key))
             logger.info("News source: NewsAPI enabled")
+        else:
+            unavailable("newsapi", "Set NEWSAPI_API_KEY")
 
         # RSS feeds (comma or newline separated URLs in RSS_FEEDS env var)
         rss_feeds_env = (
@@ -309,6 +342,8 @@ class NewsPipeline:
         if rss_feeds:
             sources.append(RssSource(feed_urls=rss_feeds))
             logger.info("News source: RSS enabled (%d feed(s))", len(rss_feeds))
+        else:
+            unavailable("rss", "Set RSS_FEEDS or RSS_FEED")
 
         # DuckDuckGo HTML scrape (no key needed, always added as fallback)
         sources.append(DuckDuckGoSource())
@@ -324,6 +359,7 @@ class NewsPipeline:
             logger.info("News source: OpenBB enabled (provider=%s)", openbb_provider)
         except ImportError:
             logger.warning("OpenBB not installed — skipping (pip install openbb openbb-yfinance)")
+            unavailable("openbb_news", "OpenBB is not importable")
 
         # GDELT (no key needed, rate-limited to 1 req/6s)
         sources.append(GDELTSource())
@@ -334,11 +370,15 @@ class NewsPipeline:
         if eventregistry_key:
             sources.append(EventRegistrySource(api_key=eventregistry_key))
             logger.info("News source: EventRegistry enabled")
+        else:
+            unavailable("eventregistry", "Set EVENTREGISTRY_API_KEY")
 
         if not sources:
             logger.warning("No news sources configured — set BRAVE_SEARCH_API_KEY or NEWSAPI_API_KEY in .env")
 
-        return cls(sources=sources)
+        pipeline = cls(sources=sources)
+        pipeline.disabled_sources = disabled
+        return pipeline
 
     def _fetch_all_sources(self, query: str, limit: int, ticker_query: str | None = None) -> list[NewsItem]:
         """Run every healthy source in parallel under one time budget.
