@@ -192,3 +192,113 @@ def evaluate_predictions(y_true: pd.Series, p_up: pd.Series) -> Dict[str, float]
         out["auc"] = float(roc_auc_score(y, p))
         out["logloss"] = float(log_loss(y, p))
     return out
+
+
+# --------------------------------------------------------------------------- panels
+
+def walk_forward_predict_panel(
+    model_factory: Callable[[], Any],
+    X: pd.DataFrame,
+    y: pd.Series,
+    *,
+    train_dates: int,
+    retrain_every: int,
+    horizon: int = 1,
+) -> pd.Series:
+    """Walk-forward for pooled multi-symbol data: ``X``/``y`` are indexed by (symbol, timestamp).
+
+    Splits are made on the sorted *dates*, not on rows, so every symbol's rows for a given
+    date land on the same side of any boundary. Requires all symbols to share one bar
+    calendar (true for 24/7 crypto), so "label horizon in bars" = "horizon in dates".
+    Returns P(up) per (symbol, timestamp), NaN where no model had been trained yet.
+    """
+    if not isinstance(X.index, pd.MultiIndex) or X.index.nlevels != 2:
+        raise ValueError("X must be indexed by (symbol, timestamp)")
+    dates = X.index.get_level_values(1)
+    unique_dates = np.sort(dates.unique())
+    date_pos = pd.Series(np.arange(len(unique_dates)), index=unique_dates)
+    row_date = date_pos.reindex(dates).to_numpy()                 # date position of every row
+    yv = np.asarray(y.reindex(X.index), dtype=float)
+    complete = X.notna().all(axis=1).to_numpy()
+    trainable = complete & ~np.isnan(yv)
+    Xv = X.reset_index(drop=True)
+
+    out = pd.Series(np.nan, index=X.index, name="p_up")
+    min_rows = max(60, train_dates // 2)
+    for fold in walk_forward_splits(len(unique_dates), train_dates, retrain_every, gap=horizon):
+        assert_no_leakage(fold.train_idx, fold.val_idx, label_horizon=horizon)
+        tr_rows = np.flatnonzero(np.isin(row_date, fold.train_idx) & trainable)
+        va_rows = np.flatnonzero(np.isin(row_date, fold.val_idx) & complete)
+        if len(tr_rows) < min_rows or len(np.unique(yv[tr_rows])) < 2 or not len(va_rows):
+            continue
+        model = model_factory().fit(Xv.iloc[tr_rows], yv[tr_rows])
+        up = list(model.classes_).index(1.0)
+        out.iloc[va_rows] = model.predict_proba(Xv.iloc[va_rows])[:, up]
+    return out
+
+
+# ------------------------------------------------------------------ bootstrap intervals
+
+def _auc(y: np.ndarray, p: np.ndarray) -> float:
+    """Rank-based AUC (Mann-Whitney), tie-aware; NaN if only one class."""
+    from scipy.stats import rankdata
+    n_pos = float(y.sum())
+    n_neg = len(y) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    ranks = rankdata(p)
+    return float((ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
+
+def _block_resample_dates(n_dates: int, block: int, rng: np.random.Generator) -> np.ndarray:
+    """Moving-block bootstrap of date positions: concatenated random blocks of ``block`` consecutive dates."""
+    n_blocks = int(np.ceil(n_dates / block))
+    starts = rng.integers(0, max(1, n_dates - block + 1), n_blocks)
+    return np.concatenate([np.arange(s, min(s + block, n_dates)) for s in starts])[:n_dates]
+
+
+def block_bootstrap_auc_ci(y, p, dates, *, block: int = 10, n_boot: int = 2000,
+                           level: float = 0.95, seed: int = 0) -> tuple:
+    """Confidence interval for AUC that respects time dependence.
+
+    Whole *dates* are resampled in blocks of ``block`` consecutive dates (all rows -- e.g.
+    all symbols -- of a chosen date come along), so autocorrelation and cross-symbol
+    correlation are kept, unlike an iid row bootstrap which is too narrow for such data.
+    Returns ``(low, high)``; NaNs are dropped first.
+    """
+    y, p, dates = np.asarray(y, float), np.asarray(p, float), np.asarray(dates)
+    keep = ~(np.isnan(y) | np.isnan(p))
+    y, p, dates = y[keep], p[keep], dates[keep]
+    if len(y) == 0:
+        return float("nan"), float("nan")
+    uniq, inv = np.unique(dates, return_inverse=True)
+    rows_by_date = [np.flatnonzero(inv == i) for i in range(len(uniq))]
+    rng = np.random.default_rng(seed)
+    aucs = []
+    for _ in range(n_boot):
+        pick = _block_resample_dates(len(uniq), block, rng)
+        rows = np.concatenate([rows_by_date[i] for i in pick])
+        a = _auc(y[rows], p[rows])
+        if not np.isnan(a):
+            aucs.append(a)
+    a = (1 - level) / 2
+    return float(np.quantile(aucs, a)), float(np.quantile(aucs, 1 - a))
+
+
+def paired_block_bootstrap_auc_diff(y, p_a, p_b, dates, *, block: int = 10, n_boot: int = 2000,
+                                    level: float = 0.95, seed: int = 0) -> tuple:
+    """CI for AUC(p_a) - AUC(p_b) on the same rows, resampling dates in blocks (paired)."""
+    y, p_a, p_b, dates = (np.asarray(v) for v in (y, p_a, p_b, dates))
+    keep = ~(np.isnan(y.astype(float)) | np.isnan(p_a.astype(float)) | np.isnan(p_b.astype(float)))
+    y, p_a, p_b, dates = y[keep].astype(float), p_a[keep].astype(float), p_b[keep].astype(float), dates[keep]
+    uniq, inv = np.unique(dates, return_inverse=True)
+    rows_by_date = [np.flatnonzero(inv == i) for i in range(len(uniq))]
+    rng = np.random.default_rng(seed)
+    diffs = []
+    for _ in range(n_boot):
+        rows = np.concatenate([rows_by_date[i] for i in _block_resample_dates(len(uniq), block, rng)])
+        da, db = _auc(y[rows], p_a[rows]), _auc(y[rows], p_b[rows])
+        if not (np.isnan(da) or np.isnan(db)):
+            diffs.append(da - db)
+    a = (1 - level) / 2
+    return float(np.quantile(diffs, a)), float(np.quantile(diffs, 1 - a))

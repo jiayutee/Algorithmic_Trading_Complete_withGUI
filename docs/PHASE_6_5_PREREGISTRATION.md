@@ -5,6 +5,12 @@ tries, some configuration always looks profitable by luck. Fixing the questions 
 the pass/fail rules first is what makes a "yes" mean something. Anything changed or
 added after seeing results is labelled *exploratory* and does not count as a finding.
 
+> **Amendment 1 (2026-09-19, still before any experiment was run):** H1a/H1b were first
+> written as "BTC only", which can never satisfy criterion 2 (>= 6 of 8 symbols). They now
+> use one model per symbol on all 8 symbols; the overall AUC is computed on the pooled
+> out-of-sample predictions. Also added: criterion 3 for horizon h > 1 uses non-overlapping
+> decisions every h bars, so overlapping returns are not double counted.
+
 Baseline already known (Phase 6.2): BTCUSDT, daily, next-bar direction, price + calendar
 features -> OOS AUC 0.491, 95% CI [0.456, 0.523] (no skill).
 
@@ -38,8 +44,8 @@ Otherwise the verdict is "no evidence", and that is a valid, reported result.
 
 | id | question | change vs baseline |
 |----|----------|--------------------|
-| H1a | Is a 5-day direction more predictable than 1-day? (fees matter less too) | BTC only, horizon 5 |
-| H1b | Same at 10 days | BTC only, horizon 10 |
+| H1a | Is a 5-day direction more predictable than 1-day? (fees matter less too) | separate per-symbol models for all 8 symbols, horizon 5 |
+| H1b | Same at 10 days | separate per-symbol models for all 8 symbols, horizon 10 |
 | H2a | Does pooling 8 symbols (8x the rows) help? | pooled, horizon 1 |
 | H2b | Pooled, horizon 5 | pooled, horizon 5 |
 | H3 | Accumulated news sentiment | **deferred**: runs only when >= 300 days each have >= 3 headlines for a symbol (news store had 131 BTC headlines over 18 months on 2026-09-19 -> not testable) |

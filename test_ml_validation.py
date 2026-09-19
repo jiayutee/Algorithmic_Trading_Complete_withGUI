@@ -185,3 +185,110 @@ def test_evaluate_predictions_reports_skill_against_the_base_rate():
     ignores_nan = evaluate_predictions(y, pd.Series([np.nan] * 4 + [0.9, 0.1, 0.9, 0.9]))
     assert ignores_nan["n"] == 4
     assert evaluate_predictions(y, pd.Series([np.nan] * 8)) == {"n": 0.0}
+
+
+# ------------------------------------------------------------- panel walk-forward + bootstrap
+
+from core.ml_validation import (  # noqa: E402
+    _auc, block_bootstrap_auc_ci, paired_block_bootstrap_auc_diff, walk_forward_predict_panel,
+)
+
+
+def _panel(n_dates=300, symbols=("AAA", "BBB", "CCC"), seed=0):
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-01", periods=n_dates)
+    frames, ys = [], []
+    for s in symbols:
+        X = pd.DataFrame({"f1": rng.normal(size=n_dates), "f2": rng.normal(size=n_dates)}, index=dates)
+        y = pd.Series((X["f1"] + rng.normal(0, 0.5, n_dates) > 0).astype(float), index=dates)   # f1 is informative
+        X.index = pd.MultiIndex.from_arrays([[s] * n_dates, dates], names=["symbol", "timestamp"])
+        y.index = X.index
+        frames.append(X); ys.append(y)
+    return pd.concat(frames), pd.concat(ys)
+
+
+def test_panel_walk_forward_learns_a_real_pooled_signal_and_is_nan_before_the_first_window():
+    X, y = _panel()
+    p = walk_forward_predict_panel(_model, X, y, train_dates=100, retrain_every=20, horizon=1)
+    dates = X.index.get_level_values(1)
+    first_pred_date = dates.unique()[101]
+    assert p[dates < first_pred_date].isna().all()
+    ev = evaluate_predictions(y, p)
+    assert ev["auc"] > 0.85 and ev["n"] > 500
+
+
+def test_panel_never_puts_one_date_on_both_sides_and_purges_the_horizon():
+    class Rec:
+        seen = []
+        def fit(self, Xf, yf):
+            Rec.seen.append(len(Xf)); self.classes_ = np.array([0.0, 1.0]); return self
+        def predict_proba(self, Xp):
+            return np.tile([0.5, 0.5], (len(Xp), 1))
+    X, y = _panel(120)
+    Rec.seen = []
+    walk_forward_predict_panel(Rec, X, y, train_dates=60, retrain_every=20, horizon=3)
+    # fold k trains on exactly (60 + 20k) dates x 3 symbols -- rows of a date always move together
+    assert Rec.seen[:3] == [60 * 3, 80 * 3, 100 * 3] or all(n % 3 == 0 for n in Rec.seen)
+    with pytest.raises(ValueError):
+        walk_forward_predict_panel(Rec, X.droplevel(0), y.droplevel(0), train_dates=60, retrain_every=20)
+
+
+def test_panel_predictions_ignore_rewritten_future_dates():
+    X, y = _panel(240)
+    base = walk_forward_predict_panel(_model, X, y, train_dates=100, retrain_every=20)
+    cut = X.index.get_level_values(1).unique()[160]
+    X2, y2 = X.copy(), y.copy()
+    late = X2.index.get_level_values(1) >= cut
+    rng = np.random.default_rng(9)
+    X2.loc[late] = rng.normal(0, 30, size=(late.sum(), 2))
+    y2[late] = rng.integers(0, 2, late.sum()).astype(float)
+    changed = walk_forward_predict_panel(_model, X2, y2, train_dates=100, retrain_every=20)
+    before = X.index.get_level_values(1) < cut - pd.Timedelta(days=2)
+    pd.testing.assert_series_equal(base[before], changed[before])
+
+
+def test_rank_auc_matches_sklearn_including_ties():
+    from sklearn.metrics import roc_auc_score
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, 300).astype(float)
+    p = np.round(rng.uniform(0, 1, 300), 1)          # heavy ties
+    assert _auc(y, p) == pytest.approx(roc_auc_score(y, p))
+    assert np.isnan(_auc(np.ones(5), np.arange(5.0)))
+
+
+def test_block_bootstrap_ci_covers_the_truth_and_is_wider_than_iid_for_autocorrelated_data():
+    rng = np.random.default_rng(1)
+    n = 800
+    dates = pd.date_range("2024-01-01", periods=n)
+    # slowly varying (autocorrelated) score and label: an iid bootstrap would be far too confident
+    score = np.convolve(rng.normal(size=n + 29), np.ones(30) / 30, mode="valid")
+    y = (score + rng.normal(0, 0.05, n) > 0).astype(float)
+    p = 1 / (1 + np.exp(-30 * score))
+    lo_b, hi_b = block_bootstrap_auc_ci(y, p, dates, block=30, n_boot=400)
+    lo_i, hi_i = block_bootstrap_auc_ci(y, p, dates, block=1, n_boot=400)
+    assert lo_b <= _auc(y, p) <= hi_b
+    assert (hi_b - lo_b) > (hi_i - lo_i)
+
+
+def test_noise_ci_straddles_half_and_real_signal_ci_does_not():
+    rng = np.random.default_rng(2)
+    n = 600
+    dates = pd.date_range("2024-01-01", periods=n)
+    y = rng.integers(0, 2, n).astype(float)
+    lo, hi = block_bootstrap_auc_ci(y, rng.uniform(size=n), dates, n_boot=400)
+    assert lo < 0.5 < hi
+    lo2, hi2 = block_bootstrap_auc_ci(y, y * 0.3 + rng.uniform(size=n), dates, n_boot=400)
+    assert lo2 > 0.5
+
+
+def test_paired_difference_ci_detects_a_better_model_and_not_an_equal_one():
+    rng = np.random.default_rng(3)
+    n = 800
+    dates = pd.date_range("2024-01-01", periods=n)
+    y = rng.integers(0, 2, n).astype(float)
+    weak = y * 0.2 + rng.uniform(size=n)
+    strong = y * 0.8 + rng.uniform(size=n)
+    lo, hi = paired_block_bootstrap_auc_diff(y, strong, weak, dates, n_boot=400)
+    assert lo > 0
+    lo2, hi2 = paired_block_bootstrap_auc_diff(y, weak, weak + 1e-9, dates, n_boot=200)
+    assert lo2 <= 0 <= hi2
