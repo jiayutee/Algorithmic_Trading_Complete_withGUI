@@ -49,3 +49,40 @@ return, volatility, Calmar ratio, average exposure, annual turnover, and net-of-
 
 Leverage above 1, per-symbol tuning of `k`, shorting, other forecast horizons or models. If C2/C3
 fail, the next step is a *new* pre-registered hypothesis, not a tweak of `k`.
+
+---
+
+# Results (run 2026-09-19; protocol exactly as above, nothing tuned)
+
+Raw numbers: `training_ground/results/phase_6_6.json`. Reproduce: `python training_ground/experiments_6_6.py`.
+Window 2023-10-16 -> 2026-08-31 (1,051 days, 8 symbols), costs and no-trade band as pre-registered.
+
+| strategy | Sharpe | ann. return | ann. vol | max drawdown | Calmar | avg exposure | turnover / yr |
+|----------|--------|-------------|----------|--------------|--------|--------------|---------------|
+| GBM-VT | 0.40 | 8.3% | 38.7% | -54.6% | 0.15 | 0.70 | 32.2 |
+| NAIVE-VT | 0.65 | 19.5% | 38.9% | -56.3% | 0.35 | 0.67 | 4.2 |
+| FIXED, matched to GBM-VT | 0.79 | 27.6% | 42.5% | -52.2% | 0.53 | 0.70 | 0 |
+| FIXED, matched to NAIVE-VT | 0.79 | 26.8% | 40.8% | -50.7% | 0.53 | 0.67 | 0 |
+| Buy and hold (100%) | 0.79 | 34.1% | 61.0% | -66.7% | 0.51 | 1.00 | 0 |
+
+| comparison | Sharpe difference | 98.3% interval | halves | verdict |
+|------------|-------------------|----------------|--------|---------|
+| C1 NAIVE-VT vs FIXED matched | -0.13 | [-0.51, +0.29] | -0.12 / +0.07 | no evidence |
+| C2 GBM-VT vs FIXED matched | -0.39 | [-0.75, +0.01] | -0.45 / -0.19 | no evidence |
+| C3 GBM-VT vs NAIVE-VT | -0.25 | [-0.55, +0.05] | -0.34 / -0.26 | no evidence |
+
+**No comparison met the first criterion**, and all point estimates are negative.
+
+## Reading it
+
+- **The AUC gain did not turn into a sizing gain.** Phase 6.5's +0.03 AUC was about *ranking* days by
+  volatility relative to a 60-day median. Sizing needs a *level* forecast that is stable from day to day.
+  The GBM level forecasts are noisy (log-correlation with the naive EWMA only 0.45), so exposure
+  churned (32 turnovers a year vs 4.2) and fees consumed the benefit.
+- **Even the naive version barely de-risked.** Volatility 38.9% vs 40.8% for the matched fixed
+  benchmark and no drawdown improvement: crypto drawdowns come from sudden jumps that trailing
+  volatility does not anticipate.
+- **Sample caveat:** this window was a strong, mostly-up market for these assets, which penalises any
+  rule that holds less. It is one regime, not a universal verdict.
+- Not tuned, not re-run. The natural *new* hypothesis (pre-register first) is a more stable forecast
+  (e.g. GBM combined with the EWMA, or a longer smoothing), not a different `k`.
