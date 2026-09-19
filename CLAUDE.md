@@ -71,10 +71,11 @@ scripts/
 - CI status checked via `$GITHUB_PAT` from `.env`
 
 ## Environment
-- Python: `~/miniconda3/bin/python3` (base env — NOT myenv, it OOM-kills)
+- Python: `~/miniconda3/bin/python3` (base env, 3.9 — NOT myenv, it OOM-kills). Orchestrator, Telegram bot and the daily collectors run on this.
+- Python 3.11 env (NautilusTrader, Phase 8.0): `scripts/setup_py311_env.sh` creates `~/.venvs/algotrader311` (needs `brew install libomp` for lightgbm). Full suite passes there (1074 passed). Use `~/.venvs/algotrader311/bin/python` for anything touching `nautilus_trader`. pandas-ta has no release for <3.12, so it is absent from both envs' required set.
 - Claude CLI: `/Users/jiayutee/.local/bin/claude`
 - `.env` is gitignored — contains all secrets (never commit)
-- Run tests: `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -v`
+- Run tests: `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -v` (or the 3.11 env's python)
 - News fetch budget: `NEWS_FETCH_DEADLINE_SECONDS` (default 6); sources still running when it expires are abandoned and
   skipped for a cool-down after repeated failures
 - IBKR (Phase 4.1): opt-in. Set `IBKR_ENABLED=1` (+ optional `IBKR_HOST`/`IBKR_PORT` (default 7497 = TWS paper; Gateway paper 4002)/`IBKR_CLIENT_ID`) and run TWS/Gateway with API enabled; needs `pip install ib_insync`. Tests use a mocked `ib_insync`; a live connection is only for manual verification. Orders always go through the live-order guard.
