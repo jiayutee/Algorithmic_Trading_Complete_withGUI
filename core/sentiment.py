@@ -265,35 +265,32 @@ class SentimentAnalyzer:
             for i, text in enumerate(texts)
         ]
 
+    _NEUTRAL_PRIOR = 2.0     # pseudo-hits of 'neutral' evidence added to every headline
+
     def _analyze_rule_based(self, text: str) -> SentimentResult:
         words = [token.lower() for token in re.findall(r"[A-Za-z']+", text)]
         positive_hits = sum(1 for word in words if word in self.POSITIVE_WORDS)
         negative_hits = sum(1 for word in words if word in self.NEGATIVE_WORDS)
         total_hits = positive_hits + negative_hits
 
-        if total_hits == 0:
-            return SentimentResult(
-                positive=0.1,
-                negative=0.1,
-                neutral=0.8,
-                label="neutral",
-                confidence=0.8,
-                model_name="rule-based-headline-v1",
-            )
+        # A proper probability distribution: the three scores sum to 1, and a neutral "prior" worth _NEUTRAL_PRIOR keyword
+        # hits keeps confidence honest -- one matching word is weak evidence (33%), several agreeing words are stronger.
+        # (It used to report 100% confidence from a single word, with scores summing to 1.5.) Still keyword matching, not a
+        # calibrated model: read confidence as "how much keyword evidence", not as a probability of being right.
+        if total_hits == 0:                       # no keyword evidence at all: lean neutral, but never "certain"
+            return SentimentResult(positive=0.1, negative=0.1, neutral=0.8, label="neutral", confidence=0.8,
+                                   model_name="rule-based-headline-v1")
+        denom = total_hits + self._NEUTRAL_PRIOR
+        positive = positive_hits / denom
+        negative = negative_hits / denom
+        neutral = self._NEUTRAL_PRIOR / denom
 
-        positive = positive_hits / total_hits
-        negative = negative_hits / total_hits
-        neutral = max(0.0, 1.0 - (positive + negative) / 2.0)
-
-        if positive > negative:
-            label = "positive"
-            confidence = positive
-        elif negative > positive:
-            label = "negative"
-            confidence = negative
+        if positive_hits > negative_hits:
+            label, confidence = "positive", positive
+        elif negative_hits > positive_hits:
+            label, confidence = "negative", negative
         else:
-            label = "neutral"
-            confidence = neutral
+            label, confidence = "neutral", neutral
 
         return SentimentResult(
             positive=float(positive),

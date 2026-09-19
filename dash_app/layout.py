@@ -1428,6 +1428,7 @@ def _bottom_tabs_panel() -> html.Div:
                     ),
                     _agent_monitor_tab(),
                     _research_loop_tab(),
+                    _execution_tab(),
                 ],
             ),
         ],
@@ -1568,6 +1569,56 @@ def _research_loop_tab() -> "dcc.Tab":
                     _table("research-runs-table", [
                         {"name": "#", "id": "id"}, {"name": "When (UTC)", "id": "when"}, {"name": "Run", "id": "name"},
                         {"name": "Model", "id": "model"}, {"name": "Key result", "id": "result"}, {"name": "Commit", "id": "commit"}]),
+                ],
+            ),
+        ],
+    )
+
+
+def _execution_tab() -> "dcc.Tab":
+    """Execution tab: start/stop the PAPER execution service and see exactly what it decided and why.
+
+    Reads the durable journal (core/execution/view.py), so it also shows a service running in the desktop app or the
+    command line. Paper only: there is no code path from here to a real broker.
+    """
+    def _btn(text, btn_id, color):
+        return html.Button(text, id=btn_id, n_clicks=0, style={
+            "backgroundColor": THEME["bg_dark"], "color": color, "border": f"1px solid {color}", "borderRadius": "4px",
+            "padding": "4px 12px", "fontSize": "11px", "cursor": "pointer", "marginRight": "6px"})
+
+    label = {**_LABEL_MUTED, "fontWeight": "600", "margin": "10px 0 4px"}
+    return dcc.Tab(
+        label="Execution",
+        value="execution-tab",
+        style=_TAB_STYLE,
+        selected_style=_TAB_SELECTED_STYLE,
+        children=[
+            html.Div(
+                style={**_PANEL_STYLE, "margin": "8px 0"},
+                children=[
+                    dcc.Interval(id="exec-interval", interval=5000, n_intervals=0),
+                    html.P("Paper execution (no real orders are possible)", style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "6px"}),
+                    html.Div(style={"marginBottom": "6px"}, children=[
+                        _btn("Start paper trading", "exec-start-btn", THEME["green"]),
+                        _btn("Stop", "exec-stop-btn", THEME["text_muted"]),
+                        _btn("Halt entries", "exec-halt-btn", THEME["orange"]),
+                        _btn("Resume", "exec-resume-btn", THEME["accent"]),
+                        _btn("Flatten all", "exec-flatten-btn", THEME["red"]),
+                    ]),
+                    html.Div("Uses the Symbol, Interval and Strategy chosen in the top bar.",
+                             style={"color": THEME["text_muted"], "fontSize": "10px", "marginBottom": "4px"}),
+                    html.Div("", id="exec-message", style={"color": THEME["accent"], "fontSize": "11px", "marginBottom": "4px"}),
+                    html.Div("", id="exec-headline", style={"color": THEME["text_main"], "fontSize": "12px", "fontWeight": "600", "marginBottom": "4px"}),
+                    html.Div("", id="exec-issues", style={"color": THEME["red"], "fontSize": "11px", "whiteSpace": "pre-line", "marginBottom": "6px"}),
+                    html.P("Per symbol", style=label),
+                    _rl_datatable("exec-symbols-table", [
+                        {"name": "Symbol", "id": "symbol"}, {"name": "State", "id": "state"}, {"name": "Signal", "id": "signal"},
+                        {"name": "Position", "id": "position"}, {"name": "Bar", "id": "bar"},
+                        {"name": "Data age (bars)", "id": "data_age_bars"}, {"name": "Note", "id": "detail"}]),
+                    html.P("Every decision, with the reason (newest first)", style=label),
+                    _rl_datatable("exec-decisions-table", [
+                        {"name": "When", "id": "when"}, {"name": "Symbol", "id": "symbol"}, {"name": "Action", "id": "action"},
+                        {"name": "Status", "id": "status"}, {"name": "Detail", "id": "detail"}]),
                 ],
             ),
         ],

@@ -693,6 +693,51 @@ def test_data_load_result_reaches_main_thread_and_updates_status(qapp):
     assert not failures, f"data-load hand-off failed in {len(failures)}/10 runs: {failures}"
 
 
+def test_desktop_shows_alpha_beta_and_marks_other_holdings(qapp):
+    from unittest.mock import MagicMock
+    from ui.main_window import MainWindow
+    win = MainWindow(data_loader=MagicMock(), strategy_manager=MagicMock(), broker_manager=MagicMock(), missing_deps=[])
+    try:
+        assert win.bt_alpha_label.text() == "—" and win.bt_beta_label.text() == "—"      # placeholders until a backtest runs
+        assert win._held_marker is not None
+    finally:
+        win.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Paper execution: the desktop button/tab (the Dash half is in test_execution_ui.py)
+# ---------------------------------------------------------------------------
+
+def test_desktop_start_paper_toggle_refuses_real_brokers_and_runs_the_paper_service(qapp, tmp_path, monkeypatch):
+    import logging
+    from unittest.mock import MagicMock
+    from core.broker_manager import BrokerManager
+    from core.strategy_manager import StrategyManager
+    from ui.main_window import MainWindow
+    logging.disable(logging.CRITICAL)
+    monkeypatch.setenv("EXECUTION_DB_PATH", str(tmp_path / "exec.sqlite3"))
+    win = MainWindow(data_loader=MagicMock(), strategy_manager=StrategyManager(),
+                     broker_manager=BrokerManager(paper_account_path=str(tmp_path / "acct.sqlite3")), missing_deps=[])
+    try:
+        assert win.trade_btn.text() == "Start Paper"
+        assert "Execution" in [win.bottom_tabs.tabText(i) for i in range(win.bottom_tabs.count())]
+        win.strategy_combo.setCurrentText("EMA Crossover")
+        win.broker_combo.setCurrentText("Binance")
+        win.start_trading()
+        assert "paper-only" in win.statusBar().currentMessage() and getattr(win, "_exec_service", None) is None
+        win.broker_combo.setCurrentText("Simulator")
+        win.strategy_combo.setCurrentText("None")
+        win.start_trading()
+        assert "No strategy" in win.statusBar().currentMessage()
+        win.strategy_combo.setCurrentText("EMA Crossover")
+        win.start_trading()
+        assert win._exec_service is not None and win._exec_service.running and win.trade_btn.text() == "Stop Paper"
+        win.start_trading()                                              # second press stops it
+        assert win._exec_service is None and win.trade_btn.text() == "Start Paper"
+    finally:
+        if getattr(win, "_exec_service", None) is not None:
+            win._exec_service.stop()
+        win.destroy()
 # ---------------------------------------------------------------------------
 # Desktop <-> Dash parity (the Dash half is in test_ui_parity.py)
 # ---------------------------------------------------------------------------
