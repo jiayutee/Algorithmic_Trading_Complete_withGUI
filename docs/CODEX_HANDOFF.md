@@ -11,7 +11,7 @@ The current project is `/Users/jiayutee/Dev/Projects/Algorithmic_Trading_Complet
 [Evidence artifact](artifacts/news-source-smoke-2026-09-19.json): OpenBB delivered five raw items each for BTCUSDT and AAPL; other enabled sources returned empty/slow-empty/timed-out outcomes. This is degraded delivery, not a repaired news system. The artifact records the precommit base and dirty state at execution time.
 
 [Notion task](https://app.notion.com/p/3e0d2ab050d981d5829def6cde9a4e9c).
-GitHub PR: pending creation; consult branch `codex/news-health-handoff`.
+GitHub: [PR #8](https://github.com/jiayutee/Algorithmic_Trading_Complete_withGUI/pull/8), implementation commit `603ac89`. Published for review; not merged or deployed by this continuation.
 
 ## Validation
 - Focused: `python -m pytest test_news_diagnostics.py test_news_hardening.py test_news_pipeline.py -q --tb=short` — 48 passed.
