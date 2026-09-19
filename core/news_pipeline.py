@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from typing import Any
 import os
 import re
+import threading
+import time
 
 import pandas as pd
 
@@ -24,7 +25,8 @@ from core.news_sources import (
     OpenBBNewsSource,
 )
 from core.sentiment import SentimentAnalyzer
-from core.news_store import NewsStore
+from core.news_health import HEALTH, SourceHealthRegistry
+from core.news_store import NewsStore, _headline_hash
 
 
 EVENT_TYPES = [
@@ -90,10 +92,40 @@ def interval_to_pandas_freq(interval: str) -> str:
     return mapping.get(interval, "1D")
 
 
+# Search engines and news sites say "Bitcoin", not "BTCUSDT". Searching the exchange pair
+# returned mostly irrelevant exchange-contract pages (5 of 25 useful vs 20 of 25 for "Bitcoin").
+SYMBOL_ALIASES: dict[str, list[str]] = {
+    "BTC": ["Bitcoin"],
+    "ETH": ["Ethereum", "Ether"],
+    "SOL": ["Solana"],
+    "BNB": ["Binance Coin", "BNB Chain"],
+    "XRP": ["XRP", "Ripple"],
+    "ADA": ["Cardano"],
+    "DOGE": ["Dogecoin"],
+    "LTC": ["Litecoin"],
+    "AVAX": ["Avalanche"],
+    "DOT": ["Polkadot"],
+    "LINK": ["Chainlink"],
+}
+
+
+def _base_ticker(symbol: str) -> str:
+    upper = (symbol or "").upper().replace("-", "").replace("/", "")
+    for quote in ("USDT", "USDC", "USD", "BUSD"):
+        if upper.endswith(quote) and len(upper) > len(quote):
+            return upper[: -len(quote)]
+    return upper
+
+
+def _symbol_aliases(symbol: str) -> list[str]:
+    return SYMBOL_ALIASES.get(_base_ticker(symbol), [])
+
+
 def _query_variants(symbol: str, company_name: str | None = None) -> list[str]:
     variants = []
     if company_name:
         variants.append(company_name)
+    variants.extend(_symbol_aliases(symbol))          # "Bitcoin" before "BTCUSDT"
     if symbol:
         variants.append(symbol)
         upper = symbol.upper()
@@ -108,6 +140,45 @@ def _query_variants(symbol: str, company_name: str | None = None) -> list[str]:
             deduped.append(variant)
             seen.add(variant.lower())
     return deduped or [symbol]
+
+
+def _mentions(text_lower: str, term: str) -> bool:
+    """Whole-word match, so "eth" no longer matches "method" and "ada" no longer matches "canada"."""
+    term = (term or "").lower().strip()
+    return bool(term) and re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text_lower) is not None
+
+
+# --- content filters ------------------------------------------------------------------
+_NON_NEWS_PATTERNS = re.compile(
+    r"(stock price|share price|stock quote|price,? (quote|news|chart)|quote (&|and) (news|chart)|"
+    r"official (web)?site|homepage|home page|overview\b|stock chart|live price|price (today|live))",
+    re.I,
+)
+
+
+def _is_mostly_latin(text: str, threshold: float = 0.85) -> bool:
+    """Cheap language screen: keep text whose letters are mostly ASCII/Latin (drops CJK, Devanagari, Cyrillic...)."""
+    letters = [c for c in (text or "") if c.isalpha()]
+    if not letters:
+        return True
+    return sum(ord(c) < 0x250 for c in letters) / len(letters) >= threshold
+
+
+def _is_non_news_page(headline: str, symbol: str, company_name: str | None) -> bool:
+    """Search engines return quote pages and company home pages alongside news; they carry no
+    sentiment and dilute the features (they were being scored as confident 'neutral' news)."""
+    h = (headline or "").strip()
+    if _NON_NEWS_PATTERNS.search(h):
+        return True
+    bare = re.sub(r"[^a-z0-9 ]", "", h.lower()).strip()
+    names = {bare_ for bare_ in [re.sub(r"[^a-z0-9 ]", "", n.lower()).strip()
+                                 for n in [symbol, company_name or "", _base_ticker(symbol), *_symbol_aliases(symbol)]] if bare_}
+    return bare in names                                  # a title that is only the name: a landing page
+
+
+def _normalized_headline_key(headline: str) -> str:
+    h = re.sub(r"\s+[-|\u2013\u2014]\s+[^-|\u2013\u2014]{2,40}$", "", headline or "")   # strip trailing " - Source"
+    return re.sub(r"[^a-z0-9 ]", "", h.lower()).strip()
 
 
 def _classify_event_type(text: str) -> str:
@@ -142,14 +213,14 @@ def _extract_entities(text: str, symbol: str, company_name: str | None = None) -
     tickers: list[str] = []
     entities: list[dict[str, Any]] = []
 
-    symbol_variants = {symbol.upper(), symbol.upper().replace("-", ""), symbol.upper().replace("USDT", "")}
-    if any(variant.lower() in text_lower for variant in symbol_variants if variant):
+    symbol_variants = {symbol.upper(), symbol.upper().replace("-", ""), _base_ticker(symbol), *_symbol_aliases(symbol)}
+    if any(_mentions(text_lower, variant) for variant in symbol_variants if variant):
         tickers.append(symbol.upper())
         entities.append({"text": symbol.upper(), "type": "TICKER", "confidence": 1.0})
 
     if company_name:
         company_tokens = [token for token in re.findall(r"[A-Za-z0-9]+", company_name.lower()) if token]
-        if company_tokens and all(token in text_lower for token in company_tokens):
+        if company_tokens and all(_mentions(text_lower, token) for token in company_tokens):
             if symbol.upper() not in tickers:
                 tickers.append(symbol.upper())
             entities.append({"text": company_name, "type": "ORG", "confidence": 0.95})
@@ -191,10 +262,27 @@ class NewsPipeline:
         sources: list[BaseNewsSource] | None = None,
         sentiment_analyzer: SentimentAnalyzer | None = None,
         max_workers: int = 4,
+        deadline_seconds: float | None = None,
+        health: SourceHealthRegistry | None = None,
+        store_path: str | None = None,
     ):
         self.sources = sources or []
         self.sentiment_analyzer = sentiment_analyzer or SentimentAnalyzer()
         self.max_workers = max_workers
+        # One slow or rate-limited source must not hold up the rest: sources still running when
+        # the budget expires are abandoned (their thread is a daemon) and counted as failures.
+        self.deadline_seconds = float(
+            deadline_seconds if deadline_seconds is not None else os.getenv("NEWS_FETCH_DEADLINE_SECONDS", "6")
+        )
+        self.health = health or HEALTH
+        self.store_path = store_path
+
+    def _open_store(self) -> NewsStore | None:
+        try:
+            return NewsStore(self.store_path) if self.store_path else NewsStore()
+        except Exception as exc:  # noqa: BLE001 -- the store is an optimisation, never a hard dependency
+            logger.warning("News store unavailable: %s", exc)
+            return None
 
     @classmethod
     def from_env(cls) -> "NewsPipeline":
@@ -252,37 +340,81 @@ class NewsPipeline:
 
         return cls(sources=sources)
 
+    def _fetch_all_sources(self, query: str, limit: int) -> list[NewsItem]:
+        """Run every healthy source in parallel under one time budget."""
+        active = []
+        for source in self.sources:
+            if self.health.allow(source.name):
+                active.append(source)
+            else:
+                logger.info("News source %s skipped for %.0fs more (circuit open after repeated failures)",
+                            source.name, self.health.seconds_until_retry(source.name))
+        if not active:
+            return []
+
+        lock = threading.Lock()
+        results: dict[str, tuple[list[NewsItem], float, str]] = {}
+        closed = False
+
+        def worker(source: BaseNewsSource) -> None:
+            t0 = time.monotonic()
+            try:
+                items, err = list(source.fetch(query, limit) or []), ""
+            except Exception as exc:  # noqa: BLE001
+                items, err = [], f"{type(exc).__name__}: {exc}"[:120]
+            with lock:
+                if not closed:                       # ignore stragglers that finish after the deadline
+                    results[source.name] = (items, time.monotonic() - t0, err)
+
+        threads = [threading.Thread(target=worker, args=(src,), daemon=True, name=f"news-{src.name}") for src in active]
+        started = time.monotonic()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(max(0.0, self.deadline_seconds - (time.monotonic() - started)))
+        with lock:
+            closed = True
+            done = dict(results)
+
+        gathered: list[NewsItem] = []
+        summary = []
+        for source in active:
+            if source.name in done:
+                items, seconds, err = done[source.name]
+                failed = self.health.record(source.name, len(items), seconds, err)
+                gathered.extend(items)
+                summary.append(f"{source.name}={len(items)}{'!' if failed else ''}/{seconds:.1f}s")
+            else:
+                self.health.record_timeout(source.name, self.deadline_seconds)
+                summary.append(f"{source.name}=TIMEOUT")
+        logger.info("News fetch %r: %s (budget %.0fs, %.1fs used)", query, ", ".join(summary),
+                    self.deadline_seconds, time.monotonic() - started)
+        return gathered
+
     def fetch_news_items(self, symbol: str, company_name: str | None = None, limit: int = 50) -> list[NewsItem]:
         query_variants = _query_variants(symbol, company_name)
-        gathered: list[NewsItem] = []
 
         if not self.sources:
             logger.warning("No news sources configured. Returning an empty result set.")
             return []
 
-        with ThreadPoolExecutor(max_workers=min(self.max_workers, max(1, len(self.sources)))) as executor:
-            futures = []
-            for source in self.sources:
-                query = query_variants[0]
-                futures.append(executor.submit(source.fetch, query, limit))
-
-            for future in as_completed(futures):
-                try:
-                    gathered.extend(future.result() or [])
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning("News source task failed: %s", exc)
-
-        items = self._enrich_and_deduplicate(gathered, symbol=symbol, company_name=company_name)
-
-        # Persist deduplicated/enriched items to local news store (non-fatal)
+        gathered = self._fetch_all_sources(query_variants[0], limit)
+        store = self._open_store()
         try:
-            store = NewsStore()
-            inserted = store.add_items(items)
-            if inserted:
-                logger.info("Persisted %s new news items for %s", inserted, symbol)
-            store.close()
-        except Exception as exc:  # pragma: no cover - do not fail fetch on persistence errors
-            logger.warning("Failed to persist news items: %s", exc)
+            items = self._enrich_and_deduplicate(gathered, symbol=symbol, company_name=company_name, store=store)
+
+            # Persist deduplicated/enriched items to local news store (non-fatal)
+            if store is not None:
+                try:
+                    inserted = store.add_items(items)
+                    store.upgrade_sentiments({_headline_hash(i.headline): i.sentiment for i in items if i.sentiment})
+                    if inserted:
+                        logger.info("Persisted %s new news items for %s", inserted, symbol)
+                except Exception as exc:  # pragma: no cover - do not fail fetch on persistence errors
+                    logger.warning("Failed to persist news items: %s", exc)
+        finally:
+            if store is not None:
+                store.close()
 
         return items
 
@@ -419,7 +551,68 @@ class NewsPipeline:
 
         return merged
 
-    def _enrich_and_deduplicate(self, items: list[NewsItem], symbol: str, company_name: str | None = None) -> list[NewsItem]:
+    def _prefilter(self, items: list[NewsItem], symbol: str, company_name: str | None) -> list[NewsItem]:
+        """Drop what should never be scored: non-Latin-script text, quote/landing pages, and
+        near-identical headlines (same story, different URL) -- before paying to score them."""
+        kept, seen_keys, seen_urls = [], set(), set()
+        dropped = {"language": 0, "not_news": 0, "duplicate": 0}
+        for item in items:
+            headline = item.headline or ""
+            if not _is_mostly_latin(headline + " " + (item.summary or "")):
+                dropped["language"] += 1
+                continue
+            if _is_non_news_page(headline, symbol, company_name):
+                dropped["not_news"] += 1
+                continue
+            url, key = canonicalize_url(item.url), _normalized_headline_key(headline)
+            if (url and url in seen_urls) or (key and key in seen_keys):
+                dropped["duplicate"] += 1
+                continue
+            if url:
+                seen_urls.add(url)
+            if key:
+                seen_keys.add(key)
+            kept.append(item)
+        if any(dropped.values()):
+            logger.info("News prefilter for %s: kept %d/%d, dropped %s", symbol, len(kept), len(items), dropped)
+        return kept
+
+    def _score_with_cache(self, texts: list[str], headlines: list[str], store: NewsStore | None) -> list:
+        """Sentiment for each text, re-using an earlier good score for the same headline.
+
+        A refresh re-fetches mostly the same headlines; scoring them again costs an LLM call and
+        seconds. Cached scores from the weak rule-based fallback are NOT trusted -- those get re-scored.
+        """
+        cached: dict[str, dict] = {}
+        if store is not None:
+            try:
+                cached = store.get_cached_sentiments([_headline_hash(h) for h in headlines])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Sentiment cache lookup failed: %s", exc)
+        from core.sentiment import SentimentResult
+        out: list = [None] * len(texts)
+        todo = []
+        for i, h in enumerate(headlines):
+            c = cached.get(_headline_hash(h))
+            if c:
+                out[i] = SentimentResult(positive=float(c["positive"]), negative=float(c["negative"]),
+                                         neutral=float(c["neutral"]), label=str(c["label"]),
+                                         confidence=float(c["confidence"]), model_name=str(c["model_name"]))
+            else:
+                todo.append(i)
+        if todo:
+            fresh = self.sentiment_analyzer.analyze_many([texts[i] for i in todo])
+            for i, r in zip(todo, fresh):
+                out[i] = r
+        if len(todo) != len(texts):
+            logger.info("Sentiment: %d/%d headlines served from cache, %d scored", len(texts) - len(todo), len(texts), len(todo))
+        return out
+
+    def _enrich_and_deduplicate(self, items: list[NewsItem], symbol: str, company_name: str | None = None,
+                                store: NewsStore | None = None) -> list[NewsItem]:
+        if not items:
+            return []
+        items = self._prefilter(items, symbol, company_name)
         if not items:
             return []
 
@@ -448,7 +641,7 @@ class NewsPipeline:
             )
 
         sentiment_texts = [" ".join([item.headline, item.summary]).strip() for item in scored_items]
-        sentiment_results = self.sentiment_analyzer.analyze_many(sentiment_texts)
+        sentiment_results = self._score_with_cache(sentiment_texts, [item.headline for item in scored_items], store)
 
         enriched: list[NewsItem] = []
         for item, sentiment_result in zip(scored_items, sentiment_results):
