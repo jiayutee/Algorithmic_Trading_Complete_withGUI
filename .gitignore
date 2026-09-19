@@ -40,3 +40,6 @@ logs/
 
 # live-trading kill switch flag file (touch to stop all live orders)
 .kill_switch
+
+# macOS Finder metadata
+.DS_Store
