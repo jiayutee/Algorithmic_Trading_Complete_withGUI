@@ -53,6 +53,50 @@ class MakerTakerCommission(bt.CommInfoBase):
         # is unreliable across backtrader versions.
         return abs(size) * price * self.p.taker_fee
 
+class LatencyBroker(bt.brokers.BackBroker):
+    """BackBroker that adds ``latency_bars`` extra bars between a signal and its fill.
+
+    backtrader fills an order at the NEXT bar's open (latency 0). With ``latency_bars=k`` the
+    order is held for k more bars, so it fills at the open of bar t+1+k -- a crude but honest model
+    of slow signal generation / order routing, during which the price can move against you.
+
+    Mechanics: new orders wait in the broker's ``submitted`` queue; each ``next()`` moves them to
+    ``pending`` and tries to execute them. Orders younger than ``latency_bars`` are taken out of
+    ``submitted`` for that call and put back afterwards. ``cancel`` also looks in ``submitted`` so an
+    order can still be cancelled while it is being held.
+    """
+
+    def __init__(self, latency_bars: int = 0):
+        super().__init__()
+        self.latency_bars = max(0, int(latency_bars))
+        self._age: dict = {}
+
+    def submit(self, order, check=True):
+        self._age[order.ref] = 0
+        return super().submit(order, check)
+
+    def next(self):
+        if self.latency_bars <= 0 or not self.submitted:
+            return super().next()
+        held, ready = [], []
+        for order in self.submitted:
+            (ready if self._age.get(order.ref, 0) >= self.latency_bars else held).append(order)
+        self.submitted = type(self.submitted)(ready)
+        super().next()                                   # activates + executes what is due (and partial remainders)
+        for order in held:
+            self._age[order.ref] = self._age.get(order.ref, 0) + 1
+        self.submitted.extend(held)
+
+    def cancel(self, order, bracket=False):
+        if order in self.submitted:                      # still being held for latency
+            self.submitted.remove(order)
+            order.cancel()
+            self.notify(order)
+            self._ococheck(order)
+            return True
+        return super().cancel(order, bracket)
+
+
 class Backtester:
     """
     Manages backtesting execution using Backtrader.
@@ -85,7 +129,8 @@ class Backtester:
         """Add strategy to Cerebro"""
         self.cerebro.addstrategy(strategy_class, **params)
 
-    def run_backtest(self, cash=100000.0, broker_mode="simulated", broker=None, benchmark_ticker="SPY", market_fee=0.001, limit_fee=0.0005):
+    def run_backtest(self, cash=100000.0, broker_mode="simulated", broker=None, benchmark_ticker="SPY", market_fee=0.001, limit_fee=0.0005,
+                     latency_bars=0, max_volume_pct=None):
         """
         Run the backtest.
 
@@ -96,11 +141,25 @@ class Backtester:
             benchmark_ticker (str): Ticker for Alpha/Beta calculation (e.g., 'SPY', 'BTC-USD').
             market_fee (float): Fee for market orders (percentage as decimal).
             limit_fee (float): Fee for limit orders (percentage as decimal).
+            latency_bars (int): OPT-IN execution latency: extra bars between signal and fill
+                (0 = backtrader's normal next-bar-open fill; the default, unchanged behaviour).
+            max_volume_pct (float | None): OPT-IN partial fills: an order can take at most this
+                percentage of a bar's volume; the remainder fills on following bars
+                (None = unlimited liquidity; the default, unchanged behaviour).
 
         Returns:
-            dict: Backtest results with metrics.
+            dict: Backtest results with metrics (``execution_model`` records the realism settings).
         """
-        logger.info(f"Running backtest... Cash: {cash}, Mode: {broker_mode}, Benchmark: {benchmark_ticker}, Mkt Fee: {market_fee}, Lim Fee: {limit_fee}")
+        logger.info(f"Running backtest... Cash: {cash}, Mode: {broker_mode}, Benchmark: {benchmark_ticker}, Mkt Fee: {market_fee}, Lim Fee: {limit_fee}, "
+                    f"latency_bars: {latency_bars}, max_volume_pct: {max_volume_pct}")
+
+        # Optional execution realism (defaults leave the standard broker completely untouched)
+        if latency_bars and latency_bars > 0:
+            self.cerebro.broker = LatencyBroker(latency_bars=latency_bars)
+        if max_volume_pct is not None:
+            if not (0 < max_volume_pct <= 100):
+                raise ValueError("max_volume_pct must be in (0, 100]")
+            self.cerebro.broker.set_filler(bt.fillers.FixedBarPerc(perc=float(max_volume_pct)))
 
         # Configure Broker
         self.cerebro.broker.setcash(cash)
@@ -123,7 +182,10 @@ class Backtester:
                 return {}
 
             strategy = results[0]
-            return self._generate_report(strategy, benchmark_ticker, initial_cash=cash)
+            report = self._generate_report(strategy, benchmark_ticker, initial_cash=cash)
+            if isinstance(report, dict):
+                report["execution_model"] = {"latency_bars": int(latency_bars or 0), "max_volume_pct": max_volume_pct}
+            return report
 
         except Exception as e:
             logger.error(f"Backtest execution failed: {e}")
