@@ -1,0 +1,661 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>AlgoTrader Notebook</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+
+<style>
+  /* KaTeX CSS inlined — the artifact CSP only admits stylesheets from Google
+     Fonts, not cdnjs, so the <link> version renders blank. The @font-face
+     rules below point at relative font files that won't resolve in this
+     single-file context; KaTeX still lays math out correctly, just with
+     fallback system serif/italic glyphs instead of its own math font. */
+  @font-face{font-family:KaTeX_AMS;font-style:normal;font-weight:400;src:url(fonts/KaTeX_AMS-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Caligraphic;font-style:normal;font-weight:700;src:url(fonts/KaTeX_Caligraphic-Bold.woff2) format("woff2")}@font-face{font-family:KaTeX_Caligraphic;font-style:normal;font-weight:400;src:url(fonts/KaTeX_Caligraphic-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Fraktur;font-style:normal;font-weight:700;src:url(fonts/KaTeX_Fraktur-Bold.woff2) format("woff2")}@font-face{font-family:KaTeX_Fraktur;font-style:normal;font-weight:400;src:url(fonts/KaTeX_Fraktur-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Main;font-style:normal;font-weight:700;src:url(fonts/KaTeX_Main-Bold.woff2) format("woff2")}@font-face{font-family:KaTeX_Main;font-style:italic;font-weight:700;src:url(fonts/KaTeX_Main-BoldItalic.woff2) format("woff2")}@font-face{font-family:KaTeX_Main;font-style:italic;font-weight:400;src:url(fonts/KaTeX_Main-Italic.woff2) format("woff2")}@font-face{font-family:KaTeX_Main;font-style:normal;font-weight:400;src:url(fonts/KaTeX_Main-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Math;font-style:italic;font-weight:700;src:url(fonts/KaTeX_Math-BoldItalic.woff2) format("woff2")}@font-face{font-family:KaTeX_Math;font-style:italic;font-weight:400;src:url(fonts/KaTeX_Math-Italic.woff2) format("woff2")}@font-face{font-family:"KaTeX_SansSerif";font-style:normal;font-weight:700;src:url(fonts/KaTeX_SansSerif-Bold.woff2) format("woff2")}@font-face{font-family:"KaTeX_SansSerif";font-style:italic;font-weight:400;src:url(fonts/KaTeX_SansSerif-Italic.woff2) format("woff2")}@font-face{font-family:"KaTeX_SansSerif";font-style:normal;font-weight:400;src:url(fonts/KaTeX_SansSerif-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Script;font-style:normal;font-weight:400;src:url(fonts/KaTeX_Script-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Size1;font-style:normal;font-weight:400;src:url(fonts/KaTeX_Size1-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Size2;font-style:normal;font-weight:400;src:url(fonts/KaTeX_Size2-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Size3;font-style:normal;font-weight:400;src:url(fonts/KaTeX_Size3-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Size4;font-style:normal;font-weight:400;src:url(fonts/KaTeX_Size4-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Typewriter;font-style:normal;font-weight:400;src:url(fonts/KaTeX_Typewriter-Regular.woff2) format("woff2")}.katex{text-rendering:auto;font:normal 1.21em KaTeX_Main,Times New Roman,serif;line-height:1.2;text-indent:0}.katex *{border-color:currentColor}.katex .katex-mathml{clip:rect(1px,1px,1px,1px);border:0;height:1px;overflow:hidden;padding:0;position:absolute;width:1px}.katex .katex-html>.newline{display:block}.katex .base{position:relative;white-space:nowrap;width:min-content}.katex .base,.katex .strut{display:inline-block}.katex .textbf{font-weight:700}.katex .textit{font-style:italic}.katex .textrm{font-family:KaTeX_Main}.katex .textsf{font-family:KaTeX_SansSerif}.katex .texttt{font-family:KaTeX_Typewriter}.katex .mathnormal{font-family:KaTeX_Math;font-style:italic}.katex .mathit{font-family:KaTeX_Main;font-style:italic}.katex .mathrm{font-style:normal}.katex .mathbf{font-family:KaTeX_Main;font-weight:700}.katex .boldsymbol{font-family:KaTeX_Math;font-style:italic;font-weight:700}.katex .amsrm,.katex .mathbb,.katex .textbb{font-family:KaTeX_AMS}.katex .mathcal{font-family:KaTeX_Caligraphic}.katex .mathfrak,.katex .textfrak{font-family:KaTeX_Fraktur}.katex .mathtt{font-family:KaTeX_Typewriter}.katex .mathscr,.katex .textscr{font-family:KaTeX_Script}.katex .mathsf,.katex .textsf{font-family:KaTeX_SansSerif}.katex .vlist-t{border-collapse:collapse;display:inline-table;table-layout:fixed}.katex .vlist-r{display:table-row}.katex .vlist{display:table-cell;position:relative;vertical-align:bottom}.katex .vlist>span{display:block;height:0;position:relative}.katex .vlist>span>span{display:inline-block}.katex .vlist>span>.pstrut{overflow:hidden;width:0}.katex .vlist-t2{margin-right:-2px}.katex .vlist-s{display:table-cell;font-size:1px;min-width:2px;vertical-align:bottom;width:2px}.katex .vbox{align-items:baseline;display:inline-flex;flex-direction:column}.katex .hbox{width:100%}.katex .hbox,.katex .thinbox{display:inline-flex;flex-direction:row}.katex .thinbox{max-width:0;width:0}.katex .msupsub{text-align:left}.katex .mfrac>span>span{text-align:center}.katex .mfrac .frac-line{border-bottom-style:solid;display:inline-block;width:100%}.katex .hdashline,.katex .hline,.katex .mfrac .frac-line,.katex .overline .overline-line,.katex .rule,.katex .underline .underline-line{min-height:1px}.katex .mspace{display:inline-block}.katex .clap,.katex .llap,.katex .rlap{position:relative;width:0}.katex .clap>.inner,.katex .llap>.inner,.katex .rlap>.inner{position:absolute}.katex .llap>.inner{right:0}.katex .clap>.inner,.katex .rlap>.inner{left:0}.katex .rule{border:0 solid;display:inline-block;position:relative}.katex .hline,.katex .overline .overline-line,.katex .underline .underline-line{border-bottom-style:solid;display:inline-block;width:100%}.katex .sqrt>.root{margin-left:.27777778em;margin-right:-.55555556em}.katex .fontsize-ensurer.reset-size1.size1,.katex .sizing.reset-size1.size1{font-size:1em}.katex .delimsizing.size1{font-family:KaTeX_Size1}.katex .delimsizing.size2{font-family:KaTeX_Size2}.katex .delimsizing.size3{font-family:KaTeX_Size3}.katex .delimsizing.size4{font-family:KaTeX_Size4}.katex .nulldelimiter{display:inline-block;width:.12em}.katex .delimcenter,.katex .op-symbol{position:relative}.katex .op-symbol.small-op{font-family:KaTeX_Size1}.katex .op-symbol.large-op{font-family:KaTeX_Size2}.katex .accent>.vlist-t,.katex .op-limits>.vlist-t{text-align:center}.katex .accent .accent-body{position:relative}.katex .overlay{display:block}.katex .mtable .col-align-c>.vlist-t{text-align:center}.katex .mtable .col-align-l>.vlist-t{text-align:left}.katex .mtable .col-align-r>.vlist-t{text-align:right}.katex .svg-align{text-align:left}.katex svg{fill:currentColor;stroke:currentColor;display:block;height:inherit;position:absolute;width:100%}.katex svg path{stroke:none}.katex img{border-style:none;max-height:none;max-width:none;min-height:0;min-width:0}.katex .stretchy{display:block;overflow:hidden;position:relative;width:100%}.katex .hide-tail{overflow:hidden;position:relative;width:100%}.katex .mover,.katex .munder,.katex .x-arrow{text-align:center}.katex .boxpad{padding:0 .3em}.katex .fbox,.katex .fcolorbox{border:.04em solid;box-sizing:border-box}.katex .sout{border-bottom-style:solid;border-bottom-width:.08em}.katex-display{display:block;margin:1em 0;text-align:center}.katex-display>.katex{display:block;text-align:center;white-space:nowrap}.katex-display>.katex>.katex-html{display:block;position:relative}.katex-display>.katex>.katex-html>.tag{position:absolute;right:0}
+</style>
+
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface-2: #1c2128;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --gold: #d29922;
+    --green: #3fb950;
+    --red: #f85149;
+    --purple: #a371f7;
+    color-scheme: dark;
+  }
+  /* This page commits to one dark, terminal-inspired world matching the
+     AlgoTrader app itself — no light variant, by design. */
+
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); }
+  body {
+    margin: 0;
+    padding: 0 16px;
+    padding-block: 32px;
+    font-family: 'IBM Plex Sans', -apple-system, sans-serif;
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 20px;
+  }
+  h1 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 26px;
+    font-weight: 700;
+    margin: 0;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+  h1 span { color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .updated { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+  nav.tabs {
+    display: flex; gap: 6px; margin: 24px 0 20px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  nav.tabs button {
+    font-family: 'IBM Plex Mono', monospace;
+    background: none; border: none; color: var(--muted);
+    font-size: 12.5px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase;
+    padding: 10px 14px; cursor: pointer; white-space: nowrap;
+    border-bottom: 2px solid transparent;
+    transition: color .15s, border-color .15s;
+  }
+  nav.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  nav.tabs button:hover:not(.active) { color: var(--text); }
+
+  section.panel { display: none; }
+  section.panel.active { display: block; animation: fade .2s ease; }
+  @media (prefers-reduced-motion: reduce) { section.panel.active { animation: none; } }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ---- Sprint Board ---- */
+  .phase-grid { display: flex; flex-direction: column; gap: 8px; }
+  .phase-row {
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .phase-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px; font-weight: 700;
+    color: var(--muted);
+    text-align: center;
+  }
+  .phase-title { font-size: 13.5px; font-weight: 500; }
+  .phase-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .pill {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em;
+    padding: 4px 9px; border-radius: 20px; white-space: nowrap;
+  }
+  .pill.done { background: rgba(63,185,80,0.15); color: var(--green); }
+  .pill.progress { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .pill.hold { background: rgba(210,153,34,0.15); color: var(--gold); }
+  .pill.todo { background: rgba(139,148,158,0.12); color: var(--muted); }
+
+  .group-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); margin: 24px 0 10px;
+  }
+  .group-label:first-child { margin-top: 0; }
+
+  /* ---- Lessons ---- */
+  .lesson-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .lesson-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 18px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .lesson-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .lesson-icon {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px; font-weight: 700;
+    width: 26px; height: 26px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .lesson-icon.done { background: rgba(63,185,80,0.15); color: var(--green); }
+  .lesson-icon.progress { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .lesson-title { font-weight: 600; font-size: 15px; flex: 1; }
+  .lesson-status { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .chevron { color: var(--muted); transition: transform .18s; flex-shrink: 0; }
+  .lesson-card.open .chevron { transform: rotate(90deg); }
+
+  .lesson-body { padding: 0 20px 20px; display: none; }
+  .lesson-card.open .lesson-body { display: block; }
+
+  .lesson-body h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--gold);
+    margin: 20px 0 8px;
+  }
+  .lesson-body h3:first-child { margin-top: 4px; }
+  .lesson-body p { font-size: 13.5px; margin: 8px 0; }
+  .lesson-body ul, .lesson-body ol { font-size: 13.5px; padding-left: 20px; margin: 8px 0; }
+  .lesson-body li { margin: 4px 0; }
+
+  .formula-box {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin: 10px 0;
+    font-size: 14px;
+    overflow-x: auto;
+  }
+  .formula-box.gold { border-left-color: var(--gold); }
+  .formula-box.purple { border-left-color: var(--purple); }
+
+  table.worked {
+    width: 100%; border-collapse: collapse; margin: 10px 0;
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  }
+  table.worked th, table.worked td {
+    border: 1px solid var(--border); padding: 7px 10px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  table.worked th { color: var(--muted); font-weight: 600; background: var(--surface-2); }
+  table.worked td:first-child, table.worked th:first-child { text-align: left; color: var(--muted); }
+  .table-scroll { overflow-x: auto; }
+
+  .insight {
+    background: rgba(163,113,247,0.08);
+    border: 1px solid rgba(163,113,247,0.25);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  .insight .label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--purple); margin-bottom: 4px; display: block;
+  }
+
+  .todo-note {
+    background: rgba(210,153,34,0.08);
+    border: 1px solid rgba(210,153,34,0.25);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-top: 14px;
+    font-size: 12.5px;
+    color: var(--gold);
+  }
+
+  .assess-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+  }
+  .assess-card h2 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px; font-weight: 700; margin: 0 0 10px;
+    color: var(--red);
+    text-transform: uppercase; letter-spacing: .03em;
+  }
+  .assess-card p { font-size: 13px; margin: 8px 0; }
+  .assess-card ul { font-size: 13px; padding-left: 20px; margin: 8px 0; }
+  .assess-card li { margin: 5px 0; }
+  .assess-card code { font-family: 'IBM Plex Mono', monospace; font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  .verdict-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 10px; margin: 12px 0; }
+  .verdict-tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .verdict-tile .k { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .verdict-tile .v { font-size: 12.5px; margin-top: 4px; }
+  .verdict-tile.bad .v { color: var(--red); }
+  .verdict-tile.ok .v { color: var(--green); }
+
+  footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>AlgoTrader <span>Notebook</span></h1>
+      <div class="subtitle">Sprint status + quant lessons — updated as we go, not a one-time snapshot</div>
+    </div>
+    <div class="updated" id="updated-at">Last updated: 2026-09-19 — news diagnostics added; see continuation handoff for validation and remaining work</div>
+  </header>
+
+  <nav class="tabs">
+    <button class="active" data-tab="lessons">Lessons</button>
+    <button data-tab="sprint">Sprint Board</button>
+  </nav>
+
+  <!-- ============ LESSONS ============ -->
+  <section class="panel active" id="panel-lessons">
+
+    <div class="lesson-card open">
+      <div class="lesson-head" tabindex="0" role="button" aria-expanded="true">
+        <div class="lesson-icon done">✓</div>
+        <div class="lesson-title">News / Sentiment Diffusion</div>
+        <div class="lesson-status">Complete</div>
+        <svg class="chevron" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="lesson-body">
+        <h3>Core idea</h3>
+        <p>News doesn't get priced in instantly — its effect on price <em>diffuses</em> over time and decays, the same shape you'd see in epidemic spread or product adoption (the model borrows from Bass's 1969 diffusion model).</p>
+
+        <h3>The model, built up</h3>
+        <p>A <strong>shock</strong> is the size of a sentiment surprise. A <strong>kernel</strong> describes how much of that shock's effect is still active at time <span data-katex="\(t\)"></span>. Multiplying them gives price impact:</p>
+        <div class="formula-box">
+          <span data-katex-block="\[\text{price\_impact}(t) = \text{shock} \times e^{-\lambda t}\]"></span>
+        </div>
+        <p>Multiplicative, not additive — this guarantees the effect converges to zero as <span data-katex="\(t\to\infty\)"></span> and keeps the model linear in shock size (a assumption, not a law).</p>
+
+        <h3>Worked example</h3>
+        <p>Shock = +0.6, λ = 0.5/day:</p>
+        <div class="table-scroll">
+        <table class="worked">
+          <tr><th>Day</th><th>kernel(t)</th><th>impact</th></tr>
+          <tr><td>0</td><td>1.00</td><td>0.60</td></tr>
+          <tr><td>1</td><td>0.61</td><td>0.36</td></tr>
+          <tr><td>2</td><td>0.37</td><td>0.22</td></tr>
+          <tr><td>3</td><td>0.22</td><td>0.13</td></tr>
+          <tr><td>5</td><td>0.08</td><td>0.05</td></tr>
+        </table>
+        </div>
+
+        <h3>The heterogeneity problem</h3>
+        <p>Not every stock, and not every news event, shares one λ. Two fixes discussed:</p>
+        <ul>
+          <li><strong>Bucket by news category</strong> (earnings / regulatory / macro) and fit one λ per bucket per stock — simple, teachable.</li>
+          <li><strong>Hierarchical / partial-pooling model</strong> — every stock gets its own λ, but it's pulled toward the population average based on how much data that stock actually has (see Kyle's Lambda lesson for the full mechanics — same math, reused here).</li>
+        </ul>
+
+        <div class="insight">
+          <span class="label">Key insight</span>
+          Shock magnitude is <em>observed</em> directly from the news pipeline's sentiment score — it's not something to estimate. What varies by stock is <em>sensitivity</em> (β) to a given shock, separate from decay speed (λ).
+        </div>
+      </div>
+    </div>
+
+    <div class="lesson-card open">
+      <div class="lesson-head" tabindex="0" role="button" aria-expanded="true">
+        <div class="lesson-icon done">✓</div>
+        <div class="lesson-title">Kyle's Lambda</div>
+        <div class="lesson-status">Complete — sophisticated version</div>
+        <svg class="chevron" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="lesson-body">
+        <h3>The three characters</h3>
+        <p>An <strong>informed trader</strong> knows something the market doesn't. <strong>Noise traders</strong> trade randomly. A <strong>market maker</strong> can't tell them apart order-by-order — but sets price off <em>net</em> order flow, because on average, flow correlates with information.</p>
+        <div class="formula-box">
+          <span data-katex-block="\[\Delta P = \lambda \times (\text{net order flow})\]"></span>
+        </div>
+        <p>λ is literally the market maker's "how much do I trust flow as an information signal" dial. Theoretical result (Kyle 1985):</p>
+        <div class="formula-box gold">
+          <span data-katex-block="\[\lambda = \frac{\sigma_v}{2\sigma_u}\]"></span>
+        </div>
+        <p>More value uncertainty (σ<sub>v</sub>) relative to noise trading (σ<sub>u</sub>) → order flow is a stronger information signal → higher λ.</p>
+
+        <h3>Empirical estimation</h3>
+        <p>In practice, λ is estimated via regression on real trade data — no need to separately know σ<sub>v</sub>/σ<sub>u</sub>:</p>
+        <div class="formula-box">
+          <span data-katex-block="\[\Delta P_t = \lambda \cdot \text{OrderFlow}_t + \varepsilon_t\]"></span>
+        </div>
+
+        <h3>The sophisticated version — three corrections</h3>
+        <p><strong>1. Transaction cost decomposition.</strong> Raw price changes include bid-ask bounce (mechanical, not informational) — omitting this inflates λ. Fix: split into permanent (λ) vs. transitory (θ) components:</p>
+        <div class="formula-box">
+          <span data-katex-block="\[\Delta P_t = \lambda_i \cdot \text{OrderFlow}_t + \theta \cdot \Delta\text{OrderFlow}_t + \varepsilon_t\]"></span>
+        </div>
+        <p><strong>2. Sentiment denoising.</strong> News causes simultaneous sentiment <em>and</em> order-flow shocks — omitting sentiment as a control creates omitted-variable bias, inflating λ. Add γ as a control:</p>
+        <div class="formula-box">
+          <span data-katex-block="\[\Delta P_t = \lambda_i \cdot \text{OrderFlow}_t + \theta \cdot \Delta\text{OrderFlow}_t + \gamma \cdot \text{Sentiment}_t + \varepsilon_t\]"></span>
+        </div>
+        <p><strong>3. Hierarchical (varying-slope) structure.</strong> λ is the coefficient that should vary by stock (it's what we theorize differs); θ and γ stay pooled/shared — both for data efficiency and because we lack a theoretical reason to expect them to differ by stock.</p>
+        <div class="formula-box purple">
+          <span data-katex-block="\[\lambda_i \sim \text{Normal}(\mu_\lambda, \sigma_\lambda^2)\]"></span>
+        </div>
+
+        <h3>Shrinkage — the weight formula</h3>
+        <p>Two competing guesses for each stock's λ: its own data (uncertainty <span data-katex="\(\sigma_i^2/n_i\)"></span>) and the population (uncertainty <span data-katex="\(\sigma_\lambda^2\)"></span>). Precision-weighted combination:</p>
+        <div class="formula-box purple">
+          <span data-katex-block="\[w_i = \frac{\sigma_\lambda^2}{\sigma_\lambda^2 + \sigma_i^2/n_i}, \qquad \hat\lambda_i = w_i \cdot \lambda_i^{\text{own}} + (1-w_i)\cdot \mu_\lambda\]"></span>
+        </div>
+        <div class="table-scroll">
+        <table class="worked">
+          <tr><th>Stock</th><th>Own λ</th><th>Own-data variance</th><th>Weight</th><th>Shrunk λ</th></tr>
+          <tr><td>AAPL (huge history)</td><td>0.75</td><td>low</td><td>~0.8</td><td>≈0.74</td></tr>
+          <tr><td>Microcap (4 events)</td><td>0.20</td><td>high</td><td>~0.2</td><td>≈0.46</td></tr>
+        </table>
+        </div>
+        <p>σ<sub>i</sub>² itself is the variance of the regression's residuals for that stock — estimated jointly with everything else via REML or MCMC, not hand-iterated.</p>
+
+        <h3>Two connections worth remembering</h3>
+        <div class="insight">
+          <span class="label">Same idea, different names</span>
+          Partial pooling (Bayesian term) = hierarchical/multilevel model (structure) = mixed-effects model (fixed + random effects) — three vocabularies for the same shrinkage behavior.
+        </div>
+        <div class="insight">
+          <span class="label">Ridge regression connection</span>
+          Both shrink to fight overfitting. Ridge shrinks toward <em>zero</em> with a manually-tuned penalty. Hierarchical models shrink toward the <em>population mean</em>, with the penalty strength derived automatically from the data's own variance components — not cross-validated by hand. This is a real mathematical equivalence (mixed-model BLUPs ≈ generalized ridge solutions), not just an analogy.
+        </div>
+      </div>
+    </div>
+
+    <div class="lesson-card open">
+      <div class="lesson-head" tabindex="0" role="button" aria-expanded="true">
+        <div class="lesson-icon progress">…</div>
+        <div class="lesson-title">Hawkes Process</div>
+        <div class="lesson-status">In progress</div>
+        <svg class="chevron" width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="lesson-body">
+        <h3>Core idea</h3>
+        <p>Most models of "when do events happen" (Poisson process) assume independence — one event tells you nothing about the next. Markets don't work that way: one trade or news article often triggers more soon after. Events are <strong>self-exciting</strong>.</p>
+
+        <h3>The intensity function</h3>
+        <div class="formula-box">
+          <span data-katex-block="\[\lambda(t) = \mu + \sum_{i:\,t_i<t} \alpha \cdot e^{-\beta(t-t_i)}\]"></span>
+        </div>
+        <ul>
+          <li><strong>μ</strong> — baseline event rate with nothing special happening</li>
+          <li><strong>α</strong> — how big a boost each past event gives</li>
+          <li><strong>β</strong> — how fast that boost decays (same exponential-decay idea as the diffusion kernel)</li>
+        </ul>
+
+        <h3>Worked example</h3>
+        <p>μ=0.5/hr, α=2, β=1. Events at t=0, 0.5, 0.8hr. Intensity at t=1.0:</p>
+        <div class="formula-box">
+          <span data-katex-block="\[\lambda(1.0) = 0.5 + 2e^{-1.0} + 2e^{-0.5} + 2e^{-0.2} \approx 4.09\]"></span>
+        </div>
+        <p>≈8× the baseline — three recent events stack their still-active decay tails.</p>
+
+        <div class="todo-note">
+          <strong>Where we left off:</strong> comprehension check pending — (1) does large β cool a cascade fast or slow, (2) why α and β need to be separate parameters rather than one combined number, (3) plain-language Poisson vs. Hawkes distinction. Fit method (MLE), how it connects to Kalshi arbitrage timing, and the full worked-example write-up are still ahead.
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ============ SPRINT BOARD ============ -->
+  <section class="panel" id="panel-sprint">
+    <div class="assess-card">
+      <h3>2026-09-19 — Codex continuation: news diagnostics</h3>
+      <p>Implemented a bounded source smoke harness and structured health metadata using the application's actual configuration. Live BTC/AAPL probes delivered five raw items each from OpenBB; Brave/DDG returned none and RSS/GDELT were slow or timed out. News quality and sentiment are still unresolved.</p>
+      <p><a href="CONTINUATION_PLAN.md">Remaining implementation plan</a> · <a href="CODEX_HANDOFF.md">Claude/Codex handoff and validation</a> · <a href="artifacts/news-source-smoke-2026-09-19.json">Measured JSON artifact</a> · <a href="https://app.notion.com/p/3e0d2ab050d981d5829def6cde9a4e9c">Notion task</a></p>
+      <p>Next: typed source failures and replay fixtures, then measured feed/sentiment quality. This diagnostic slice does not complete the autonomous-trading backlog. Historical lessons and completion records below are preserved.</p>
+    </div>
+
+    <div class="assess-card">
+      <h2>Strategic assessment — 2026-09-17</h2>
+      <p>Owner asked directly: can the current codebase ingest news, analyze it, trade profitably, autonomously research/combine quant methods to keep improving, and show full trade transparency? Verdict: <strong>infrastructure is solid, the trading brain doesn't exist yet.</strong></p>
+      <div class="verdict-grid">
+        <div class="verdict-tile ok"><div class="k">UI / broker / PnL</div><div class="v">Solid — this is not what's missing</div></div>
+        <div class="verdict-tile bad"><div class="k">Sentiment</div><div class="v">Root-caused: hardcoded to rule-based, FinBERT never attempted</div></div>
+        <div class="verdict-tile bad"><div class="k">News feed</div><div class="v">Free scrape chain — slow, no dedup budget</div></div>
+        <div class="verdict-tile bad"><div class="k">Quant strategy live</div><div class="v">Zero — ML strategies registered but no required lib installed, no UI path to select them</div></div>
+        <div class="verdict-tile bad"><div class="k">Research loop</div><div class="v">Does not exist — orchestrator automates dev tasks, not strategy research</div></div>
+      </div>
+      <p><strong>Root cause found:</strong> <code>ui/main_window.py:63</code> hardcodes <code>SentimentAnalyzer(force_rule_based=True)</code> — real FinBERT support already exists in <code>core/sentiment.py</code> but is never attempted, regardless of what's installed. This is why sentiment has always been "pretty much useless." One-line switch, not a missing model → now Phase 6.4.</p>
+      <p><strong>Architecture decision — restructure vs. build on existing OSS:</strong> owner asked whether to adopt an external framework instead of extending this codebase. Decision: <strong>no restructuring.</strong> PyQt5/brokers/backtrader are working and hard to redo; the gaps are additive modules, not symptoms of bad architecture.</p>
+      <ul>
+        <li><strong>Keep</strong> backtrader for final single-strategy validation (unchanged).</li>
+        <li><strong>Add</strong> <code>vectorbt</code> (pip only) as a fast vectorized layer to run/compare many strategy candidates at once — the missing piece for the research loop.</li>
+        <li><strong>Skip Qlib</strong> — forces its own data schema, would mean restructuring <code>data_loader.py</code>.</li>
+        <li><strong>Skip FinRL / stable_baselines3 / TD3 / DDPG</strong> — confirmed not installed, historically fragile; GBM (XGBoost/LightGBM) strategy comes first per Phase 6.2.</li>
+        <li><strong>NautilusTrader stays as-is</strong> in Phase 8 (execution-engine upgrade spike) — not pulled forward, orthogonal to the research-loop gap.</li>
+      </ul>
+      <p><strong>Cost constraint relaxed</strong> by owner 2026-09-17: subscriptions are now fine if they meaningfully improve performance. This makes Phase 11.0's old "no new paid data sources" rule stale (now updated in Notion) and opens the door to a paid news API + hosted sentiment (LLM-based or hosted FinBERT) instead of local-only free options.</p>
+      <p>New Sprint Board rows seeded from this assessment: <strong>Phase 6.4</strong> (fix the sentiment hardcode, priority 5) and <strong>Phase 12.0</strong> (autonomous multi-strategy research loop via vectorbt, priority 3, blocked on Phase 6.1/6.2).</p>
+      <p><strong>Update — 2026-09-19, the research session (PR #2).</strong> What was built and what it found, all with pre-registered experiments (plans committed <em>before</em> results):</p>
+      <ul>
+        <li><strong>No directional edge.</strong> Phase 6.5: horizons, pooled 8 symbols, taker flow, funding rate — every AUC ≈ 0.50 with intervals containing 0.5; nothing beats buy-and-hold after fees.</li>
+        <li><strong>Volatility is predictable</strong> (AUC 0.730, +0.03 over a naive rule) <strong>but that did not become a sizing edge</strong> (Phase 6.6: GBM forecasts too noisy → 32 turnovers/yr; naive vol-targeting barely cut drawdown).</li>
+        <li><strong>Risk-based allocation is suggestive</strong> (Phase 7.1: HRP / risk parity / min-variance beat 1/N in both halves with lower vol) <strong>but not significant at the strict bar.</strong></li>
+        <li><strong>Research loop v1</strong> (12.0) evaluates candidates vs buy-and-hold with rules fixed in advance; first run promoted nothing (EMA Crossover Sharpe 0.81 vs 0.43 but interval [−1.4, +2.1]). Visible in the Dash "Research Loop" tab.</li>
+        <li><strong>Safety:</strong> live orders are blocked by default and guarded inside every connector (11.2). <strong>News:</strong> 11.0 cut refresh from 52s to 15s (1.8s repeat); a collector now accumulates the history H3 needs (far from ready).</li>
+      </ul>
+      <p>Honest bottom line: the infrastructure to research and test ideas properly now exists; the ideas tried so far do not beat simply holding the assets. The next real lever is data with genuinely new information (news history, order-book/liquidation data), not more models on price.</p>
+      <p><strong>Update — Phase 9 (Kalshi) 2026-09-19.</strong> Read-only client for Kalshi's public API (no key, deliberately not a broker — binary contracts, no order path). <strong>Arbitrage signals</strong> (YES+NO &lt; $1, mutually-exclusive event sets, after an <em>assumed</em> fee formula): a live scan of 233 quoted markets found <strong>none</strong> — expected for liquid books. <strong>Calibration study (9.3a, pre-registered):</strong> no evidence that longshots are overpriced (edge −0.006, 97.5% interval [−0.046, +0.045], 122 markets / 37 events); favorites untestable. <strong>Two data traps caught:</strong> unfiltered <code>/markets</code> returns only empty multivariate combos (a scan is silently blind), and empty books show a placeholder ask ≈ 0.99, which made favorites appear to win only 43% of the time — that first run was voided and disclosed. One small window (≈ 9 hours, mostly sports props), so it says little about politics or economics. A daily snapshot collector now builds a multi-week dataset for a proper study.</p>
+      <p><strong>Update — where things stand after the big merge (2026-09-19).</strong> Seven pull requests are now merged into <code>main</code> with CI green. Short version: the <em>plumbing</em> to run a strategy honestly on paper now exists and is running; the strategies themselves still show no proven edge. What changed, in plain words:</p>
+      <ul>
+        <li><strong>Platform review, checked.</strong> An outside review said the codebase is a prototype, not yet an autonomous trading machine. I checked its claims against the code: nearly all were true (for example "Go Live" started nothing; the paper simulator invented prices; alpha/beta used two different formulas). One was overstated (missing news does not become "neutral", because a separate news-count feature exists).</li>
+        <li><strong>Paper account made truthful.</strong> Real prices only (the upward-drifting random walk is now opt-in); an order with no or stale price is rejected with a reason instead of filled at a made-up $100; pending limit/stop orders re-check as prices move; every open holding is marked to a real price; the account is saved to disk and shared by the desktop app and the web view (checked across separate processes).</li>
+        <li><strong>One alpha/beta formula.</strong> "Couldn't compute" now shows as n/a with a reason instead of 0. The desktop app shows alpha/beta like the web view. The risk-free rate default changed from a hardcoded 1% to 0 (it is a parameter).</li>
+        <li><strong>Honest keyword sentiment.</strong> Scores now sum to 1 and confidence grows with evidence; one keyword used to read as 100%.</li>
+        <li><strong>Paper-only execution service.</strong> One pipeline: bar → signal → sizing → risk approval → order → fill → reconciliation. It cannot place a real order (it refuses anything but the paper simulator). One runner at a time; one decision per completed bar, so a restart never repeats an order; the risk gate can block or shrink <em>entries</em> but never exits; an emergency flatten exists. A walk-forward test shows it trades on the same signal bars as a backtest. The desktop "Go Live" button (which started nothing) is now "Start Paper"; both apps have an Execution tab.</li>
+        <li><strong>It is running on its own.</strong> A background agent starts at login and runs the Trend Filter on daily bars of BTC, ETH, SOL and BNB (15% each). It took four positions (about 60% invested) in the paper account and a restart placed no duplicates. This is paper money and a smoother-ride rule, not a profit claim.</li>
+        <li><strong>81 instruments</strong> in the dropdowns (was 9): crypto, US stocks, ETFs, futures, indices, forex; the desktop box also accepts any typed symbol and the web view has a custom-symbol field. Indices, futures and forex are chart/backtest-only. Along the way I found that Yahoo was rate-limiting the library the app used, so <em>no stock chart loaded at all</em>; a fallback to Yahoo's plain chart endpoint fixed it.</li>
+        <li><strong>Both apps now match</strong> on symbols, intervals, defaults and strategies (shared lists), and web backtests use the chart's interval, days and fees (they used to reload 365 days at the default interval).</li>
+        <li><strong>NautilusTrader spike (Phase 8): done.</strong> Same EMA strategy, same 1,499 BTC daily bars, both engines: final value within about $2 of $115.4k, Sharpe 0.8666 vs 0.8667, identical max drawdown, 49 of 49 orders. Nautilus is about 1.5× faster on this data and 2.2× at 50,000 bars. Real differences: it fills at the signal bar's close (backtrader: next open), seeds the EMA differently, wants bar <em>close</em> timestamps, and needs a margin account for shorts. Not tested: its live order handling, which is the real reason to adopt it. No decision to migrate was made.</li>
+      </ul>
+      <p><strong>Honest bottom line, unchanged:</strong> nothing tested so far beats buy-and-hold on risk-adjusted return. The most useful positive result is still the trend filter's smaller drawdowns (three separate looks). Still open: an always-on view with alerts, stop-loss orders, multi-strategy allocation, real-money execution (deliberately absent), and a paid news feed for the news test.</p>
+      <p><strong>Update — overlay, schedule, Python 3.11 (2026-09-19).</strong> <strong>Trend overlay:</strong> an optional checkbox next to the strategy picker (desktop and web) that only lets a strategy hold positions while the 28-bar trend is up, otherwise cash. Its tooltip says what the evidence supports: smaller worst drawdown, <em>not</em> more return. It also stops shorting, and in a test it cut a profitable short. There is a matching standalone "Trend Filter (28d)" strategy. <strong>Collectors:</strong> the news and Kalshi collectors now run on their own every day (Kalshi 07:05 / 12:05 / 17:05, news 07:20; Mac must be on). No Claude tokens used. The news yield is very low (+3 BTC headlines in a test run), so free sources may never reach the amount the news test needs; a paid news feed is the realistic route. <strong>Python 3.11:</strong> created a separate environment so NautilusTrader installs (it does not exist for 3.9); everything else stays on 3.9.</p>
+      <p><strong>Update — Phases 6.7 / 6.8 / 6.9 (momentum), 2026-09-19.</strong> <strong>6.7</strong> (pre-registered): cross-sectional and time-series momentum on the 8-coin universe — Sharpe 0.84 / 0.84 vs 0.68 for equal weight, but the intervals include zero (+0.16 [−0.24, +0.53]; +0.17 [−0.59, +0.85]) → <strong>no evidence of an edge</strong>. What stood out was <em>drawdown</em>: the trend filter cut the worst drop from −67% to −37.5%. Because that was noticed after looking, it was only a hypothesis, so <strong>6.8</strong> tested it on 8 other coins fixed beforehand: <strong>confirmed, but weaker</strong> — worst drop −78.3% → −63.7% (interval +1.2 to +41.4 points, better in both halves), Sharpe difference again not significant. <strong>6.9</strong> then tested it in an earlier, non-overlapping period (2019 → Sept 2022): <strong>confirmed again, larger</strong> — worst drop −74.3% → −47.7% (interval +4.3 to +46.0 points, better in both halves), Sharpe difference again not significant. Three looks, same direction. Plain reading: a simple trend filter gives a <em>smoother ride</em>, it is not shown to make more money, and −64% is still brutal. Same 2022–2026 period and survivorship-biased coins, so it says little about other regimes. Also this session: IBKR is now wired into the broker manager (opt-in, mocked tests only — never tested against a real TWS), and the chart-freeze bug could <em>not</em> be reproduced (10/10 clean runs), so no fix was made.</p>
+      <p><strong>Update — Phase 6.0–6.2 shipped 2026-09-19 (commit b5638b6): the first real quantitative method.</strong> <code>core/feature_engineering.py</code> (no-lookahead features), <code>core/ml_validation.py</code> (walk-forward splits + purge gap; on a synthetic case shuffled K-fold scores 0.82–0.88 while walk-forward scores 0.54–0.59), and a LightGBM strategy retrained every 20 bars on the past only, with per-decision explanations in each order's "Why". <strong>Honest first result</strong> (~4 years BTCUSDT daily, 1,080 out-of-sample bars): AUC <strong>0.491</strong>, 95% CI [0.456, 0.523]; accuracy 0.496 vs 0.512 for "always up"; the naive long/short rule lost 73% after fees (564 position changes) vs buy-and-hold +192%. Meaning: <em>price and calendar features alone carry no detectable next-day edge</em> — the framework works (it scores chance on noise and finds signal when present), the model just has nothing to find yet. New backlog item <strong>Phase 6.5</strong> lists pre-registered experiments (longer horizons, multi-symbol, accumulated news sentiment, derivatives data, volatility targets). <strong>Phase 6.3 (LSTM) is waiting on your keep-or-deprecate decision</strong>; my recommendation is deprecate for now.</p>
+      <p><strong>Update — 2026-09-19 (PR #2):</strong> (1) <em>Dash chart load</em> 44s → 6s: candle loads no longer scrape news + LLM-score headlines first (<code>load_data(include_news=False)</code>; the News tab fetches on demand). (2) <em>Live price bug</em>: the WebSocket used Binance's diff-depth stream, so bids[0]/asks[0] were often far from the touch — the badge showed 74,230 while BTC traded 81,200 and paper orders filled at wrong prices; switched to the top-5 partial book, now badge/fill/exchange agree to the cent (affects the desktop app too). (3) <em>Dash Agent Monitor</em> tab shipped: Start/Stop, per-agent status + run count, LLM summary line — the last "Missing" agent row in the Phase 3.1 parity checklist. (4) AlgoTrader orchestrator routine re-enabled (briefing / work loop / debrief).</p>
+      <p><strong>Update — Phase 11.1 shipped 2026-09-18 (commit e772b0c):</strong> every order now carries a structured "why" — strategy signal, indicator values at the decision bar, the rule thresholds compared, and which exit condition fired. Shown as a <em>Why</em> column in the Orders tab (desktop + Dash) and on backtest chart marker hovers. Also found and fixed: paper trades in <em>both</em> UIs filled at the broker's fake $100 default because nothing fed it real prices — Dash now fills at the live tick and marks P&amp;L to market. Dash also gained news sentiment badges and a live realized/unrealized P&amp;L card. Both follow-ups (Dash Agent Monitor, slow Dash chart load) were closed 2026-09-19.</p>
+      <p><strong>Update — Phase 6.4 shipped same day (commit 7fce0f7):</strong> removed the hardcode, added a DeepSeek-backed LLM sentiment path (reuses the existing <code>DEEPSEEK_API_KEY</code>, tried first, falls through to FinBERT-if-installed then rule-based on any failure). Verified live: correctly scored a positive earnings beat, a negative antitrust probe, and a genuinely neutral routine-update headline — the last one is exactly the nuance the old keyword matcher missed. 8 new tests added, full suite 716 passed.</p>
+    </div>
+
+    <div class="group-label">Shipped</div>
+    <div class="phase-grid">
+      <div class="phase-row">
+        <div class="phase-num">0–2</div>
+        <div><div class="phase-title">Quant metrics + Dash migration groundwork</div><div class="phase-sub">PnL split, alpha/beta, live-price service, Dash scaffold + chart</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">3</div>
+        <div><div class="phase-title">Dash feature-parity review</div><div class="phase-sub">Decision: PyQt5 stays primary — 5 critical gaps blocked full replacement</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">4</div>
+        <div><div class="phase-title">Instrument model + IBKR</div><div class="phase-sub">Unified data model for equities/crypto/options/futures</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">5</div>
+        <div><div class="phase-title">Pre-launch readiness re-verification</div><div class="phase-sub">Final GO decision — launched 2026-08-18</div></div>
+        <div class="pill done">Done</div>
+      </div>
+    </div>
+
+    <div class="group-label">Shipped — outside original plan</div>
+    <div class="phase-grid">
+      <div class="phase-row">
+        <div class="phase-num">—</div>
+        <div><div class="phase-title">Research Lab: Strategy Lab + Volatility Clustering</div><div class="phase-sub">New PyQt5 analytics tab</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">—</div>
+        <div><div class="phase-title">yfinance resilience + MEXC connector</div><div class="phase-sub">Spoofed session + retry-backoff; new exchange via ccxt</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">6.4</div>
+        <div><div class="phase-title">Fix sentiment hardcoded to rule-based fallback</div><div class="phase-sub">Shipped 2026-09-17 · commit 7fce0f7 · DeepSeek LLM path replaces the hardcode</div></div>
+        <div class="pill done">Done</div>
+      </div>
+    </div>
+
+    <div class="group-label">Shipped 2026-09-19 — from the platform review</div>
+    <div class="phase-grid">
+      <div class="phase-row">
+        <div class="phase-num">EX</div>
+        <div><div class="phase-title">Paper-only execution service + always-on agent</div><div class="phase-sub">signal → sizing → risk → order → fill → reconcile · one runner, no repeat orders, exits never blocked · running now: Trend Filter, daily, BTC/ETH/SOL/BNB</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">PA</div>
+        <div><div class="phase-title">Truthful, durable paper account</div><div class="phase-sub">real prices only · unpriced/stale orders rejected · pending orders re-checked · saved to disk, shared by both apps</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">AB</div>
+        <div><div class="phase-title">One alpha/beta formula + honest keyword sentiment</div><div class="phase-sub">unknown shows n/a, not 0 · confidence grows with evidence</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">UI</div>
+        <div><div class="phase-title">Desktop and web view consistent</div><div class="phase-sub">shared option lists · Days and fee inputs in the web view · backtests use the chart's interval · new Research Loop and Equity Curve tabs on the desktop</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">IN</div>
+        <div><div class="phase-title">81 instruments + typed symbols + Yahoo rate-limit fallback</div><div class="phase-sub">27 crypto · 27 stocks · 14 ETFs · 5 futures · 4 indices · 4 FX · stocks charted again after a Yahoo 429 outage</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">4.1</div>
+        <div><div class="phase-title">Interactive Brokers wired in (opt-in, mock-tested only)</div><div class="phase-sub">never tested against a real TWS; options/futures paths (4.2–4.4) not built</div></div>
+        <div class="pill done">Done</div>
+      </div>
+    </div>
+
+    <div class="group-label">On hold — awaiting lessons</div>
+    <div class="phase-grid">
+      <div class="phase-row">
+        <div class="phase-num">10.0</div>
+        <div><div class="phase-title">News/sentiment diffusion (learning)</div><div class="phase-sub">Lesson complete — ready to unblock</div></div>
+        <div class="pill hold">Hold</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">10.1</div>
+        <div><div class="phase-title">Kyle's Lambda (learning)</div><div class="phase-sub">Lesson complete — ready to unblock</div></div>
+        <div class="pill hold">Hold</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">10.2</div>
+        <div><div class="phase-title">Hawkes process (learning)</div><div class="phase-sub">Lesson in progress</div></div>
+        <div class="pill progress">In progress</div>
+      </div>
+    </div>
+
+    <div class="group-label">Backlog — production hardening (from external gap review, 2026-09-15)</div>
+    <div class="phase-grid">
+      <div class="phase-row">
+        <div class="phase-num">11.2</div>
+        <div><div class="phase-title">Live execution safety — kill switch, dry-run, pre-trade checks</div><div class="phase-sub">Shipped 2026-09-19 · kill switch ON by default, dry run ON by default, per-order/session/rate limits, enforced inside every live connector · found + fixed Alpaca buy-as-sell bug</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">11.0</div>
+        <div><div class="phase-title">News pipeline hardening (dedup, reliability)</div><div class="phase-sub">Shipped 2026-09-19 · time budget + circuit breaker, search by name, quote/foreign-page filter, sentiment cache · BTC refresh 52s → 15s first / 1.8s repeat</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">11.1</div>
+        <div><div class="phase-title">Trade provenance / explainability logging</div><div class="phase-sub">Shipped 2026-09-18 · commit e772b0c · "Why" column + chart hovers; ML feature-importance slots ready for Phase 6</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">11.3 / 11.4</div>
+        <div><div class="phase-title">Lightweight experiment tracking + backtest realism</div><div class="phase-sub">Shipped 2026-09-19 · SQLite experiment log (python -m core.experiment_log) · opt-in latency + partial fills in the backtester</div></div>
+        <div class="pill done">Done</div>
+      </div>
+    </div>
+
+    <div class="group-label">Backlog — not started</div>
+    <div class="phase-grid">
+      <div class="phase-row">
+        <div class="phase-num">6</div>
+        <div><div class="phase-title">ML strategy framework + experiments</div><div class="phase-sub">6.0 features · 6.1 walk-forward · 6.2 LightGBM · 6.3 LSTM deprecated (owner decision) · 6.5, 6.6 & 6.7 pre-registered experiments run — no directional or Sharpe edge found · 6.8 &amp; 6.9 trend-filter drawdown reduction confirmed (not a Sharpe edge)</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">7</div>
+        <div><div class="phase-title">Portfolio optimization</div><div class="phase-sub">Shipped 2026-09-19 · numpy/scipy allocators (skfolio not installable on Python 3.9) · risk-based weights beat equal weight in both halves but not at the pre-registered 99% bar</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">8</div>
+        <div><div class="phase-title">NautilusTrader evaluation spike</div><div class="phase-sub">Done 2026-09-19 · EMA crossover ported and compared on the same data: same result within ~$2, ~1.5× faster (2.2× at 50k bars) · four real differences documented · no decision to migrate (writeup: engines/nautilus_spike/README.md)</div></div>
+        <div class="pill done">Done</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">9</div>
+        <div><div class="phase-title">Kalshi mispricing engine</div><div class="phase-sub">9.0 read-only client + 9.1 arbitrage signals + 9.3a calibration study + snapshot collector shipped 2026-09-19 · no arbitrage found, no longshot mispricing found · 9.2 not built · no order path exists</div></div>
+        <div class="pill progress">In progress</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">12.0</div>
+        <div><div class="phase-title">Autonomous multi-strategy research loop</div><div class="phase-sub">v1 shipped 2026-09-19 · evaluate → promote/retire (rules fixed in advance) → forward paper ledger · first real run: nothing promoted</div></div>
+        <div class="pill done">Done</div>
+      </div>
+    </div>
+
+  </section>
+
+  <footer>algotrader-notebook · sprint board id 91e3aa02 · regenerated as lessons and phases progress</footer>
+</div>
+
+<script>
+(function(){
+  try {
+    document.querySelectorAll('.lesson-head').forEach(function(head){
+      function toggle(){
+        var card = head.closest('.lesson-card');
+        var open = card.classList.toggle('open');
+        head.setAttribute('aria-expanded', open);
+      }
+      head.addEventListener('click', toggle);
+      head.addEventListener('keydown', function(e){
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+      });
+    });
+
+    document.querySelectorAll('nav.tabs button').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        document.querySelectorAll('nav.tabs button').forEach(function(b){ b.classList.remove('active'); });
+        document.querySelectorAll('section.panel').forEach(function(p){ p.classList.remove('active'); });
+        btn.classList.add('active');
+        document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+      });
+    });
+  } catch(e) { console.error(e); }
+})();
+
+window.addEventListener('load', function(){
+  try {
+    document.querySelectorAll('[data-katex]').forEach(function(el){
+      katex.render(el.getAttribute('data-katex').slice(1, -1), el, { throwOnError: false });
+    });
+    document.querySelectorAll('[data-katex-block]').forEach(function(el){
+      katex.render(el.getAttribute('data-katex-block').slice(2, -2), el, { throwOnError: false, displayMode: true });
+    });
+  } catch(e) { console.error('KaTeX render failed', e); }
+});
+</script>
+
+</body></html>

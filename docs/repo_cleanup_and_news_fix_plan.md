@@ -61,3 +61,9 @@ Likely causes for intermittent or consistent news-source failures:
 
 
 Prepared as a concise plan to be iterated with the team. If you want, I can create the smoke harness script and add the `enabled/health` metadata to `news_sources` next.
+
+## 2026-09-19 continuation status
+
+The owner identified `algotrader_notebook.html` as the current plan. See [continuation plan](CONTINUATION_PLAN.md) and [handoff](CODEX_HANDOFF.md). The smoke harness and safe per-source status metadata are implemented. `scripts/smoke_news.py` supersedes the narrow `test_live_search.py` for diagnostics and uses actual application configuration. The normal factory already excludes the MCP placeholder. No source reordering or repo-wide cleanup was performed.
+
+The [recorded live probe](artifacts/news-source-smoke-2026-09-19.json) shows degraded delivery despite OpenBB results. Provider repair, paid-feed comparison, relevance/sentiment evaluation and replay fixtures remain open. Raw source exception text is deliberately excluded from the shareable JSON because it may contain credentials or request URLs.

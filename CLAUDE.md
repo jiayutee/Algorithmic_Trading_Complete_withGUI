@@ -1,5 +1,8 @@
 # AlgoTrader — CLAUDE.md
 
+## Continuation handoff (owner instruction, 2026-09-19)
+Read `docs/algotrader_notebook.html`, `docs/CONTINUATION_PLAN.md` and `docs/CODEX_HANDOFF.md` before continuing. After each implementation slice, update the notebook, plan, evidence/handoff artifact, Notion sprint task and GitHub. Distinguish implemented, tested, merged and deployed work; keep remaining limitations explicit.
+
 ## Project
 **Algorithmic Trading Complete with GUI** — sprint to ship by **2026-08-18** (revised launch date — original 2026-07-28 target pushed 3 weeks by owner decision on 2026-08-09, see Daily Log). 51-day sprint total.
 Repo: `jiayutee/Algorithmic_Trading_Complete_withGUI`
