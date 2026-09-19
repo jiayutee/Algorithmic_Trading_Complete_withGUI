@@ -379,7 +379,8 @@ class MainWindow(QMainWindow):
         self.simulate_btn = QPushButton("Simulate")
         self.play_btn = QPushButton("▶")
         self.pause_btn = QPushButton("⏸")
-        self.trade_btn = QPushButton("Go Live")
+        self.trade_btn = QPushButton("Start Paper")
+        self.trade_btn.setToolTip("Run the selected strategy automatically on the paper account (no real orders are possible).")
         self.trade_btn.setObjectName("liveBtn")
         self.reset_btn = QPushButton("↺")
         self.reset_btn.setToolTip("Reset zoom")
@@ -558,6 +559,7 @@ class MainWindow(QMainWindow):
         self._setup_pnl_calendar_tab()
         self._setup_news_tab()
         self._setup_agent_monitor_tab()
+        self._setup_execution_tab()
         self._setup_research_lab_tab()
 
         if self._missing_deps:
@@ -983,6 +985,82 @@ class MainWindow(QMainWindow):
         self._agent_timer = QTimer()
         self._agent_timer.timeout.connect(self._refresh_agent_table)
 
+    # ------------------------------------------------------------------
+    # Execution tab (same data as the Dash tab: core.execution.view.execution_view)
+    # ------------------------------------------------------------------
+
+    _EXEC_COLS = [("When", "when"), ("Symbol", "symbol"), ("Action", "action"), ("Status", "status"), ("Detail", "detail")]
+
+    def _setup_execution_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        controls = QHBoxLayout()
+        self._exec_headline = QLabel("")
+        self._exec_headline.setWordWrap(True)
+        self._exec_headline.setStyleSheet("color: #e6edf3; font-size: 12px; font-weight: 600;")
+        controls.addWidget(self._exec_headline, 1)
+        for text, handler in (("Halt entries", self._exec_halt), ("Resume", self._exec_resume), ("Flatten all", self._exec_flatten)):
+            b = QPushButton(text)
+            b.clicked.connect(handler)
+            controls.addWidget(b)
+        layout.addLayout(controls)
+        self._exec_issues = QLabel("")
+        self._exec_issues.setWordWrap(True)
+        self._exec_issues.setStyleSheet("color: #f85149; font-size: 11px;")
+        layout.addWidget(self._exec_issues)
+        self._exec_table = QTableWidget(0, len(self._EXEC_COLS))
+        self._exec_table.setHorizontalHeaderLabels([h for h, _ in self._EXEC_COLS])
+        self._exec_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._exec_table.setAlternatingRowColors(True)
+        self._exec_table.horizontalHeader().setSectionResizeMode(len(self._EXEC_COLS) - 1, QHeaderView.Stretch)
+        layout.addWidget(self._exec_table)
+        self.bottom_tabs.addTab(tab, "Execution")
+        self._exec_service = None
+        self._exec_timer = QTimer()
+        self._exec_timer.timeout.connect(self._refresh_execution_view)
+        self._exec_timer.start(5000)
+        self._refresh_execution_view()
+
+    def _refresh_execution_view(self):
+        try:
+            from core.execution.view import execution_view
+            v = execution_view()
+        except Exception as exc:  # noqa: BLE001
+            self._exec_headline.setText(f"Execution status unavailable: {exc}")
+            return
+        self._exec_headline.setText(v["headline"])
+        self._exec_issues.setText("\n".join(v["issues"]))
+        rows = v["decisions"]
+        self._exec_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, (_, key) in enumerate(self._EXEC_COLS):
+                self._exec_table.setItem(r, c, QTableWidgetItem(str(row.get(key, ""))))
+
+    def _exec_halt(self):
+        from core.execution.journal import ExecutionJournal
+        ExecutionJournal().halt("halted from the desktop Execution tab")
+        self.statusBar().showMessage("Halted: no new positions until Resume. Exits still work.")
+        self._refresh_execution_view()
+
+    def _exec_resume(self):
+        from core.execution.journal import ExecutionJournal
+        ExecutionJournal().resume()
+        self.statusBar().showMessage("Resumed.")
+        self._refresh_execution_view()
+
+    def _exec_flatten(self):
+        from PyQt5.QtWidgets import QMessageBox
+        if QMessageBox.question(self, "Flatten all", "Close every open PAPER position at the latest price and halt new entries?") != QMessageBox.Yes:
+            return
+        try:
+            from core.execution.launcher import flatten_paper
+            closed = flatten_paper(self.broker_manager.get_broker("Simulator"), self.data_loader, reason="Flatten all pressed in the desktop app")
+            self.statusBar().showMessage(f"Closed: {', '.join(closed)}. New entries are halted until Resume." if closed
+                                         else "Nothing to close. New entries are halted.")
+        except Exception as exc:  # noqa: BLE001
+            self.statusBar().showMessage(f"Flatten failed: {exc}")
+        self._refresh_execution_view()
+
     def _start_supervisor(self):
         try:
             from core.runtime.supervisor import Supervisor
@@ -1084,6 +1162,10 @@ class MainWindow(QMainWindow):
             self._research_lab_panel = None
 
     def closeEvent(self, event):
+        if getattr(self, "_exec_service", None) is not None:
+            self._exec_service.stop()
+        if hasattr(self, "_exec_timer"):
+            self._exec_timer.stop()
         if self._supervisor:
             self._supervisor.stop()
         if self.is_streaming:
@@ -1687,47 +1769,45 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Order error: {str(e)}")
 
     def start_trading(self):
-        broker_name = self.broker_combo.currentText()
-        strategy_name = self.strategy_combo.currentText()
+        """Toggle the PAPER execution service for the selected symbol/interval/strategy.
 
+        (This used to only select a broker and print "Live trading started" without starting anything.) It is paper
+        only: real brokers are refused here, and the service itself refuses anything but the strict paper simulator.
+        """
+        svc = getattr(self, "_exec_service", None)
+        if svc is not None and svc.running:
+            svc.stop()
+            self._exec_service = None
+            self.trade_btn.setText("Start Paper")
+            self.statusBar().showMessage("Paper trading stopped. Open positions were left as they are.")
+            self._refresh_execution_view()
+            return
+        if self.broker_combo.currentText() != "Simulator":
+            self.statusBar().showMessage("Automatic trading is paper-only: choose the Simulator broker. "
+                                         "No real orders can be placed by the execution service.")
+            return
+        strategy_name = self.strategy_combo.currentText()
         if strategy_name in ("None", "False"):
             self.statusBar().showMessage("No strategy selected!")
             return
         try:
-            broker = self.broker_manager.get_broker(broker_name)
-            self.current_broker = broker
-
-            if not self.current_broker:
-                self.statusBar().showMessage(f"Broker {broker_name} not configured!")
+            wrapper = self.strategy_manager.get_strategy(strategy_name)
+            if not wrapper or not wrapper.is_backtrader:
+                self.statusBar().showMessage(f"{strategy_name} cannot run in the paper execution service (rule-based strategies only).")
                 return
-
-            if broker_name == "Simulator":
-                try:
-                    self.current_broker.market_fee = float(self.market_fee_input.text()) / 100.0
-                    self.current_broker.limit_fee = float(self.limit_fee_input.text()) / 100.0
-                except ValueError:
-                    pass
-
-            initial_cash = float(self.cash_input.text())
-            if hasattr(self.current_broker, 'balance'):
-                self.current_broker.balance = initial_cash
-                self.current_broker.initial_balance = initial_cash
-                self.current_broker.portfolio_value = initial_cash
-
-            if strategy_name == "LSTM Predictor":
-                symbol = self.symbol_combo.currentText()
-                strategy = self.strategy_manager.get_strategy(strategy_name, ticker=symbol, sequence_length=60)
-            else:
-                strategy = self.strategy_manager.get_strategy(strategy_name)
-
-            self.refresh_account_info()
-
-            self.statusBar().showMessage(f"Live trading started with {broker_name} using {strategy_name}")
-
+            from core.execution.launcher import start_paper_execution
+            svc, msg = start_paper_execution(
+                self.broker_manager.get_broker("Simulator"), self.data_loader, wrapper.strategy_obj, strategy_name,
+                self.symbol_combo.currentText(), self.interval_combo.currentText(),
+                trend_overlay=bool(getattr(self, "trend_overlay_check", None) and self.trend_overlay_check.isChecked()))
+            self.statusBar().showMessage(msg)
+            if svc is not None:
+                self._exec_service = svc
+                self.trade_btn.setText("Stop Paper")
+            self._refresh_execution_view()
         except Exception as e:
-            self.statusBar().showMessage(f"Trading error: {str(e)}")
+            self.statusBar().showMessage(f"Could not start paper trading: {e}")
 
-    # === REALTIME STREAMING (Plotly-only) ===
     def start_realtime_stream(self, symbol):
         if self.is_streaming:
             self.stop_realtime_stream()
