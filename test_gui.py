@@ -526,6 +526,11 @@ def _make_trending_ohlcv():
     )
 
 
+def _chart_theme():
+    from core.chart_builder import THEME
+    return THEME
+
+
 class TestBacktestChartMarkers:
     """Validate that plot_signals() overlays real buy/sell trade markers onto
     the Plotly figure, matching the strategy's actual trade log."""
@@ -624,10 +629,10 @@ class TestBacktestChartMarkers:
         for trace in self.win.fig.data:
             if getattr(trace, "name", None) == "Buy Signal":
                 assert trace.marker.symbol == "triangle-up"
-                assert trace.marker.color == "green"
+                assert trace.marker.color == _chart_theme()["green"]
             elif getattr(trace, "name", None) == "Sell Signal":
                 assert trace.marker.symbol == "triangle-down"
-                assert trace.marker.color == "red"
+                assert trace.marker.color == _chart_theme()["red"]
 
 
 # ---------------------------------------------------------------------------
@@ -681,7 +686,7 @@ def test_data_load_result_reaches_main_thread_and_updates_status(qapp):
             qapp.processEvents()
             time.sleep(0.01)
         msg = win.statusBar().currentMessage()
-        if not msg.startswith("Loaded") or threads != [True]:
+        if not msg.startswith("Loaded") or not threads or not all(threads):   # every delivery on the main thread (the window may also schedule its own initial load)
             failures.append((i, msg, threads))
         win._data_load_worker.wait(2000)
         win.destroy()
@@ -732,4 +737,54 @@ def test_desktop_start_paper_toggle_refuses_real_brokers_and_runs_the_paper_serv
     finally:
         if getattr(win, "_exec_service", None) is not None:
             win._exec_service.stop()
+        win.destroy()
+# ---------------------------------------------------------------------------
+# Desktop <-> Dash parity (the Dash half is in test_ui_parity.py)
+# ---------------------------------------------------------------------------
+
+def test_desktop_uses_shared_options_and_has_the_trend_overlay(qapp):
+    from core import ui_options
+    from core.strategy_manager import StrategyManager, build_strategy_registry
+    from unittest.mock import MagicMock
+    from ui.main_window import MainWindow
+    win = MainWindow(data_loader=MagicMock(), strategy_manager=StrategyManager(), broker_manager=MagicMock(), missing_deps=[])
+    try:
+        items = lambda cb: [cb.itemText(i) for i in range(cb.count())]
+        assert items(win.symbol_combo) == ui_options.SYMBOLS
+        assert items(win.interval_combo) == ui_options.INTERVALS
+        assert win.days_input.text() == str(ui_options.DEFAULT_DAYS)
+        assert win.cash_input.text() == str(ui_options.DEFAULT_CASH)
+        assert win.market_fee_input.text() == str(ui_options.DEFAULT_MARKET_FEE_PCT)
+        assert win.limit_fee_input.text() == str(ui_options.DEFAULT_LIMIT_FEE_PCT)
+        assert win.trend_overlay_check.text() == ui_options.TREND_OVERLAY_LABEL
+        assert win.trend_overlay_check.toolTip() == ui_options.TREND_OVERLAY_TIP
+        # every strategy the manager registers is selectable
+        assert set(items(win.strategy_combo)) >= set(build_strategy_registry()) | {"None"}
+        tabs = [win.bottom_tabs.tabText(i) for i in range(win.bottom_tabs.count())]
+        assert "Research Loop" in tabs
+        assert win._rl_table.columnCount() == len(win._RL_CANDIDATE_COLS)
+    finally:
+        win.destroy()
+
+
+def test_desktop_equity_curve_tab_uses_the_shared_builder_and_never_raises(qapp, tmp_path, monkeypatch):
+    import tempfile
+    from unittest.mock import MagicMock
+    from ui.main_window import MainWindow
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    win = MainWindow(data_loader=MagicMock(), strategy_manager=MagicMock(), broker_manager=MagicMock(), missing_deps=[])
+    try:
+        tabs = [win.bottom_tabs.tabText(i) for i in range(win.bottom_tabs.count())]
+        assert "Equity Curve" in tabs
+        win._show_equity_curve([100000.0, 101000.0, 99000.0, 105000.0])
+        assert "100,000 -> $105,000 over 4 bars" in win._equity_note.text()
+        if win._equity_view is not None:                                   # web engine available (it is not when Qt starts first)
+            html = (tmp_path / "algotrader_equity.html").read_text()
+            assert "Portfolio Value" in html and "105000" in html
+        from core.chart_builder import build_equity_curve_figure
+        fig = build_equity_curve_figure([100000.0, 105000.0])              # the builder the Dash tab uses too
+        assert fig.data[0].name == "Portfolio Value" and list(fig.data[0].y) == [100000.0, 105000.0]
+        win._show_equity_curve([])                                        # empty result must not raise
+        assert "No equity data" in win._equity_note.text()
+    finally:
         win.destroy()
