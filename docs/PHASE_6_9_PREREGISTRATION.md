@@ -45,7 +45,8 @@ All 8 symbols had data. Window 2019-02-14 -> 2022-09-09 (1,304 days), nothing af
   The absolute numbers (EW Sharpe 1.25, +100%/yr) show this period was an extraordinary bull run for survivors; the
   filter's Sharpe gain is plausibly regime-dependent and is not claimed.
 - **Limits that remain:** crypto only; survivorship (every coin here survived to today, and 2019-2022 flatters them);
-  the rule was fixed in advance but was *chosen* after seeing 2022-2026, so 28 days is not independently validated as
-  optimal (it was never tuned, but nor was any alternative tested). A max drawdown of -47.7% is still very large.
+  the 28-day lookback was fixed in Phase 6.7's pre-registration before any result existed and was never tuned, but that
+  also means it is one arbitrary choice: 14 and 56 days were only reported as untested context in 6.7, so nothing here shows 28 is
+  better than its neighbours. A max drawdown of -47.7% is still very large.
 - What would be worth doing with this: offer a trend-filter *overlay* (hold a position only while its 28-day return is
   positive) as a risk-reduction option in the app, described as drawdown reduction and not as alpha.
