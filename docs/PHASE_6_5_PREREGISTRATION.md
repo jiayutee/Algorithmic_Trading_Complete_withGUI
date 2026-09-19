@@ -64,3 +64,50 @@ one-line rule.
 - CPI / labour macro (needs a FRED key); VIX / yields are available but weakly relevant to crypto.
 - Any parameter search. If a hypothesis fails, the next step is a *new* pre-registered
   hypothesis, not a tweak of this one.
+
+---
+
+# Results (run 2026-09-19; protocol exactly as above, nothing tuned)
+
+Raw numbers: `training_ground/results/phase_6_5.json`. Reproduce:
+`python training_ground/experiments_6_5.py`. All 8 symbols had >= 1,100 bars.
+
+## Directional hypotheses (AUC; interval = 99.3% Bonferroni block bootstrap)
+
+| id | AUC | 99.3% interval | symbols > 0.5 | 1st / 2nd half | rule Sharpe vs buy-and-hold | verdict |
+|----|-----|----------------|---------------|----------------|-----------------------------|---------|
+| H1a per-symbol, 5-day | 0.515 | [0.477, 0.553] | 7 / 8 | 0.524 / 0.506 | -0.29 vs 0.83 | no evidence |
+| H1b per-symbol, 10-day | 0.501 | [0.458, 0.549] | 5 / 8 | 0.528 / 0.473 | -0.15 vs 0.79 | no evidence |
+| H2a pooled, 1-day | 0.499 | [0.469, 0.525] | 4 / 8 | 0.502 / 0.497 | -1.34 vs 0.80 | no evidence |
+| H2b pooled, 5-day | 0.500 | [0.453, 0.553] | 3 / 8 | 0.508 / 0.491 | 0.20 vs 0.83 | no evidence |
+| H4a + taker flow | 0.498 | [0.470, 0.526] | 5 / 8 | 0.495 / 0.505 | -1.66 vs 0.80 | no evidence |
+| H4b + funding rate | 0.502 | [0.474, 0.531] | 5 / 8 | 0.497 / 0.510 | -1.08 vs 0.81 | no evidence |
+| H4c + both | 0.501 | [0.471, 0.530] | 5 / 8 | 0.499 / 0.504 | -1.16 vs 0.81 | no evidence |
+| H3 news sentiment | -- | -- | -- | -- | -- | deferred (not enough history) |
+
+**No directional hypothesis met even the first criterion.** Every interval contains 0.50 and
+no rule beat buy-and-hold after fees. The nearest miss is H1a (5-day horizon: AUC 0.515,
+positive in 7 of 8 symbols) -- but with 7 experiments run, a 0.515 whose interval reaches 0.477
+is what luck looks like. Not a finding; it may be worth a *new* pre-registered follow-up, not a tweak.
+
+## H5 volatility (not directional; 95% intervals)
+
+| quantity | value |
+|----------|-------|
+| GBM AUC for "tomorrow's range above its 60-day median" | **0.730** [0.708, 0.754] |
+| naive rule (score = today's range / 60-day median) | 0.701 |
+| GBM minus naive, paired | **+0.03**, interval [0.009, 0.048] (excludes 0) |
+
+**Volatility is predictable and the model adds a small but real amount over the one-line rule.**
+This matches the well-documented persistence of volatility and is the one thing these features
+can do. It is a *risk* tool, not a return source: it can size positions or set stops, it cannot
+tell you which way price will move.
+
+## What this means
+
+- Price, calendar, taker-flow and funding features do not predict next-day (or 5/10-day) direction
+  for these 8 large crypto assets over 2022-2026. That now has a proper, hard-to-fool test behind it.
+- The practical use of the model is **volatility forecasting for risk sizing**. A follow-up
+  (pre-register first) is whether volatility-targeted sizing improves risk-adjusted returns.
+- Still open: news sentiment (H3) once months of history accumulate; other data (order-book depth,
+  liquidations, on-chain) would be *new* hypotheses.
