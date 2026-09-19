@@ -33,24 +33,41 @@ class StrategyWrapper:
         return f"<StrategyWrapper name={self.name} is_backtrader={self.is_backtrader}>"
 
 
+def build_strategy_registry() -> dict:
+    """{display name: strategy class} for everything the app offers. The desktop app lists all of it; the Dash view lists
+    the Backtrader ones (see ``backtrader_strategies``). One place to add a strategy for both front ends."""
+    registry = {
+        "MACD/RSI": MACD_RSI_Strategy,
+        "EMA Crossover": EMACrossoverStrategy,
+        "Stochastic": StochasticStrategy,
+        "GBM (LightGBM)": GBMStrategy,
+        "Trend Filter (28d)": TrendFilterStrategy,
+    }
+    if TD3Strategy is not None:
+        registry["TD3 Strategy"] = TD3Strategy
+    if FinRLStrategy:
+        registry["FinRL Strategy"] = FinRLStrategy
+    return registry
+
+
+def backtrader_strategies() -> dict:
+    """The subset of the registry that runs inside the Backtrader engine -- what the Dash view can backtest."""
+    out = {}
+    for name, cls in build_strategy_registry().items():
+        try:
+            if issubclass(cls, bt.Strategy):
+                out[name] = cls
+        except TypeError:
+            pass
+    return out
+
+
 class StrategyManager:
     def __init__(self):
-        self.strategies = {
-            "MACD/RSI": MACD_RSI_Strategy,
-            "EMA Crossover": EMACrossoverStrategy,
-            "Stochastic": StochasticStrategy,
-            "GBM (LightGBM)": GBMStrategy,
-            "Trend Filter (28d)": TrendFilterStrategy,
-        }
+        self.strategies = build_strategy_registry()
         # Deprecated (Phase 6.3 decision, 2026-09-19): not offered in the UI, but still
         # resolvable by name so old scripts/configs keep working. See strategies/ml_strategies.py.
         self.deprecated_strategies = {"LSTM Predictor": LSTMPredictor}
-
-        if TD3Strategy is not None:
-            self.strategies["TD3 Strategy"] = TD3Strategy
-
-        if FinRLStrategy:
-            self.strategies["FinRL Strategy"] = FinRLStrategy
 
         self.backtester = Backtester()
 

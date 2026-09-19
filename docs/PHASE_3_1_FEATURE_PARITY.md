@@ -24,6 +24,39 @@ close the gaps before designating Dash as sole entrypoint.
 
 ---
 
+## Current status (2026-09-19) — read this first; everything below the next rule is the 2026-08-17 snapshot
+
+Since that snapshot most of the gaps were closed, and the two UIs now share their option lists so they cannot drift
+(`core/ui_options.py`, `core/strategy_manager.py::build_strategy_registry`; guarded by `test_ui_parity.py` and the parity test in `test_gui.py`).
+
+| Area | Desktop (PyQt5) | Dash (web) | State |
+|---|---|---|---|
+| Symbols, intervals, default days/cash/fees | shared lists | shared lists | **consistent** |
+| Days input | yes | yes (added) | **consistent** |
+| Mkt / Lim fee inputs | yes | yes (added; used by Dash backtests) | **consistent** |
+| Backtest uses the chart's interval + days + fees | yes | yes (fixed: it used to reload 365 days at the default interval) | **consistent** |
+| Strategy list | all registered | Backtrader-runnable ones | same registry; Dash omits non-Backtrader (TD3/FinRL) |
+| Trend overlay checkbox | yes (visible dark-theme styling fixed) | yes | **consistent** |
+| Live P&L / account card | yes | yes | consistent |
+| News sentiment badges | yes | yes | consistent |
+| Orders "Why" column | yes | yes | consistent |
+| Agent Monitor | yes | yes | consistent |
+| Research Loop tab | yes (added; same builder `core.research_loop.research_loop_view`) | yes | **consistent** |
+| Research Lab | yes | yes (Strategy Lab, Volatility Lab, Signal & Gate) | consistent |
+| Equity Curve tab | chart only | own tab | **differs** (desktop shows it in the results panel) |
+| Broker dropdown | yes | **no** — Dash is bound to `SimulatedBroker` | **OPEN GAP** |
+| Data source (Historical/Live/Realtime/FinRL) | yes | **no** — Historical only | **OPEN GAP** |
+| Simulate (step-through replay) | yes | **no** | **OPEN GAP** |
+| "Go Live" | button exists but only selects a broker/strategy and prints a message; it starts no trading loop | none | **OPEN GAP (both)** — see the platform review |
+| Dependency-warning tab | yes | no | minor |
+
+Open gaps that need real work (not a quick fix): broker switching in Dash, data-source selection, the simulate mode, and a genuine
+autonomous execution loop behind "Go Live".
+
+---
+
+> The remaining sections are the original 2026-08-17 snapshot, kept for history. Where they disagree with the table above, the table wins.
+
 ## Feature Comparison Table
 
 | # | Feature | PyQt5 | Dash | Notes |

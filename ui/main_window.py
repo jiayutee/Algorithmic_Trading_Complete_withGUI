@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QTableWidgetItem, QHeaderView, QApplication, QFormLayout,
                              QFrame, QSizePolicy, QGridLayout, QCheckBox)
 from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor
+from core import ui_options
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView
@@ -129,6 +130,10 @@ class MainWindow(QMainWindow):
             QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
             QComboBox { background: #161b22; border: 1px solid #30363d; border-radius: 4px;
                         padding: 3px 6px; color: #e6edf3; font-size: 12px; min-height: 22px; }
+            QCheckBox { color: #e6edf3; font-size: 12px; spacing: 6px; }
+            QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #8b949e; border-radius: 3px; background: #161b22; }
+            QCheckBox::indicator:hover { border-color: #58a6ff; }
+            QCheckBox::indicator:checked { background: #1f6feb; border-color: #58a6ff; }
             QComboBox::drop-down { border: none; width: 18px; }
             QComboBox QAbstractItemView { background: #161b22; border: 1px solid #30363d; color: #e6edf3; }
             QLineEdit { background: #161b22; border: 1px solid #30363d; border-radius: 4px;
@@ -308,20 +313,20 @@ class MainWindow(QMainWindow):
         # Symbol
         layout.addWidget(self._muted_label("Symbol"))
         self.symbol_combo = QComboBox()
-        self.symbol_combo.addItems(["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "AAPL", "TSLA", "GOLD", "SPY", "QQQ"])
+        self.symbol_combo.addItems(ui_options.SYMBOLS)
         self.symbol_combo.setFixedWidth(110)
         layout.addWidget(self.symbol_combo)
 
         # Interval
         layout.addWidget(self._muted_label("Interval"))
         self.interval_combo = QComboBox()
-        self.interval_combo.addItems(['1d', '1h', '15m', '5m', '1m'])
+        self.interval_combo.addItems(ui_options.INTERVALS)
         self.interval_combo.setFixedWidth(70)
         layout.addWidget(self.interval_combo)
 
         # Days
         layout.addWidget(self._muted_label("Days"))
-        self.days_input = QLineEdit("365")
+        self.days_input = QLineEdit(str(ui_options.DEFAULT_DAYS))
         self.days_input.setValidator(QIntValidator(1, 10000))
         self.days_input.setFixedWidth(50)
         layout.addWidget(self.days_input)
@@ -355,11 +360,8 @@ class MainWindow(QMainWindow):
         self.strategy_combo.addItems(strategy_items)
         self.strategy_combo.setFixedWidth(130)
         layout.addWidget(self.strategy_combo)
-        self.trend_overlay_check = QCheckBox("Trend overlay")
-        self.trend_overlay_check.setToolTip(
-            "Only hold positions while the trailing 28-bar return is positive; otherwise sit in cash.\n"
-            "Evidence (Phases 6.7-6.9): reduced the worst drawdown in 3 tests; did NOT show higher return.\n"
-            "Also stops the strategy from shorting. Validated on daily bars, crypto only.")
+        self.trend_overlay_check = QCheckBox(ui_options.TREND_OVERLAY_LABEL)
+        self.trend_overlay_check.setToolTip(ui_options.TREND_OVERLAY_TIP)
         layout.addWidget(self.trend_overlay_check)
 
         # Broker
@@ -409,16 +411,16 @@ class MainWindow(QMainWindow):
         form = QFormLayout()
         form.setSpacing(4)
 
-        self.cash_input = QLineEdit("100000")
+        self.cash_input = QLineEdit(str(ui_options.DEFAULT_CASH))
         self.cash_input.setValidator(QIntValidator(1000, 10000000))
         form.addRow("Cash ($):", self.cash_input)
 
-        self.market_fee_input = QLineEdit("0.1")
+        self.market_fee_input = QLineEdit(str(ui_options.DEFAULT_MARKET_FEE_PCT))
         self.market_fee_input.setValidator(QDoubleValidator(0, 10, 4))
         self.market_fee_input.setFixedWidth(60)
         form.addRow("Mkt Fee %:", self.market_fee_input)
 
-        self.limit_fee_input = QLineEdit("0.05")
+        self.limit_fee_input = QLineEdit(str(ui_options.DEFAULT_LIMIT_FEE_PCT))
         self.limit_fee_input.setValidator(QDoubleValidator(0, 10, 4))
         self.limit_fee_input.setFixedWidth(60)
         form.addRow("Lim Fee %:", self.limit_fee_input)
@@ -548,6 +550,8 @@ class MainWindow(QMainWindow):
         self._setup_pnl_calendar_tab()
         self._setup_news_tab()
         self._setup_agent_monitor_tab()
+        self._setup_research_loop_tab()
+        self._setup_equity_curve_tab()
         self._setup_research_lab_tab()
 
         if self._missing_deps:
@@ -972,6 +976,92 @@ class MainWindow(QMainWindow):
         # Poll supervisor snapshot every 3 s (only active when supervisor is running)
         self._agent_timer = QTimer()
         self._agent_timer.timeout.connect(self._refresh_agent_table)
+
+    # ------------------------------------------------------------------
+    # Research Loop tab (same data as the Dash tab: core.research_loop.research_loop_view)
+    # ------------------------------------------------------------------
+
+    _RL_CANDIDATE_COLS = [("Candidate", "candidate"), ("Status", "status"), ("Sharpe", "sharpe"), ("Buy&hold", "bh_sharpe"),
+                          ("Diff", "diff"), ("95% interval", "ci"), ("Trades", "trades"), ("Max DD", "max_dd"),
+                          ("Verdict", "verdict"), ("Evaluated", "evaluated")]
+
+    def _setup_research_loop_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        top = QHBoxLayout()
+        self._rl_message = QLabel("")
+        self._rl_message.setWordWrap(True)
+        self._rl_message.setStyleSheet("color: #8b949e; font-size: 11px;")
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self._refresh_research_loop)
+        top.addWidget(self._rl_message, 1)
+        top.addWidget(refresh)
+        layout.addLayout(top)
+        self._rl_table = QTableWidget(0, len(self._RL_CANDIDATE_COLS))
+        self._rl_table.setHorizontalHeaderLabels([h for h, _ in self._RL_CANDIDATE_COLS])
+        self._rl_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._rl_table.setAlternatingRowColors(True)
+        self._rl_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self._rl_table)
+        self._rl_paper = QLabel("")
+        self._rl_paper.setWordWrap(True)
+        self._rl_paper.setStyleSheet("color: #c9d1d9; font-size: 11px;")
+        layout.addWidget(self._rl_paper)
+        self.bottom_tabs.addTab(tab, "Research Loop")
+        self._refresh_research_loop()
+
+    def _refresh_research_loop(self):
+        try:
+            from core.research_loop import research_loop_view
+            view = research_loop_view()
+        except Exception as exc:  # noqa: BLE001
+            self._rl_message.setText(f"Research loop data unavailable: {exc}")
+            return
+        self._rl_message.setText(view["message"])
+        rows = view["candidates"]
+        self._rl_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, (_, key) in enumerate(self._RL_CANDIDATE_COLS):
+                self._rl_table.setItem(r, c, QTableWidgetItem(str(row.get(key, "—"))))
+        paper = view["paper"]
+        self._rl_paper.setText("Forward paper results: " + ("; ".join(
+            f"{p['candidate']} {p['return_pct']}% over {p['days']}d ({p['trades']} trades)" for p in paper) if paper
+            else "none yet (no candidate has been promoted)"))
+
+    # ------------------------------------------------------------------
+    # Equity Curve tab (same figure as the Dash tab: core.chart_builder.build_equity_curve_figure)
+    # ------------------------------------------------------------------
+
+    def _setup_equity_curve_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        self._equity_note = QLabel("Run a backtest to see the portfolio value over time.")
+        self._equity_note.setStyleSheet("color: #8b949e; font-size: 11px;")
+        layout.addWidget(self._equity_note)
+        self._equity_view = QWebEngineView() if _WEBENGINE_AVAILABLE else None
+        if self._equity_view is not None:
+            layout.addWidget(self._equity_view, 1)
+        self.bottom_tabs.addTab(tab, "Equity Curve")
+
+    def _show_equity_curve(self, total_asset_value):
+        """Draw the backtest's portfolio value. Never raises: a chart problem must not break the backtest panel."""
+        try:
+            if not total_asset_value:
+                self._equity_note.setText("No equity data for this backtest.")
+                return
+            first, last = float(total_asset_value[0]), float(total_asset_value[-1])
+            self._equity_note.setText(f"Portfolio value: ${first:,.0f} -> ${last:,.0f} over {len(total_asset_value)} bars")
+            if self._equity_view is None or not _PLOTLY_AVAILABLE:
+                return
+            from core.chart_builder import build_equity_curve_figure
+            fig = build_equity_curve_figure(list(total_asset_value))
+            fig.update_layout(height=None, autosize=True)
+            path = os.path.join(tempfile.gettempdir(), "algotrader_equity.html")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(fig.to_html(include_plotlyjs=True, full_html=True))
+            self._equity_view.load(QUrl.fromLocalFile(path))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Equity curve tab failed: %s", exc)
 
     def _start_supervisor(self):
         try:
@@ -1502,6 +1592,7 @@ class MainWindow(QMainWindow):
             self.bt_maxdd_label.setText(dd_str)
 
             self.plot_signals(results.get('signals', []))
+            self._show_equity_curve(results.get('total_asset_value', []))
 
             if 'Final Value' in summary:
                  backtest_broker.balance = float(summary['Final Value'])
