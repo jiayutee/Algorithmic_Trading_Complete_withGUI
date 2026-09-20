@@ -414,6 +414,11 @@
       <p>Still no strategy with a proven edge: the trend filter cuts drawdown but shows no significant Sharpe gain. The Codex entries below are unchanged.</p>
     </div>
     <div class="assess-card">
+      <h3>2026-09-20 — news failures are now named (PR pending review)</h3>
+      <p>Each news source now reports <em>why</em> it returned nothing: rate limit, auth failure, unparseable reply, timeout, other error, or a genuinely empty answer (which is not counted as a failure). Implemented and tested offline on a task branch; not merged, not deployed. A repeat live probe (BTC, AAPL) got items only from DuckDuckGo and OpenBB; Brave, RSS and GDELT hit the 6 s budget, which still hides their own cause. That is a known limit, not a fix.</p>
+      <p><a href="artifacts/news-failure-classification-2026-09-20.md">Evidence and limits</a> · <a href="artifacts/news-source-smoke-2026-09-20.json">Probe JSON</a> · no sentiment or news edge is established.</p>
+    </div>
+    <div class="assess-card">
       <h3>2026-09-20 — consistent branch and PR workflow</h3>
       <p>Owner decision: overnight and interactive agents use separate task branches/worktrees, tests and PRs against main. No scheduled direct-main exception or automatic merging. Pending PRs stay In progress until reviewed, merged and validated; updating the running checkout is a separate step.</p>
       <p><a href="artifacts/orchestrator-pr-workflow-2026-09-20.md">Workflow evidence and activation notes</a> · <a href="https://app.notion.com/p/3e0d2ab050d981218af5e78bd6a3fb90">Notion task</a></p>

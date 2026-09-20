@@ -5,6 +5,9 @@ Owner requested removal of the overnight direct-main exception. Updated AGENTS.m
 
 Notion: https://app.notion.com/p/3e0d2ab050d981218af5e78bd6a3fb90
 
+## 2026-09-20 overnight: news failure classification (PR pending review)
+Branch `orchestrator/day85-news-failure-visibility`: typed provider outcomes in `core/news_sources.py` / `core/news_health.py` / `core/news_pipeline.py`, smoke report treats `ok_empty` as healthy. Implemented and tested locally, not merged, not deployed. Evidence and limits: [news-failure-classification-2026-09-20.md](artifacts/news-failure-classification-2026-09-20.md).
+
 ## Previous delivery (historical evidence)
 
 ## Start here
