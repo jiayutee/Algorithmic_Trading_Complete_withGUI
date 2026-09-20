@@ -19,6 +19,7 @@ Out of scope:
 - Major feature rewrites
 
 Constraints:
+- Follow AGENTS.md: work in the assigned task worktree/branch, never push main. Return edits and validation to the orchestrator; it owns commits and PR publication.
 - Keep changes operational and low risk.
 - Call out manual setup needed for broker credentials and API keys.
 

@@ -80,6 +80,7 @@ scripts/
 - Issue Tracker DB ID: `e575e816-cab1-4d24-8f40-89b1d5ca8f27`
 
 ## Orchestrator
+- All implementation runs use separate task branches/worktrees and PRs targeting main, including overnight and Telegram tasks. No direct-main exception; no automatic merge. Keep tasks In progress until reviewed, merged and validated. Updating the running checkout is separate from merging.
 - Runs via Claude Code scheduled tasks (cron-based, defined under `~/.claude/scheduled-tasks/`) overnight only: 23:05 (morning brief), 23:20 + 00:20 (work-loop `algotrader-work-loop`: safety-first pass + safety-net retry), 01:00 (EOD debrief) — all Berlin local time
 - Schedule deliberately avoids: CariGaji orchestrator (02:00-16:00) and the owner's
   reserved manual-prompting window (19:30-23:00) — both share the same Claude token pool

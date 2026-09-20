@@ -35,5 +35,5 @@ Key rules:
 - CI runs on ubuntu-latest Python 3.11 — openbb/PyQt5 are optional (install with || true)
 - test_gui.py excluded from CI with --ignore flag
 - Remote name is Algorithmic-Trading-Complete-with-GUI (not origin)
-- Push: `git push Algorithmic-Trading-Complete-with-GUI main`
+- Work only in the assigned task worktree/branch. Never push main. Return edits and test evidence to the orchestrator; it owns commits and PR publication. Interactive work also uses a branch and PR, with owner review before merge.
 - Check CI status via GITHUB_PAT (see orchestrator.agent.md for curl recipes)

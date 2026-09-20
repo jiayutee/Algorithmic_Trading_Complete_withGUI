@@ -248,7 +248,7 @@
       <h1>AlgoTrader <span>Notebook</span></h1>
       <div class="subtitle">Sprint status + quant lessons — updated as we go, not a one-time snapshot</div>
     </div>
-    <div class="updated" id="updated-at">Last updated: 2026-09-19 — news diagnostics added; see continuation handoff for validation and remaining work</div>
+    <div class="updated" id="updated-at">Last updated: 2026-09-20 — unified orchestrator branch/PR workflow; see handoff for activation status</div>
   </header>
 
   <nav class="tabs">
@@ -408,9 +408,14 @@
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
     <div class="assess-card">
+      <h3>2026-09-20 — consistent branch and PR workflow</h3>
+      <p>Owner decision: overnight and interactive agents use separate task branches/worktrees, tests and PRs against main. No scheduled direct-main exception or automatic merging. Pending PRs stay In progress until reviewed, merged and validated; updating the running checkout is a separate step.</p>
+      <p><a href="artifacts/orchestrator-pr-workflow-2026-09-20.md">Workflow evidence and activation notes</a> · <a href="https://app.notion.com/p/3e0d2ab050d981218af5e78bd6a3fb90">Notion task</a></p>
+    </div>
+    <div class="assess-card">
       <h3>2026-09-19 — Codex continuation: news diagnostics</h3>
       <p>Implemented a bounded source smoke harness and structured health metadata using the application's actual configuration. Live BTC/AAPL probes delivered five raw items each from OpenBB; Brave/DDG returned none and RSS/GDELT were slow or timed out. News quality and sentiment are still unresolved.</p>
-      <p><a href="CONTINUATION_PLAN.md">Remaining implementation plan</a> · <a href="CODEX_HANDOFF.md">Claude/Codex handoff and validation</a> · <a href="artifacts/news-source-smoke-2026-09-19.json">Measured JSON artifact</a> · <a href="https://app.notion.com/p/3e0d2ab050d981d5829def6cde9a4e9c">Notion task</a> · <a href="https://github.com/jiayutee/Algorithmic_Trading_Complete_withGUI/pull/8">GitHub PR #8 (review pending)</a></p>
+      <p><a href="CONTINUATION_PLAN.md">Remaining implementation plan</a> · <a href="CODEX_HANDOFF.md">Claude/Codex handoff and validation</a> · <a href="artifacts/news-source-smoke-2026-09-19.json">Measured JSON artifact</a> · <a href="https://app.notion.com/p/3e0d2ab050d981d5829def6cde9a4e9c">Notion task</a> · <a href="https://github.com/jiayutee/Algorithmic_Trading_Complete_withGUI/pull/8">GitHub PR #8 (merged)</a></p>
       <p>Next: typed source failures and replay fixtures, then measured feed/sentiment quality. This diagnostic slice does not complete the autonomous-trading backlog. Historical lessons and completion records below are preserved.</p>
     </div>
 

@@ -131,3 +131,18 @@ def test_guard_reports_a_dirty_shared_folder(world):
 def test_the_script_contains_no_way_to_push_main_or_force():
     src = SCRIPT.read_text()
     assert "--force" not in src and "push -f" not in src and " main\"" not in src.split("push)")[1].split(";;")[0]
+
+
+def test_setup_preserves_unpushed_local_branch_when_worktree_was_removed(world):
+    repo, remote = world
+    wt = Path(run(repo, "setup", "preserve").stdout.strip().splitlines()[-1])
+    assert run(repo, "push", "preserve").returncode == 0
+    (wt / "local-only.txt").write_text("must survive\n")
+    git(wt, "add", "local-only.txt")
+    git(wt, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "unpushed work")
+    head = git(wt, "rev-parse", "HEAD").stdout
+    git(repo, "worktree", "remove", str(wt))
+    result = run(repo, "setup", "preserve")
+    assert result.returncode == 0, result.stderr
+    assert git(wt, "rev-parse", "HEAD").stdout == head
+    assert (wt / "local-only.txt").read_text() == "must survive\n"

@@ -10,8 +10,8 @@ of things that go wrong when several tools share one folder. If the two ever dis
   The execution service (`core/execution/`) is **paper only** by design; keep it that way.
 - **Never commit secrets.** `.env` and `config/settings.py` hold real keys and are git-ignored. Run `git status` before every commit.
 - **Never push to `main` unless the owner explicitly asks in that message.** Use a branch and a pull request.
-  (One exception exists by design: the overnight Claude routine is configured in `.github/agents/orchestrator.agent.md` to push to `main`
-  after the full test gate passes. Other tools must not copy that. If the owner wants the routine on branches instead, that file is where to change it.)
+  This also applies to the overnight orchestrator and its specialists: there is no scheduled-run exception.
+  Open a PR against `main` after local tests; wait for CI and owner review. Do not auto-merge or enable auto-merge without explicit owner authorization.
 - **Never stop, restart or reconfigure the background jobs** (below) without asking, and never `flatten`/`halt` the paper account as a test.
 - **Never claim a trading edge.** Nothing tested so far beats buy-and-hold on risk-adjusted return (Phases 6.5–6.9). Report results as they are.
 
@@ -23,7 +23,7 @@ of things that go wrong when several tools share one folder. If the two ever dis
 - Git-ignored files (`.env`, `config/settings.py`) do not exist in new worktrees; copy `config/settings.py` in if a test needs `import app`.
 
 ## Handing work between tools
-- Each slice of work leaves a trail: update the **handoff and plan** (`docs/CODEX_HANDOFF.md`, `docs/CONTINUATION_PLAN.md`, written by Codex; they may sit on PR #8 until it merges),
+- Each slice of work leaves a trail: update the **handoff and plan** (`docs/CODEX_HANDOFF.md`, `docs/CONTINUATION_PLAN.md`, written by Codex; PR #8 is merged),
   the notebook, the Notion Sprint Board task, and the PR description. Say exactly what was tested and what remains. Never mark a whole phase done for a diagnostic-only change.
 - Before starting, read the newest handoff and the open PRs (`gh pr list` or the GitHub page) so you do not redo or collide with someone else's slice.
 - Untracked documentation copies in the main folder can block `git checkout` of the branch that contains them: compare with the PR, then remove the duplicate.
