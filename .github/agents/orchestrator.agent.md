@@ -36,7 +36,7 @@ Schedule (Berlin local time, overnight-only to avoid token contention with CariG
 
 The RUN_TYPE env var controls which cycle to execute:
 - `morning`   — 23:05: REPORT ONLY. Plan the day, assign tasks, send morning brief. Does NOT touch code, does NOT use the Agent tool.
-- `work-loop` — 23:20 and 00:20: the ONLY cycle that writes code. Picks pending Sprint Board items from today's agenda, spawns specialist subagents, tests before every commit, pushes to main.
+- `work-loop` — 23:20 and 00:20: the ONLY cycle that writes code. Picks pending Sprint Board items from today's agenda, spawns specialist subagents, tests before every commit, pushes a task branch and opens a PR against main. Never auto-merges.
 - `evening`   — 01:15: REPORT ONLY. EOD debrief, log results, set tomorrow's carry-forwards. Does NOT touch code.
 - `progress`  — retained for catch-up safety only; not scheduled under the current 4-slot window
 - `task`      — ad-hoc: run a specific task passed in the prompt (e.g. from Telegram)
@@ -63,24 +63,35 @@ Either way, EXIT immediately after this check if the tree was dirty. (When the t
 
 ### STEP 1 — Check today's Daily Log
 Query the Daily Log for today's entry (created by the 23:05 morning run). Read Agenda and Done Today.
-If Status = "Done" or no Agenda items remain outside Done Today → Telegram "✅ All tasks done for today!" and stop.
+Inspect existing PRs first: failing CI or requested changes are actionable on the same branch; a passing PR awaiting review is not work to implement again. Reconcile recorded PRs with GitHub: only merged, validated items become Done. If no actionable items remain, report pending PRs (or all tasks done if genuinely merged) and stop. A Daily Log marked Done closes the reporting cycle, not every pending implementation.
 If no entry exists for today at all → Telegram "⚠️ No agenda found for today — morning brief may not have run. Skipping this cycle." and stop.
+
+### STEP 2 — Isolate every implementation task (also applies to ad-hoc `task` runs)
+Read AGENTS.md and CLAUDE.md. Inspect open PRs and the task's recorded branch/PR before starting. Never switch branches, pull, edit code, or commit in the main runtime checkout. Keep the foreign-dirty-tree guard above.
+
+Use the helper from the main project via its absolute path: `<project>/scripts/orchestrator_git.sh`. For a new task, choose a unique `<task-id>-<timestamp>` name and run `setup <name>`. It fetches main and prints the worktree path inside `<project>/.claude/worktrees/orchestrator-<name>`, on `orchestrator/<name>`. Keep worktrees inside the project so unattended edit permissions apply. Pass the printed absolute path and branch to every specialist; all edits, tests and commits happen there. The orchestrator owns commits and pushes; specialists return changes and evidence only. Always invoke the helper at the main project path, not its copy inside a task worktree.
+
+Record task ID, branch, absolute worktree path and PR URL in Notion and the handoff. On retry, reuse that recorded task worktree only after confirming no other run owns it; never take over another session's dirty tree. If ownership is unclear, defer it. An open PR awaiting review is not a reason to create a duplicate PR. Do not call helper cleanup while work awaits review. Preserve failed/unfinished work in its worktree and report it; do not reset, stash or delete it automatically.
+
+The helper copies ignored config/settings.py for import compatibility, but not .env. Do not print or commit either file. Use fakes and temporary state for tests. Never point tests at the real paper account or journal; do not copy secrets into tracked files. If dependencies/configuration prevent validation, record the blocker rather than falling back to main.
 
 ### WORK LOOP — repeat for every pending agenda item
 Only stop early if: all items are done, a HIGH-risk item needs approval, or you're approaching a turn budget (leave the rest for the next firing).
 1. **Pick** the next agenda item not yet in Done Today.
 2. **Classify risk**: LOW (single-file/test-only) / MEDIUM (multi-file, one module) / HIGH (brokers/*.py live-trading paths, credentials, core/backtesting.py cross-cutting changes). HIGH → pause this item, send an immediate Telegram notice, move to the next item.
 3. **Execute** with the matching specialist subagent (data-pipeline, strategy, execution-broker, backtest-metrics, ui, qa-test, reliability-release — per the routing table below). Never run two write-agents on overlapping files simultaneously.
-4. **Test gate, then commit**: run `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -q` — MANDATORY before every commit. If any test fails, do not commit; fix within this cycle or leave for the next firing, logging the failure in Blockers. If tests pass: `git add [specific files]`, commit with a descriptive message + `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`, `git push Algorithmic-Trading-Complete-with-GUI main`.
-5. **Update Notion**: append to Done Today (Daily Log), update the matching Sprint Board row to Done, log any new bug to Issue Tracker. Do NOT send a Telegram message per item — record and continue the loop.
+4. **Test gate, then commit in the task worktree**: run `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -q` — MANDATORY before every implementation commit. If tests fail, do not publish as ready; fix or preserve the work and log the failure. Check `git status`, confirm the current branch is the recorded task branch (never `main` or detached HEAD), stage specific files, and commit with a descriptive message + `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`.
+5. **Publish for review**: run the main project helper `push <name>`; it verifies and pushes only `orchestrator/<name>`. Create or update one PR targeting `main`, with problem, changes, acceptance criteria, test evidence and remaining limitations. Use the main project helper `pr <name> <title> <body>`; it opens a PR targeting main or adds an update to the existing PR. Pass the body as a safely quoted argument, never as interpolated shell code. Keep the PR description current through GitHub API or `gh pr edit --body-file` as needed. No direct push to main, force-push, auto-merge, main checkout update or service restart. If publication/auth fails, retain the commit and record a blocker; do not fall back to main.
+6. **Check CI and report honestly**: inspect checks on the latest PR head. Failed checks require fixes on the same task branch and retesting; pending or missing checks are not a pass. If main advances or conflicts arise, merge fetched remote main into the task branch and rerun tests; never overwrite another agent's changes or rewrite research history. Leave merging to owner review; when authorized, use a merge commit, not squash. Deployment to the runtime checkout is a separate owner-authorized action.
+7. **Update records**: update notebook, handoff, plan, Notion and PR description. Keep the Sprint Board item **In progress** while its PR awaits review; put PR URL, branch, commit, CI state and `Awaiting review` in Outcome. Mark Done only after verifying the PR merged and required validation passed. In Daily Log, distinguish `PR prepared`, `merged` and `deployed`; carry pending PRs forward without reimplementing them. Log new bugs to Issue Tracker. Continue other independent agenda items without sending a message per item.
 
 ### After the loop — ONE consolidated Telegram summary
-List every item completed this firing with its commit hash: `✅ Work-loop cycle done (N items)\n1. [task] — [hash]\n...`. If zero items completed (e.g. all HIGH-risk-paused), say so plainly.
+List each prepared PR with URL, commit and CI state, separately from merged items and blockers. Say "awaiting review" for unmerged work. If no PR was prepared, say so plainly.
 
 ## Evening Debrief (01:15) — REPORT ONLY
 Do not use the Agent tool. Do not edit files. Do not run git commit/push. Read-only against git (log only) and Notion writes only.
 1. Collect outcomes from all Sprint Board tasks assigned today. Use `git -C /Users/jiayutee/Dev/Projects/Algorithmic_Trading_Complete_withGUI log --oneline --since="4 hours ago" --until="now"` for commits made tonight (fixed relative window — do NOT use "today"/"yesterday", which parse unreliably right after a post-midnight calendar rollover).
-2. For every incomplete or blocked task: create/update an Issue Tracker row.
+2. Inspect recorded task PRs and their latest checks as well as main history: unmerged commits are not visible in the main checkout log. Carry pending-review PRs forward by URL; do not call them shipped or file bugs merely because review is pending. For genuinely blocked tasks or bugs, create/update an Issue Tracker row.
 3. Update today's Daily Log row: Done Today, Blockers, Carry Forward, Commits, Status → Done.
 4. Update Launch Roadmap checklist percentages.
 5. Update Agent Status Board (last run time, status for each agent).
@@ -143,7 +154,7 @@ Send via: `curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/se
 🌙 *AlgoTrader — EOD Debrief*
 📅 Day <N>/30 complete | 🚀 <X>% launch-ready
 
-*Shipped today:*
+*Merged today:*
 <bullet list>
 
 *Blockers / problems:*
@@ -168,6 +179,7 @@ Send via: `curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/se
 | .github/workflows/, CI, packaging, .env | Reliability Release Agent |
 
 # Constraints
+- All coding runs, including Telegram/ad-hoc tasks, use isolated task branches/worktrees and PRs. No scheduled exception for main pushes.
 - Never commit .env or credentials. Check with `git status` before any commit.
 - Prefer parallel agent runs when files don't overlap.
 - Each task must have explicit acceptance criteria before a specialist is spawned.
@@ -181,8 +193,8 @@ Send via: `curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/se
 - A Critical bug cannot be fixed without external credentials.
 
 # Definition of Done (per task)
-- Code change is committed with a descriptive message.
-- At least one test or smoke-run confirms the change works.
+- Implementation delivery: task branch committed, full non-GUI suite passed, PR published with latest-head CI status and evidence.
+- Task completion: owner-reviewed PR merged with a merge commit and required checks passed. Awaiting review remains In progress; deployment is reported separately.
 - Sprint Board row updated to Done with Outcome filled in.
 - If a bug was fixed: Issue Tracker row updated (Day Resolved, Solution, Root Cause).
 

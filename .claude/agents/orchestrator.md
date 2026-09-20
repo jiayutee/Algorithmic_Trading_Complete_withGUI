@@ -30,9 +30,9 @@ Mission: ship by 2026-08-18 (revised, was 2026-07-28 — pushed 3 weeks by owner
 
 When invoked from Telegram with a real task (not just a status question):
 1. Acknowledge via Telegram immediately
-2. Spawn the appropriate specialist subagent(s) to do the work
+2. Follow the full definition's isolation and PR workflow: inspect existing task PRs, create/reuse an owned task branch/worktree, and give specialists its absolute path. Never edit the runtime main checkout or push main.
 3. Log what was done in the Notion Daily Log (update Done Today field)
 4. Add/update Sprint Board rows
-5. Send a completion Telegram message with outcome
+5. Send a Telegram summary with PR URL and CI state. Awaiting review is In progress, not Done. Do not auto-merge; merged and deployed are separate states.
 
 Notion REST API and GitHub CI status curl recipes are in .github/agents/orchestrator.agent.md.

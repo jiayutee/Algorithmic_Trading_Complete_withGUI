@@ -32,8 +32,10 @@ case "$cmd" in
     git -C "$REPO" fetch -q "$REMOTE"
     if [ -d "$WT" ]; then
       [ "$(git -C "$WT" rev-parse --abbrev-ref HEAD)" = "$BRANCH" ] || die "$WT exists but is not on $BRANCH" 3
+    elif git -C "$REPO" rev-parse --verify -q "refs/heads/$BRANCH" >/dev/null; then
+      git -C "$REPO" worktree add -q "$WT" "$BRANCH"  # preserve local commits if a prior worktree was removed
     elif git -C "$REPO" rev-parse --verify -q "refs/remotes/$REMOTE/$BRANCH" >/dev/null; then
-      git -C "$REPO" worktree add -q -B "$BRANCH" "$WT" "$REMOTE/$BRANCH"     # the earlier firing tonight already pushed it
+      git -C "$REPO" worktree add -q -b "$BRANCH" "$WT" "$REMOTE/$BRANCH"     # the earlier firing tonight already pushed it
     else
       git -C "$REPO" worktree add -q -b "$BRANCH" "$WT" "$REMOTE/main"
     fi
