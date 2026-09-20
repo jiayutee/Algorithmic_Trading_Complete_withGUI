@@ -248,7 +248,7 @@
       <h1>AlgoTrader <span>Notebook</span></h1>
       <div class="subtitle">Sprint status + quant lessons — updated as we go, not a one-time snapshot</div>
     </div>
-    <div class="updated" id="updated-at">Last updated: 2026-09-20 — unified orchestrator branch/PR workflow; see handoff for activation status</div>
+    <div class="updated" id="updated-at">Last updated: 2026-09-20 — orchestrator branch/PR workflow merged (PRs #13, #14); Sprint Board reconciled</div>
   </header>
 
   <nav class="tabs">
@@ -407,6 +407,12 @@
 
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
+    <div class="assess-card">
+      <h3>2026-09-20 — workflow merged, Sprint Board reconciled</h3>
+      <p><strong>Merged to main:</strong> PR #13 (Claude's <code>scripts/orchestrator_git.sh</code> worktree/branch/PR helper) and PR #14 (Codex's workflow rules, launcher wiring and a fix that stops worktree recreation from discarding unpushed commits). CI was green; main is at 45465ae. The 23:20 overnight run is the first real use of the workflow, so its first PR still needs review. GitHub branch protection is not configured, so "never push to main" is a rule in the runbook, not something GitHub enforces.</p>
+      <p><strong>Sprint Board:</strong> rows 6.0, 6.1, 6.2, 6.3 and 7.0 were built but still read "Not started", so the overnight routine would have redone them; they are now Done. Phase 4.3 (options order execution, changes the live-order path) and 9.2 (Kalshi probability model, needs about four weeks of resolved snapshots plus a pre-registered protocol) now carry HOLD notes and resume only on owner approval.</p>
+      <p>Still no strategy with a proven edge: the trend filter cuts drawdown but shows no significant Sharpe gain. The Codex entries below are unchanged.</p>
+    </div>
     <div class="assess-card">
       <h3>2026-09-20 — consistent branch and PR workflow</h3>
       <p>Owner decision: overnight and interactive agents use separate task branches/worktrees, tests and PRs against main. No scheduled direct-main exception or automatic merging. Pending PRs stay In progress until reviewed, merged and validated; updating the running checkout is a separate step.</p>
