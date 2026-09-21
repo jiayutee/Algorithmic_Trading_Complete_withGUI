@@ -1441,6 +1441,7 @@ def _bottom_tabs_panel() -> html.Div:
                     _agent_monitor_tab(),
                     _research_loop_tab(),
                     _execution_tab(),
+                    _options_chain_tab(),
                 ],
             ),
         ],
@@ -1631,6 +1632,164 @@ def _execution_tab() -> "dcc.Tab":
                     _rl_datatable("exec-decisions-table", [
                         {"name": "When", "id": "when"}, {"name": "Symbol", "id": "symbol"}, {"name": "Action", "id": "action"},
                         {"name": "Status", "id": "status"}, {"name": "Detail", "id": "detail"}]),
+                ],
+            ),
+        ],
+    )
+
+
+
+def _options_chain_tab() -> "dcc.Tab":
+    """Options Chain tab: read-only options chain table with Greeks.
+
+    Fetches an options chain via IBKR (Phase 4.2 retrieval layer) and displays
+    it in a sortable DataTable.  No order path exists here -- Phase 5.2 is
+    intentionally blocked.  Degrades to a clear message when IBKR is
+    unavailable (not enabled, not connected, or chain is empty).
+    """
+    from dash_app.options_chain_panel import CHAIN_TABLE_COLUMNS
+
+    _input_style = {
+        "backgroundColor": THEME["bg_dark"],
+        "color": THEME["text_main"],
+        "border": f"1px solid {THEME['border']}",
+        "borderRadius": "4px",
+        "fontSize": "12px",
+        "width": "130px",
+        "padding": "4px 6px",
+        "outline": "none",
+        "boxSizing": "border-box",
+    }
+    _btn_style = {
+        "backgroundColor": THEME["bg_dark"],
+        "color": THEME["accent"],
+        "border": f"1px solid {THEME['accent']}",
+        "borderRadius": "4px",
+        "padding": "3px 12px",
+        "fontSize": "11px",
+        "cursor": "pointer",
+        "whiteSpace": "nowrap",
+    }
+
+    return dcc.Tab(
+        label="Options Chain",
+        value="options-chain-tab",
+        style=_TAB_STYLE,
+        selected_style=_TAB_SELECTED_STYLE,
+        children=[
+            html.Div(
+                style={**_PANEL_STYLE, "margin": "8px 0"},
+                children=[
+                    # Header row: title + expiry input + load button
+                    html.Div(
+                        style={
+                            "display": "flex",
+                            "alignItems": "center",
+                            "gap": "10px",
+                            "marginBottom": "8px",
+                            "flexWrap": "wrap",
+                        },
+                        children=[
+                            html.P(
+                                "Options Chain (IBKR, read-only)",
+                                style={
+                                    **_LABEL_MUTED,
+                                    "fontWeight": "600",
+                                    "marginBottom": "0",
+                                    "flex": "1",
+                                },
+                            ),
+                            _muted("Expiry (YYYYMMDD)"),
+                            dcc.Input(
+                                id="options-chain-expiry-input",
+                                type="text",
+                                placeholder="e.g. 20261017",
+                                debounce=True,
+                                style=_input_style,
+                            ),
+                            html.Button(
+                                "Load Chain",
+                                id="options-chain-load-btn",
+                                n_clicks=0,
+                                style=_btn_style,
+                            ),
+                        ],
+                    ),
+                    # Status / feedback line
+                    html.Div(
+                        id="options-chain-status",
+                        style={
+                            "color": THEME["text_muted"],
+                            "fontSize": "11px",
+                            "marginBottom": "6px",
+                            "minHeight": "16px",
+                            "wordBreak": "break-word",
+                        },
+                        children=(
+                            "Select a symbol in the top bar and click Load Chain. "
+                            "Requires IBKR_ENABLED=1 and a running TWS/Gateway."
+                        ),
+                    ),
+                    # Greeks table
+                    dash_table.DataTable(
+                        id="options-chain-table",
+                        columns=CHAIN_TABLE_COLUMNS,
+                        data=[],
+                        page_action="none",
+                        sort_action="native",
+                        sort_mode="single",
+                        style_table={
+                            "overflowX": "auto",
+                            "overflowY": "auto",
+                            "maxHeight": "320px",
+                            "backgroundColor": THEME["bg_dark"],
+                            "border": f"1px solid {THEME['border']}",
+                            "borderRadius": "4px",
+                        },
+                        style_cell={
+                            "backgroundColor": THEME["bg_dark"],
+                            "color": THEME["text_main"],
+                            "border": f"1px solid {THEME['border']}",
+                            "fontSize": "11px",
+                            "fontFamily": "'SF Mono', 'Consolas', 'Menlo', monospace",
+                            "textAlign": "center",
+                            "padding": "4px 8px",
+                            "minWidth": "60px",
+                        },
+                        style_header={
+                            "backgroundColor": THEME["bg_card"],
+                            "color": THEME["text_muted"],
+                            "fontWeight": "600",
+                            "fontSize": "10px",
+                            "border": f"1px solid {THEME['border']}",
+                            "textTransform": "uppercase",
+                            "letterSpacing": "0.5px",
+                            "padding": "4px 8px",
+                        },
+                        # Colour-code calls (C) vs puts (P)
+                        style_data_conditional=[
+                            {
+                                "if": {
+                                    "filter_query": "{right} = C",
+                                    "column_id": "right",
+                                },
+                                "color": THEME["green"],
+                                "fontWeight": "600",
+                            },
+                            {
+                                "if": {
+                                    "filter_query": "{right} = P",
+                                    "column_id": "right",
+                                },
+                                "color": THEME["red"],
+                                "fontWeight": "600",
+                            },
+                            {
+                                "if": {"row_index": "odd"},
+                                "backgroundColor": "#0f1419",
+                            },
+                        ],
+                    ),
                 ],
             ),
         ],

@@ -49,6 +49,7 @@ Since that snapshot most of the gaps were closed, and the two UIs now share thei
 | Simulate (step-through replay) | yes | **no** | **OPEN GAP** |
 | "Go Live" | button exists but only selects a broker/strategy and prints a message; it starts no trading loop | none | **OPEN GAP (both)** — see the platform review |
 | Dependency-warning tab | yes | no | minor |
+| Options chain (Greeks table) | no | **yes** (Phase 5.1 — read-only, IBKR) | Dash-only; degrades to explicit message when IBKR unavailable |
 
 Open gaps that need real work (not a quick fix): broker switching in Dash, data-source selection, the simulate mode, and a genuine
 autonomous execution loop behind "Go Live".
