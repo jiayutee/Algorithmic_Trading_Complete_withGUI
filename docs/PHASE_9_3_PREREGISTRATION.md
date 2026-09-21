@@ -78,3 +78,38 @@ almost all are short-lived sports props / hourly gold).
 - Consequence for the Phase 9 roadmap: 9.1 produced no signals to backtest, and 9.2 (a probability model) has no
   domain where the market is demonstrably mispriced yet. The most useful next step is a daily snapshot collector for
   Kalshi (like the news collector) so a real multi-week calibration study is possible.
+
+# Results on collected snapshots (2026-09-21, 3 days of `core.kalshi_collector` data)
+
+Script: `training_ground/experiments_9_3_collected.py` (evidence: `training_ground/results/phase_9_3_collected.json`).
+**No protocol change**: it calls `experiments_9_3.run` unchanged (hypotheses L and F, the Amendment 2 two-sided-book filter,
+event-clustered bootstrap, 97.5% intervals, the three finding criteria). Only the snapshot *source* differs.
+
+Data: 588 snapshots / 554 markets over 2026-09-19..21; 192 markets resolved; 178 of those have a snapshot at least 2h before
+close (one per market, the last such snapshot); all 178 pass the two-sided filter; 68 distinct events; markets closed
+2026-09-20 03:59 to 2026-09-21 14:00 UTC.
+
+| hypothesis | n (events) | mean ask | hit rate | pre-fee edge | 97.5% bootstrap interval | verdict |
+|---|---|---|---|---|---|---|
+| L longshots (ask <= 0.10) overpriced | 76 (48) | 0.041 | 0.000 | -0.041 | [-0.047, -0.035] | **UNDERPOWERED** (n < 100) |
+| F favorites (ask >= 0.90) underpriced | 38 (23) | 0.980 | 1.000 | +0.020 | [+0.013, +0.028] | **UNDERPOWERED** (n < 100, events < 30) |
+
+**Read this before quoting any number above.**
+- Neither hypothesis meets criterion 3, so by the pre-registered rule neither can be a finding, and "underpowered" is not
+  the same as "no evidence of bias": the data cannot say either way.
+- The bootstrap intervals are **degenerate** here. L has 0 winners in 76 and F has 38 winners in 38, so resampling only
+  reflects the spread of the asks, not the binomial uncertainty of a 0% / 100% hit rate. The intervals look tight; they are not
+  evidence. (This is a property of the pre-registered statistic on extreme buckets, disclosed rather than changed.)
+- Exploratory, not pre-registered: if every market were fairly priced at its ask, 76 longshots would produce about 3.1 winners;
+  seeing 0 has probability about 0.040 (exact Poisson-binomial, independence assumed, which flatters the result because markets
+  in one event are correlated). For favorites, 38 of 38 vs 37.2 expected has probability about 0.46: fully consistent with a
+  fairly priced market. The "+0.010 tradable net" for F is 1 cent of expected profit per contract against a 98 cent loss if one
+  contract fails; 38 wins cannot distinguish that from a fair price.
+- Deviations, all disclosed: (1) realised lead time is **12.9 to 47.9 hours** before close (median 12.9h), not the ~2h of 9.3a,
+  because the collector snapshots a few times a day, so this is a longer-lead calibration, not a replica; (2) the random
+  800-market sample and the open >= 3h filter cannot be re-applied (open time is not stored), so every resolved market is used;
+  (3) one short window dominated by sports props and hourly commodity markets.
+- The middle calibration buckets have n <= 10 each and mean nothing yet.
+- Nothing here is a trading signal, nothing was executed, and Phase 9.2 (probability model) stays on HOLD until roughly four
+  weeks of snapshots exist. Projection from two closing days only (about 38 longshot and 19 favorite markets per day): the
+  100-market bar could be cleared for L in a day or two and for F in about four days. Re-run the script then; it is read-only.
