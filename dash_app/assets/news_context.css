@@ -1,0 +1,24 @@
+.news-context { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; background: #0c111b; color: #dce4f3; border: 1px solid #293348; border-radius: 12px; margin-top: 10px; }
+.context-heading { display:flex; justify-content:space-between; align-items:center; gap:20px; }
+.context-heading small { color:#91acff; letter-spacing:2px; font-size:11px; }
+.context-heading h3 { font-size:23px; margin:8px 0; }
+.context-heading p,.context-note,#context-status { color:#9aaac2; font-size:12px; line-height:1.6; }
+.context-heading button { background:#223458; border:1px solid #496fae; color:#e4ecff; border-radius:8px; padding:10px 16px; white-space:nowrap; }
+.context-controls { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:center; margin:18px 0; }
+.context-controls label { margin-right:14px; font-size:12px; cursor:pointer; }
+.context-controls input { margin-right:5px; }
+.context-grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:22px; }
+.context-timeline { max-height:520px; overflow-y:auto; }
+.context-event { border-left:2px solid #7d8b9f; margin:0 0 18px 3px; padding:3px 14px 14px; background:#111722; border-radius:0 8px 8px 0; }
+.context-event.selected { background:#192236; }
+.context-event time,.context-event small { font-size:11px; color:#9aaac2; }
+.context-badge { float:right; font-size:11px; }
+.context-event h4 { font-size:15px; line-height:1.5; margin:10px 0 5px; }
+.context-event a { color:#e2eafa; text-decoration:none; }
+.context-event a:hover { text-decoration:underline; }
+.context-event summary { color:#a6bcff; padding:10px 0; cursor:pointer; font-size:13px; }
+.context-event p,.context-event li,.context-event blockquote { font-size:12px; line-height:1.65; }
+.context-event strong { font-size:12px; color:#ccd9f1; }
+.context-event blockquote { border-left:2px solid #536580; padding-left:10px; color:#aab8ce; }
+.news-context > details { margin-top:16px; font-size:12px; color:#b8c6db; }
+@media(max-width:900px) { .context-grid,.context-controls { grid-template-columns:1fr; } .news-context { padding:14px; } .context-heading { align-items:flex-start; } .context-heading h3 { font-size:19px; } }
