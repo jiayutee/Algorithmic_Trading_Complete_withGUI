@@ -77,3 +77,39 @@ def test_real_plotly_serialized_chart_arrays_are_decoded():
 def test_intra_bar_publication_does_not_use_that_bars_close_as_baseline():
     move=observed_move(candles_from_figure(chart()),'2026-09-02T12:00Z')
     assert round(move['percent'])==20
+
+
+def test_ai_research_for_event_returns_none_without_event():
+    from core.news_context import ai_research_for_event
+    assert ai_research_for_event(None, 'BTCUSDT') is None
+
+
+def test_ai_research_for_event_passes_interpretation_fields_through():
+    from unittest.mock import patch
+    from core.news_context import ai_research_for_event
+    event = build_snapshot([item('Company beats earnings estimates')], 'AAPL',
+                            now=datetime(2026, 9, 2, tzinfo=timezone.utc))['events'][0]
+    with patch('core.news_context.research_event', return_value={'method': 'ai-research-groq-test'}) as mock_call:
+        result = ai_research_for_event(event, 'AAPL')
+    assert result == {'method': 'ai-research-groq-test'}
+    _, kwargs = mock_call.call_args
+    assert kwargs['symbol'] == 'AAPL'
+    assert kwargs['headline'] == event['headline']
+    assert kwargs['event_category'] == event['interpretation']['event_category']
+    assert kwargs['sentiment_label'] == event['interpretation']['headline_tone']['label']
+
+
+def test_event_card_shows_ai_research_placeholder_when_none_for_selected():
+    event = build_snapshot([item()], 'BTCUSDT', now=datetime(2026, 9, 2, tzinfo=timezone.utc))['events'][0]
+    rendered = str(event_card(event, True, None).to_plotly_json())
+    assert 'No AI research fetched' in rendered
+
+
+def test_event_card_renders_ai_research_when_present():
+    event = build_snapshot([item()], 'BTCUSDT', now=datetime(2026, 9, 2, tzinfo=timezone.utc))['events'][0]
+    ai_research = {'method': 'ai-research-groq-llama-3.3-70b-versatile', 'reasoning': 'Because of the supplied text.',
+                    'conditional_bias': 'bearish', 'confidence': 0.4, 'contrary_view': 'Could be contained.',
+                    'corroboration_needed': ['Check official statement'], 'limitations': 'Not verified.'}
+    rendered = str(event_card(event, True, ai_research).to_plotly_json())
+    assert 'Because of the supplied text.' in rendered
+    assert 'Check official statement' in rendered

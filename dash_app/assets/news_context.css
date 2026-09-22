@@ -20,5 +20,8 @@
 .context-event p,.context-event li,.context-event blockquote { font-size:12px; line-height:1.65; }
 .context-event strong { font-size:12px; color:#ccd9f1; }
 .context-event blockquote { border-left:2px solid #536580; padding-left:10px; color:#aab8ce; }
+.context-ai-research { margin-top:12px; padding:10px 12px; background:#141c2c; border:1px solid #2c3a56; border-radius:8px; }
+.context-ai-research p,.context-ai-research li { font-size:12px; line-height:1.65; }
+.context-ai-research strong { font-size:12px; color:#a6bcff; }
 .news-context > details { margin-top:16px; font-size:12px; color:#b8c6db; }
 @media(max-width:900px) { .context-grid,.context-controls { grid-template-columns:1fr; } .news-context { padding:14px; } .context-heading { align-items:flex-start; } .context-heading h3 { font-size:19px; } }
