@@ -1,6 +1,14 @@
-# Claude / Codex handoff — updated 2026-09-21
+# Claude / Codex handoff — updated 2026-09-22
 
-## Latest: chart-linked Market Context
+## Latest: optional AI research on Market Context
+Branch `feat/ai-research-groq`, base `codex/news-event-timeline` (PR #21). Adds `core/ai_research.py`: an on-demand,
+per-event Groq call (free tier, opt-in `GROQ_API_KEY`) that reasons only from the supplied headline/summary text
+plus the existing `core/sentiment.py` label, returning `None` on any failure so the deterministic
+`core/news_interpretation.py` reading is always shown regardless. Dash-only, button-triggered (not automatic).
+See [feature evidence](artifacts/ai-research-2026-09-22.md). `GROQ_API_KEY` not yet in `.env` -- inert until the
+owner adds one.
+
+## Previous: chart-linked Market Context
 Branch `codex/news-event-timeline`, base `215e62b`. Dash Market Context snapshots the loaded candles and fetches news on demand; core/news_interpretation.py supplies conditional explanations without model calls. Source/pipeline files intentionally untouched while provider PR16 is open. See [feature evidence](artifacts/news-context-2026-09-21.md) and Notion task https://app.notion.com/p/3e2d2ab050d98108bc0ddaa22221c02d . Implemented for review, not deployed. Full validation and PR links recorded on the task/PR.
 
 Desktop, macro calendar and grounded model interpretation remain future slices; no predictive price curve or trading changes.

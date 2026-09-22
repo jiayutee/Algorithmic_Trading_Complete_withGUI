@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from core.news_interpretation import interpret_news
+from core.ai_research import research_event
 
 
 def build_snapshot(items, symbol, source_status=(), now=None):
@@ -90,3 +91,18 @@ def observed_move(candles, event_time):
         return None
     return {'percent': (latest / baseline - 1) * 100,
             'start': before.index[-1].isoformat(), 'end': after.index[-1].isoformat()}
+
+
+def ai_research_for_event(event, symbol):
+    """Best-effort AI research note for one already-built event (see
+    core.ai_research.research_event); returns None if unavailable/unusable."""
+    if not event:
+        return None
+    interpretation = event.get('interpretation') or {}
+    return research_event(
+        headline=event.get('headline', ''),
+        summary=(interpretation.get('evidence') or {}).get('excerpt', ''),
+        symbol=symbol,
+        event_category=interpretation.get('event_category', 'unclassified'),
+        sentiment_label=(interpretation.get('headline_tone') or {}).get('label', 'unknown'),
+    )

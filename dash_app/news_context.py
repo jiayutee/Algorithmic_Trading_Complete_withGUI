@@ -5,14 +5,14 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import dcc, html, Input, Output, State, ctx, no_update
 from core.chart_builder import THEME
-from core.news_context import fetch_snapshot, candles_from_figure, observed_move, candle_step
+from core.news_context import fetch_snapshot, candles_from_figure, observed_move, candle_step, ai_research_for_event
 
 COLORS = {'bullish': '#42d9a1', 'bearish': '#ff6b86', 'unknown': '#a9b6cd', 'mixed': '#f2c66d'}
 
 
 def context_panel():
     return html.Div(className='news-context', children=[
-        dcc.Store(id='context-snapshot'), dcc.Store(id='context-candles'),
+        dcc.Store(id='context-snapshot'), dcc.Store(id='context-candles'), dcc.Store(id='context-ai-research'),
         html.Div(className='context-heading', children=[
             html.Div([html.Small('MARKET CONTEXT'), html.H3('The story behind the candles'),
                       html.P('Explore reported events, possible implications and observed price changes.')]),
@@ -22,14 +22,18 @@ def context_panel():
             dcc.RadioItems(id='context-filter', options=[{'label': l, 'value': v} for l,v in
                 [('All events','all'),('Bullish case','bullish'),('Bearish case','bearish'),('Unclear / mixed','unclear')]],
                 value='all', inline=True),
-            dcc.Dropdown(id='context-selected', options=[], placeholder='Select an event to inspect', clearable=True)]),
+            dcc.Dropdown(id='context-selected', options=[], placeholder='Select an event to inspect', clearable=True),
+            html.Button('Get AI research on selected event', id='context-ai-button', n_clicks=0)]),
+        html.Div(id='context-ai-status', className='context-note', role='status'),
         dcc.Loading(children=html.Div(className='context-grid', children=[
             html.Div([dcc.Graph(id='context-chart', config={'displaylogo':False}),
                       html.Div(id='context-move', className='context-note')]),
             html.Div(id='context-timeline', className='context-timeline')])),
         html.Details([html.Summary('Feed coverage'), html.Div(id='context-health')]),
-        html.P('Interpretations are conditional rule-based context. Price changes do not establish causation. '
-               'Scheduled earnings are shown in News & Earnings; no macro calendar is connected.', className='context-note')])
+        html.P('Interpretations are conditional rule-based context. Optional AI research (Groq, opt-in via '
+               'GROQ_API_KEY) is a hosted-LLM hypothesis from the same text, fetched on demand, never a forecast. '
+               'Price changes do not establish causation. Scheduled earnings are shown in News & Earnings; '
+               'no macro calendar is connected.', className='context-note')])
 
 
 def filtered_events(snapshot, mode):
@@ -47,7 +51,22 @@ def safe_url(value):
         return None
 
 
-def event_card(event, selected):
+def ai_research_block(ai_research):
+    if ai_research is None:
+        return html.P('No AI research fetched for this event yet. Use "Get AI research on selected '
+                       'event" above (needs GROQ_API_KEY; unavailable falls back silently).', className='context-note')
+    return html.Div(className='context-ai-research', children=[
+        html.Strong('AI research (' + ai_research['method'] + ')'),
+        html.P(ai_research['reasoning']),
+        html.P('Reading: ' + ai_research['conditional_bias'].capitalize() +
+               ' · confidence {:.0%}'.format(ai_research['confidence'])),
+        html.Strong('How this could be wrong'), html.P(ai_research['contrary_view']),
+        html.Strong('Verify before acting'), html.Ul([html.Li(w) for w in ai_research['corroboration_needed']]) if
+            ai_research['corroboration_needed'] else html.P('Not supplied by the model.'),
+        html.P(ai_research['limitations'], className='context-note')])
+
+
+def event_card(event, selected, ai_research=None):
     i = event['interpretation']; impact = i['conditional_bias']; color = COLORS.get(impact, COLORS['unknown'])
     url = safe_url(event.get('url'))
     title = html.A(event['headline'], href=url, target='_blank', rel='noopener noreferrer') if url else html.Span(event['headline'])
@@ -65,7 +84,8 @@ def event_card(event, selected):
                 html.P(' · '.join([i['event_category'], i['relevance'], i['method']]), className='context-note'),
                 html.P('Headline tone: '+i['headline_tone']['label']+' · '+i['headline_tone']['model'], className='context-note'),
                 html.P(i['conditional_bias_basis'], className='context-note'),
-                html.P(' '.join(i['limitations']) if isinstance(i['limitations'],list) else i['limitations'], className='context-note')])])
+                html.P(' '.join(i['limitations']) if isinstance(i['limitations'],list) else i['limitations'], className='context-note'),
+                ai_research_block(ai_research) if selected else None])])
 
 
 def context_figure(figure, events, selected):
@@ -127,11 +147,29 @@ def register_context_callbacks(app):
             if value in ids: selected = value
         return [{'label':pd.Timestamp(e['time']).strftime('%d %b')+' · '+e['headline'], 'value':e['id']} for e in events], selected
 
+    @app.callback(Output('context-ai-research','data'), Output('context-ai-status','children'),
+                  Input('context-ai-button','n_clicks'),
+                  State('context-selected','value'), State('context-snapshot','data'), State('active-symbol-store','data'),
+                  prevent_initial_call=True, running=[(Output('context-ai-button','disabled'), True, False)])
+    def get_ai_research(n, selected, snapshot, active_symbol):
+        if not selected or not snapshot:
+            return no_update, 'Select an event first.'
+        event = next((e for e in snapshot.get('events', []) if e['id'] == selected), None)
+        if event is None:
+            return no_update, 'Selected event not found in the current snapshot.'
+        result = ai_research_for_event(event, active_symbol)
+        if result is None:
+            return {'event_id': selected, 'symbol': active_symbol, 'result': None}, (
+                'AI research unavailable for this event (no GROQ_API_KEY configured, or the call failed/timed out). '
+                'Deterministic interpretation above is unaffected.')
+        return {'event_id': selected, 'symbol': active_symbol, 'result': result}, 'AI research updated below.'
+
     @app.callback(Output('context-chart','figure'), Output('context-timeline','children'),
                   Output('context-move','children'), Output('context-status','children'), Output('context-health','children'),
                   Input('context-snapshot','data'), Input('context-candles','data'),
-                  Input('context-filter','value'), Input('context-selected','value'), Input('active-symbol-store','data'))
-    def render(snapshot, figure, mode, selected, active_symbol):
+                  Input('context-filter','value'), Input('context-selected','value'), Input('active-symbol-store','data'),
+                  Input('context-ai-research','data'))
+    def render(snapshot, figure, mode, selected, active_symbol, ai_research):
         if not snapshot or snapshot.get('symbol') != active_symbol:
             return context_figure(None,[],None)[0], [], '', 'Refresh context for the loaded symbol.', []
         events = filtered_events(snapshot, mode)
@@ -140,7 +178,10 @@ def register_context_callbacks(app):
         move = observed_move(candles, event['time']) if event else None
         movement = ('Observed close-to-close move: {:+.2f}% · candle open times {} → {}. Last loaded candle may still be forming.'
                     .format(move['percent'], move['start'], move['end'])) if move else 'Price comparison unavailable: select an event within the loaded candle range.'
-        rows = [event_card(e,e['id']==selected) for e in events] or [html.P('No events match this view. Try All events or refresh.')]
+        ai_result = (ai_research or {}).get('result') if (ai_research or {}).get('event_id') == selected and \
+            (ai_research or {}).get('symbol') == active_symbol else None
+        rows = [event_card(e, e['id']==selected, ai_result if e['id']==selected else None) for e in events] or \
+            [html.P('No events match this view. Try All events or refresh.')]
         health = [html.Div(str(s.get('name'))+' · '+str(s.get('status','unknown'))) for s in snapshot.get('sources',[])]
         status = snapshot.get('error') or '{} · {} events · Retrieved {} · candle snapshot from last context refresh'.format(
             snapshot.get('symbol',''),len(events),snapshot.get('as_of',''))
