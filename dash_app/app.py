@@ -52,6 +52,8 @@ app = dash.Dash(
 app.layout = build_layout()
 
 register_callbacks(app)
+from dash_app.news_context import register_context_callbacks
+register_context_callbacks(app)
 
 # ---------------------------------------------------------------------------
 # Run

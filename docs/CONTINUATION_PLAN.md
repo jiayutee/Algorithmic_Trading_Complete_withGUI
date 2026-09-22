@@ -26,3 +26,6 @@ For every implementation slice, update this plan, notebook, evidence/handoff, th
 The owner requested that overnight and interactive agents use the same workflow. The orchestrator and its release specialist now require isolated task branches/worktrees, full local tests, a PR against main, latest-head CI reporting and owner review before merge. Unmerged tasks remain In progress. Retries reuse a recorded, exclusively owned task worktree; pending-review PRs are not duplicated. Runtime checkout updates remain separate from merging.
 
 See [workflow evidence and activation notes](artifacts/orchestrator-pr-workflow-2026-09-20.md). The news and trading backlog above is unchanged.
+
+## 2026-09-21 — chart-linked news context
+Implemented a Dash-first Market Context tab from the owner's MEXC reference: event markers and selection, conditional-case filters, observed price context, expandable evidence-linked explanations and source coverage. Shared interpretation code can serve desktop later. See [evidence and limitations](artifacts/news-context-2026-09-21.md). Review PR/CI before merging; this does not resolve the outstanding provider-quality or sentiment-evaluation backlog.
