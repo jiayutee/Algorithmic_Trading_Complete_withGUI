@@ -113,3 +113,40 @@ close (one per market, the last such snapshot); all 178 pass the two-sided filte
 - Nothing here is a trading signal, nothing was executed, and Phase 9.2 (probability model) stays on HOLD until roughly four
   weeks of snapshots exist. Projection from two closing days only (about 38 longshot and 19 favorite markets per day): the
   100-market bar could be cleared for L in a day or two and for F in about four days. Re-run the script then; it is read-only.
+
+# Results on collected snapshots (2026-09-22, 4 days of `core.kalshi_collector` data)
+
+Run date: 2026-09-22. Collector counts at run time: 749 snapshots, 710 markets, 435 resolved, 469 labelled (2026-09-19..22).
+
+Script: `training_ground/experiments_9_3_collected.py`, DB from main checkout (read-only via `--db` argument).
+**No protocol change**: same hypotheses, thresholds, fees, CI method as pre-registered.
+
+Data: 435 resolved markets; 415 have a usable snapshot >= 2h before close; all 415 pass the two-sided-book filter
+(Amendment 2: yes_bid >= 0.01, spread <= 0.10); 142 distinct events; window 2026-09-20 03:59 to 2026-09-22 14:45 UTC.
+Lead time: 12.8-68.9h before close (median 14.9h, mean 28.8h).
+
+| hypothesis | n (events) | mean ask | hit rate | pre-fee edge | 97.5% bootstrap interval | verdict |
+|---|---|---|---|---|---|---|
+| L longshots (ask <= 0.10) overpriced | 156 (91) | 0.046 | 0.045 | -0.001 | [-0.048, +0.070] | **no evidence** |
+| F favorites (ask >= 0.90) underpriced | 90 (46) | 0.978 | 1.000 | +0.022 | [+0.017, +0.027] | **UNDERPOWERED** (n < 100) |
+
+**Key changes vs the 09-21 run:**
+- L now has n=156 (was 76), meeting criterion 3. CI crosses zero ([-0.048, +0.070]) and halves have opposite signs
+  (-0.031 / +0.032), so criteria 1 and 2 both fail. Verdict: **no evidence** of longshot overpricing in this sample.
+  The hit rate (4.5%) is almost exactly the mean ask (4.6%): these markets are well-calibrated at the longshot end.
+- F has n=90 (was 38) and 46 events (was 23). Criterion 3 requires >= 100 markets; F remains **underpowered**.
+  The CI ([+0.017, +0.027]) is narrow and entirely positive, but n < 100 means we cannot call this a finding by
+  pre-registered rules. Exploratory: 90 of 90 favorites resolved YES vs 88.0 expected if fairly priced;
+  P(as extreme | fair, independence) = 0.134 -- consistent with a calibrated market.
+
+**Exploratory calibration note (not pre-registered):**
+The 0.10-0.30 ask buckets (n=59+22=81) show hit rates of 10% and 14% against asks of 15% and 25%: winners are
+fewer than prices imply in the low-probability region. Small cells from clustered markets; could be sampling
+noise, a longer-lead effect, or a real pattern. Needs its own pre-registration and multi-week data.
+
+**Status:** Phase 9.2 (probability model) stays on HOLD. L is adequately powered and shows no evidence of
+overpricing. F still needs roughly 10 more closing days to clear n=100 (about 19 new favorites per day).
+Re-run when F reaches n=100.
+
+**Deviations (disclosed):** lead time 12.8-68.9h (median 14.9h), not ~2h; no random 800-market sample or
+open >= 3h filter; one short window dominated by sports/commodity markets.
