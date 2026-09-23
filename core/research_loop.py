@@ -61,10 +61,15 @@ class Candidate:
     strategy: str                         # "module:Class"
     params: Dict[str, Any] = field(default_factory=dict)
     description: str = ""
+    trend_overlay: bool = False           # wrap the strategy with the 28-bar weekly trend filter (drawdown reduction)
 
     def load(self):
         mod, cls = self.strategy.split(":")
-        return getattr(importlib.import_module(mod), cls)
+        strategy_cls = getattr(importlib.import_module(mod), cls)
+        if self.trend_overlay:
+            from strategies.trend_filter_strategy import with_trend_overlay
+            strategy_cls = with_trend_overlay(strategy_cls)
+        return strategy_cls
 
 
 # All-in per trade so each strategy is comparable with a 100%-invested buy-and-hold.
@@ -78,6 +83,17 @@ DEFAULT_CANDIDATES: List[Candidate] = [
               "Stochastic %K/%D cross in extreme zones"),
     Candidate("GBM (LightGBM)", "strategies.gbm_strategy:GBMStrategy", dict(_ALLIN),
               "Walk-forward LightGBM next-day direction"),
+    # Trend-filtered variants (Phase 12.1). The overlay was validated as DRAWDOWN reduction, not alpha (Phases 6.7-6.9), so
+    # these are tested on the same footing as every other candidate: they must beat buy-and-hold Sharpe to be promoted, and
+    # the Bonferroni level below widens automatically with the larger candidate count. Expect most to fail that bar.
+    Candidate("MACD/RSI + Trend", "strategies.simple_strategies:MACD_RSI_Strategy", dict(_ALLIN),
+              "MACD/RSI, only allowed to hold while the 28-bar trend is up", trend_overlay=True),
+    Candidate("EMA Crossover + Trend", "strategies.simple_strategies:EMACrossoverStrategy", dict(_ALLIN),
+              "EMA crossover, only allowed to hold while the 28-bar trend is up", trend_overlay=True),
+    Candidate("Stochastic + Trend", "strategies.simple_strategies:StochasticStrategy", dict(_ALLIN),
+              "Stochastic, only allowed to hold while the 28-bar trend is up", trend_overlay=True),
+    Candidate("GBM + Trend", "strategies.gbm_strategy:GBMStrategy", dict(_ALLIN),
+              "LightGBM direction model, only allowed to hold while the 28-bar trend is up", trend_overlay=True),
 ]
 
 # ------------------------------------------------------------------------- evaluation
@@ -295,7 +311,8 @@ def run_cycle(data: Optional[Dict[str, pd.DataFrame]] = None, candidates: Option
         test = promotion_test(ev)
         run_id = log.log_run(
             name=f"research-loop {cand.name}", model_type="strategy",
-            params={"candidate": cand.name, "strategy": cand.strategy, **cand.params, "fee": FEE, "eval_days": eval_days,
+            params={"candidate": cand.name, "strategy": cand.strategy, "trend_overlay": cand.trend_overlay, **cand.params,
+                    "fee": FEE, "eval_days": eval_days,
                     "block": BLOCK, "ci_level": level},
             metrics={"sharpe": ev["strategy"]["sharpe"], "bh_sharpe": ev["buy_hold"]["sharpe"], "sharpe_diff": ev["sharpe_diff"],
                      "ci_low": ev["ci"][0], "ci_high": ev["ci"][1], "trades": ev["trades"],
