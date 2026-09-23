@@ -1,35 +1,35 @@
 {
-  "run_at": "2026-09-22T21:28:03.032572+00:00",
-  "n_markets": 415,
-  "n_events": 142,
+  "run_at": "2026-09-23T21:29:52.205008+00:00",
+  "n_markets": 530,
+  "n_events": 185,
   "window": [
     "2026-09-20 03:59:00",
-    "2026-09-22 14:45:00"
+    "2026-09-23 14:00:00"
   ],
   "dropped": 0,
   "dropped_one_sided": 0,
   "hypotheses": [
     {
       "id": "L longshots (ask<=0.10): mean edge < 0",
-      "n_markets": 156,
-      "n_events": 91,
-      "mean_edge": -0.0009615384615384639,
-      "mean_net": -0.0009615384615384639,
-      "tradable_mean_net": -0.03269230769230767,
+      "n_markets": 206,
+      "n_events": 117,
+      "mean_edge": 0.006213592233009714,
+      "mean_net": 0.006213592233009714,
+      "tradable_mean_net": -0.03980582524271843,
       "tradable_ci": [
-        -0.10248293575814826,
-        0.012955442385858796
+        -0.09879942084942084,
+        0.005137432599825131
       ],
       "TRADABLE": false,
-      "mean_ask": 0.04583333333333334,
-      "hit_rate": 0.04487179487179487,
+      "mean_ask": 0.04718446601941747,
+      "hit_rate": 0.05339805825242718,
       "ci": [
-        -0.0476235137195122,
-        0.0700648734177215
+        -0.03889690721649484,
+        0.06514833333333328
       ],
       "halves": [
-        -0.03148148148148148,
-        0.031999999999999994
+        0.009767441860465114,
+        0.00025974025974026164
       ],
       "criteria": {
         "1_ci_excludes_zero_in_claimed_direction": false,
@@ -40,48 +40,48 @@
       "underpowered": false,
       "verdict": "no evidence",
       "exploratory_calibrated_tail": {
-        "hits": 7,
-        "n": 156,
-        "expected_hits_if_calibrated": 7.15,
-        "p_at_least_as_extreme": 0.5757549943075327,
+        "hits": 11,
+        "n": 206,
+        "expected_hits_if_calibrated": 9.719999999999999,
+        "p_at_least_as_extreme": 0.7327821029657978,
         "note": "exploratory; assumes independent markets (they are event-clustered); not a pre-registered test"
       }
     },
     {
       "id": "F favorites (ask>=0.90): mean edge > 0",
-      "n_markets": 90,
-      "n_events": 46,
-      "mean_edge": 0.021888888888888902,
-      "mean_net": 0.021888888888888902,
-      "tradable_mean_net": 0.0118888888888889,
+      "n_markets": 100,
+      "n_events": 54,
+      "mean_edge": 0.021700000000000007,
+      "mean_net": 0.021700000000000007,
+      "tradable_mean_net": 0.01170000000000001,
       "tradable_ci": [
-        0.0072956677265500905,
-        0.01690075944170773
+        0.007534361471861486,
+        0.016364062213670528
       ],
-      "TRADABLE": false,
-      "mean_ask": 0.9781111111111112,
+      "TRADABLE": true,
+      "mean_ask": 0.9783000000000002,
       "hit_rate": 1.0,
       "ci": [
-        0.01729566772655009,
-        0.026900759441707722
+        0.017534361471861486,
+        0.026364062213670526
       ],
       "halves": [
         0.021234567901234583,
-        0.02777777777777779
+        0.023684210526315804
       ],
       "criteria": {
         "1_ci_excludes_zero_in_claimed_direction": true,
         "2_same_sign_both_halves": true,
-        "3_enough_data": false,
-        "FINDING": false
+        "3_enough_data": true,
+        "FINDING": true
       },
-      "underpowered": true,
-      "verdict": "UNDERPOWERED (criterion 3 unmet: cannot support or refute)",
+      "underpowered": false,
+      "verdict": "FINDING",
       "exploratory_calibrated_tail": {
-        "hits": 90,
-        "n": 90,
-        "expected_hits_if_calibrated": 88.03,
-        "p_at_least_as_extreme": 0.13376260933044962,
+        "hits": 100,
+        "n": 100,
+        "expected_hits_if_calibrated": 97.83000000000001,
+        "p_at_least_as_extreme": 0.10920183349758854,
         "note": "exploratory; assumes independent markets (they are event-clustered); not a pre-registered test"
       }
     }
@@ -89,62 +89,62 @@
   "calibration": [
     {
       "bucket": "(-0.001, 0.1]",
-      "n": 156,
-      "mean_ask": 0.04583333333333334,
-      "hit_rate": 0.04487179487179487
+      "n": 206,
+      "mean_ask": 0.047184466019417476,
+      "hit_rate": 0.05339805825242718
     },
     {
       "bucket": "(0.1, 0.2]",
-      "n": 59,
-      "mean_ask": 0.14576271186440679,
-      "hit_rate": 0.1016949152542373
+      "n": 79,
+      "mean_ask": 0.14746835443037976,
+      "hit_rate": 0.10126582278481013
     },
     {
       "bucket": "(0.2, 0.3]",
-      "n": 22,
-      "mean_ask": 0.24818181818181817,
-      "hit_rate": 0.13636363636363635
+      "n": 31,
+      "mean_ask": 0.2503225806451613,
+      "hit_rate": 0.22580645161290322
     },
     {
       "bucket": "(0.3, 0.4]",
-      "n": 26,
-      "mean_ask": 0.35884615384615387,
-      "hit_rate": 0.5
+      "n": 35,
+      "mean_ask": 0.3588571428571429,
+      "hit_rate": 0.4857142857142857
     },
     {
       "bucket": "(0.4, 0.5]",
-      "n": 16,
-      "mean_ask": 0.46375,
-      "hit_rate": 0.4375
+      "n": 21,
+      "mean_ask": 0.45714285714285713,
+      "hit_rate": 0.38095238095238093
     },
     {
       "bucket": "(0.5, 0.6]",
-      "n": 16,
-      "mean_ask": 0.553125,
-      "hit_rate": 0.375
+      "n": 18,
+      "mean_ask": 0.5533333333333333,
+      "hit_rate": 0.3888888888888889
     },
     {
       "bucket": "(0.6, 0.7]",
-      "n": 10,
-      "mean_ask": 0.65,
-      "hit_rate": 0.4
+      "n": 12,
+      "mean_ask": 0.6575,
+      "hit_rate": 0.4166666666666667
     },
     {
       "bucket": "(0.7, 0.8]",
-      "n": 7,
-      "mean_ask": 0.76,
+      "n": 9,
+      "mean_ask": 0.7577777777777778,
       "hit_rate": 1.0
     },
     {
       "bucket": "(0.8, 0.9]",
-      "n": 15,
-      "mean_ask": 0.8586666666666666,
-      "hit_rate": 0.8666666666666667
+      "n": 21,
+      "mean_ask": 0.8576190476190475,
+      "hit_rate": 0.8571428571428571
     },
     {
       "bucket": "(0.9, 1.0]",
-      "n": 88,
-      "mean_ask": 0.9798863636363637,
+      "n": 98,
+      "mean_ask": 0.9798979591836735,
       "hit_rate": 1.0
     }
   ],
@@ -160,18 +160,18 @@
     "seed": 0
   },
   "source": "core.kalshi_collector snapshots (one per resolved market, last at or before close - 2h)",
-  "resolved_markets": 435,
-  "markets_without_usable_snapshot": 20,
+  "resolved_markets": 560,
+  "markets_without_usable_snapshot": 30,
   "lead_h": {
-    "mean": 28.776411646586347,
-    "min": 12.8275,
+    "mean": 30.020917190775684,
+    "min": 12.82,
     "25%": 12.898888888888889,
-    "50%": 14.898888888888889,
-    "75%": 45.809583333333336,
+    "50%": 20.8275,
+    "75%": 45.915277777777774,
     "max": 68.9161111111111
   },
   "protocol_deviations": [
-    "lead time is 12.8-68.9h before close (median 14.9h), not ~2h: a longer-lead calibration, not a replica of 9.3a",
+    "lead time is 12.8-68.9h before close (median 20.8h), not ~2h: a longer-lead calibration, not a replica of 9.3a",
     "no random 800-market sample and no open>=3h filter (open time not stored): all resolved markets used",
     "one clustered window: markets closing 2026-09-20..21, mostly short-lived sports/commodity markets"
   ]

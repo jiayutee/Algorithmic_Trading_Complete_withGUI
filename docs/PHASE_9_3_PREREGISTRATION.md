@@ -150,3 +150,51 @@ Re-run when F reaches n=100.
 
 **Deviations (disclosed):** lead time 12.8-68.9h (median 14.9h), not ~2h; no random 800-market sample or
 open >= 3h filter; one short window dominated by sports/commodity markets.
+# Results on collected snapshots (2026-09-23, 5 days of `core.kalshi_collector` data)
+
+Run date: 2026-09-23. Collector counts at run time: 896 snapshots, 851 markets, 560 resolved, 594 labelled (2026-09-19..23).
+
+Script: `training_ground/experiments_9_3_collected.py`, DB from main checkout (read-only via `--db` argument).
+**No protocol change**: same hypotheses, thresholds, fees, CI method as pre-registered.
+Evidence: `training_ground/results/phase_9_3_collected.json` (09-22 run archived as `phase_9_3_collected_20260922.json`).
+
+Data: 560 resolved markets; 530 have a usable snapshot >= 2h before close; all 530 pass the two-sided-book filter
+(Amendment 2: yes_bid >= 0.01, spread <= 0.10); 185 distinct events.
+Lead time: 12.8-68.9h before close (median 20.8h, mean 30.0h).
+
+| hypothesis | n (events) | mean ask | hit rate | pre-fee edge | 97.5% bootstrap interval | verdict |
+|---|---|---|---|---|---|---|
+| L longshots (ask <= 0.10) overpriced | 206 (117) | 0.047 | 0.053 | +0.006 | [-0.039, +0.065] | **no evidence** |
+| F favorites (ask >= 0.90) underpriced | 100 (54) | 0.978 | 1.000 | +0.022 | [+0.018, +0.026] | **FINDING** (all three criteria met) |
+
+**Pre-registered verdict for F:**
+F has reached n=100 (exactly 100 markets, 54 events, both meeting the required >= 100 markets and >= 30 events).
+
+- Criterion 1: lower bound of 97.5% CI is +0.018 > 0. Met.
+- Criterion 2: both halves have the same sign (+0.021 / +0.024). Met.
+- Criterion 3: n=100 markets, 54 events. Met.
+- **Verdict: FINDING.** Favorites (ask >= 0.90) show a pre-fee mean edge of +0.022 per contract with an entirely
+  positive 97.5% CI. The tradable-side (buying YES, net of fee) CI is [+0.008, +0.016], also entirely positive,
+  so this is additionally labelled **TRADABLE** by the pre-registration's tradable criterion.
+
+**Critical caveats (do not quote the finding without reading these):**
+- The bootstrap CI for F is **degenerate**: 100/100 favorites resolved YES, so the interval reflects only the spread
+  of asks, not binomial uncertainty of the hit rate. This was flagged in the 09-21 run notes and is a known property
+  of the pre-registered statistic on 100% hit rates. The CI looks tight; it is not evidence of a precise edge.
+- Exploratory calibrated tail (independence assumed, not pre-registered): P(100 of 100 | fair, independence) = 0.109.
+  Under the independence assumption, 100 wins out of 100 is not unusual at 10.9%, and clustering makes it even less
+  surprising. The bootstrap finding and the calibrated tail tell different stories; the bootstrap wins here because it
+  is the pre-registered method.
+- The Amendment 2 filter (two-sided book) was not fully blind, as explained in Amendment 2 above.
+- This is a read-only calibration study at a 12.8-68.9h lead, not at the ~2h lead of 9.3a.
+- No execution is implied; no real money was involved or committed.
+
+**Key changes vs the 09-22 run:**
+- F has n=100 (was 90) and 54 events (was 46). Criterion 3 now met; all three criteria met.
+- L has n=206 (was 156). CI [-0.039, +0.065] still crosses zero and halves have opposite signs; verdict unchanged: **no evidence**.
+
+**Status:** Phase 9.2 (probability model) stays on HOLD. L is adequately powered with no evidence of overpricing.
+F has cleared n=100 and meets all three pre-registered criteria; the bootstrap CI is degenerate (see caveats).
+
+**Deviations (disclosed):** lead time 12.8-68.9h (median 20.8h), not ~2h; no random 800-market sample or
+open >= 3h filter; one window dominated by sports/commodity markets (2026-09-20 to 2026-09-23).

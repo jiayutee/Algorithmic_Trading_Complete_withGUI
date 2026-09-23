@@ -26,3 +26,14 @@ For every implementation slice, update this plan, notebook, evidence/handoff, th
 The owner requested that overnight and interactive agents use the same workflow. The orchestrator and its release specialist now require isolated task branches/worktrees, full local tests, a PR against main, latest-head CI reporting and owner review before merge. Unmerged tasks remain In progress. Retries reuse a recorded, exclusively owned task worktree; pending-review PRs are not duplicated. Runtime checkout updates remain separate from merging.
 
 See [workflow evidence and activation notes](artifacts/orchestrator-pr-workflow-2026-09-20.md). The news and trading backlog above is unchanged.
+## 2026-09-23 — Phase 9.3 re-run (5 days of collected data)
+
+Ran `training_ground/experiments_9_3_collected.py` with the main checkout's Kalshi DB (896 snapshots, 560 resolved,
+594 labelled, 2026-09-19..23). No protocol change.
+
+- L (longshots, ask <= 0.10): n=206 (117 events), CI97.5 [-0.039, +0.065]. Verdict: **no evidence** of overpricing.
+- F (favorites, ask >= 0.90): n=100 (54 events), CI97.5 [+0.018, +0.026]. **Pre-registered FINDING** (all three
+  criteria met for the first time). Bootstrap CI is degenerate (100/100 hit rate); exploratory calibrated tail gives
+  P=0.109 under independence -- not statistically surprising. See caveats in PHASE_9_3_PREREGISTRATION.md.
+- Phase 9.2 stays on HOLD per pre-registered rules.
+- Evidence: `training_ground/results/phase_9_3_collected.json`; archive: `phase_9_3_collected_20260922.json`.
