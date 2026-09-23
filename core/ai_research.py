@@ -71,7 +71,7 @@ def research_event(
     if os.getenv("AI_RESEARCH_ENABLED", "").strip().lower() in ("0", "false", "no"):
         return None
 
-    model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")  # llama-3.3-70b-versatile retired by Groq (HTTP 404, 2026-09-23)
     headline = (headline or "").strip()
     summary = (summary or "").strip()
     if not headline:
