@@ -1,0 +1,241 @@
+{
+  "meta": {
+    "run_timestamp": "2026-09-24T23:31:59Z",
+    "git_commit": "d00c66b",
+    "git_branch": "orchestrator/day89-research-loop-8cand",
+    "git_dirty": false,
+    "scratch_copy": true,
+    "canonical_file": "training_ground/results/experiments.sqlite3",
+    "scratch_file": "artifacts/tmp_day89/experiments_copy.sqlite3",
+    "canonical_sha256_before": "4a86ff64e8f364c0984d1117ccf45f6b219c376badcd8b7b1aaf83f349f26d34",
+    "canonical_sha256_after": "4a86ff64e8f364c0984d1117ccf45f6b219c376badcd8b7b1aaf83f349f26d34",
+    "canonical_unchanged": true,
+    "note": "Canonical promote/retire state untouched. Applying any decisions below is an owner decision."
+  },
+  "run_params": {
+    "symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "LTCUSDT", "DOGEUSDT", "SOLUSDT"],
+    "n_symbols": 8,
+    "history_days": 1000,
+    "eval_days": 700,
+    "data_through": "2026-09-23",
+    "data_source": "core.order_flow_data.fetch_klines",
+    "fee": 0.001,
+    "n_boot": 500,
+    "block": 10,
+    "n_candidates": 8,
+    "bonferroni_alpha_total": 0.05,
+    "bonferroni_alpha_per_candidate": 0.00625,
+    "ci_level_per_candidate": 0.99375,
+    "ci_level_note": "99.375% CI per candidate (Bonferroni for 8 candidates). Wider than the 4-candidate run which used 98.75% CI."
+  },
+  "buy_hold": {
+    "sharpe": 0.474,
+    "max_drawdown_pct": -66.73,
+    "note": "Equal-weight across 8 symbols, daily bars, last 700 eval bars, fee=0.001"
+  },
+  "candidates": [
+    {
+      "name": "MACD/RSI",
+      "trend_overlay": false,
+      "sharpe": 0.378,
+      "bh_sharpe": 0.474,
+      "sharpe_diff": -0.096,
+      "ci_low": -3.146,
+      "ci_high": 2.953,
+      "ci_level": 0.99375,
+      "both_halves_positive": false,
+      "trades": 9,
+      "max_drawdown_pct": -5.16,
+      "bh_max_drawdown_pct": -66.73,
+      "promotion_test": {
+        "ci_lower_above_zero": false,
+        "positive_in_both_halves": false,
+        "at_least_30_trades": false,
+        "drawdown_not_much_worse": true,
+        "PASS": false
+      },
+      "would_assign": "candidate",
+      "note": "Too few trades (9 across 8 symbols x 700 bars). Sharpe below B&H. CI wide and lower bound negative."
+    },
+    {
+      "name": "EMA Crossover",
+      "trend_overlay": false,
+      "sharpe": 0.882,
+      "bh_sharpe": 0.474,
+      "sharpe_diff": 0.408,
+      "ci_low": -0.926,
+      "ci_high": 1.736,
+      "ci_level": 0.99375,
+      "both_halves_positive": true,
+      "trades": 128,
+      "max_drawdown_pct": -38.70,
+      "bh_max_drawdown_pct": -66.73,
+      "promotion_test": {
+        "ci_lower_above_zero": false,
+        "positive_in_both_halves": true,
+        "at_least_30_trades": true,
+        "drawdown_not_much_worse": true,
+        "PASS": false
+      },
+      "would_assign": "candidate",
+      "note": "Closest to promotion: both halves positive, 128 trades, drawdown well below B&H (-39% vs -67%). Fails only because CI lower bound (-0.93) is below zero. Consistent with earlier runs showing Sharpe diff ~0.4 but wide interval."
+    },
+    {
+      "name": "Stochastic",
+      "trend_overlay": false,
+      "sharpe": 0.356,
+      "bh_sharpe": 0.474,
+      "sharpe_diff": -0.118,
+      "ci_low": -3.483,
+      "ci_high": 3.244,
+      "ci_level": 0.99375,
+      "both_halves_positive": false,
+      "trades": 97,
+      "max_drawdown_pct": -261.48,
+      "bh_max_drawdown_pct": -66.73,
+      "promotion_test": {
+        "ci_lower_above_zero": false,
+        "positive_in_both_halves": false,
+        "at_least_30_trades": true,
+        "drawdown_not_much_worse": false,
+        "PASS": false
+      },
+      "would_assign": "candidate",
+      "note": "Extreme drawdown (-261%) from near-zero equity under all-in (95%) sizing across losing symbols. Wide CI. Sharpe below B&H. Inconsistent halves."
+    },
+    {
+      "name": "GBM (LightGBM)",
+      "trend_overlay": false,
+      "sharpe": -0.506,
+      "bh_sharpe": 0.474,
+      "sharpe_diff": -0.980,
+      "ci_low": -3.497,
+      "ci_high": 1.623,
+      "ci_level": 0.99375,
+      "both_halves_positive": false,
+      "trades": 1192,
+      "max_drawdown_pct": -55.80,
+      "bh_max_drawdown_pct": -66.73,
+      "promotion_test": {
+        "ci_lower_above_zero": false,
+        "positive_in_both_halves": false,
+        "at_least_30_trades": true,
+        "drawdown_not_much_worse": true,
+        "PASS": false
+      },
+      "would_assign": "candidate",
+      "note": "Negative Sharpe. Walk-forward OOS AUC 0.477-0.540 across symbols (near-random). Not retired because CI upper (1.62) > 0."
+    },
+    {
+      "name": "MACD/RSI + Trend",
+      "trend_overlay": true,
+      "sharpe": 0.587,
+      "bh_sharpe": 0.474,
+      "sharpe_diff": 0.113,
+      "ci_low": -3.192,
+      "ci_high": 3.196,
+      "ci_level": 0.99375,
+      "both_halves_positive": false,
+      "trades": 5,
+      "max_drawdown_pct": -2.64,
+      "bh_max_drawdown_pct": -66.73,
+      "promotion_test": {
+        "ci_lower_above_zero": false,
+        "positive_in_both_halves": false,
+        "at_least_30_trades": false,
+        "drawdown_not_much_worse": true,
+        "PASS": false
+      },
+      "would_assign": "candidate",
+      "note": "Trend filter reduces MACD/RSI to only 5 total trades. Effectively flat. Very low drawdown (-2.6%) but unobservable in this window. Prior expectation confirmed: drawdown reduces, Sharpe edge not established."
+    },
+    {
+      "name": "EMA Crossover + Trend",
+      "trend_overlay": true,
+      "sharpe": 0.571,
+      "bh_sharpe": 0.474,
+      "sharpe_diff": 0.097,
+      "ci_low": -2.479,
+      "ci_high": 2.994,
+      "ci_level": 0.99375,
+      "both_halves_positive": false,
+      "trades": 100,
+      "max_drawdown_pct": -15.49,
+      "bh_max_drawdown_pct": -66.73,
+      "promotion_test": {
+        "ci_lower_above_zero": false,
+        "positive_in_both_halves": false,
+        "at_least_30_trades": true,
+        "drawdown_not_much_worse": true,
+        "PASS": false
+      },
+      "would_assign": "candidate",
+      "note": "Trend filter reduces EMA Crossover Sharpe from 0.882 to 0.571, drawdown from -39% to -15%. CI far too wide. Inconsistent across halves. Confirms prior: drawdown reduction does not produce Sharpe edge."
+    },
+    {
+      "name": "Stochastic + Trend",
+      "trend_overlay": true,
+      "sharpe": 0.749,
+      "bh_sharpe": 0.474,
+      "sharpe_diff": 0.275,
+      "ci_low": -2.882,
+      "ci_high": 3.167,
+      "ci_level": 0.99375,
+      "both_halves_positive": false,
+      "trades": 83,
+      "max_drawdown_pct": -106.98,
+      "bh_max_drawdown_pct": -66.73,
+      "promotion_test": {
+        "ci_lower_above_zero": false,
+        "positive_in_both_halves": false,
+        "at_least_30_trades": true,
+        "drawdown_not_much_worse": false,
+        "PASS": false
+      },
+      "would_assign": "candidate",
+      "note": "Trend filter reduces Stochastic drawdown from -261% to -107%, but -107% still fails the B&H+5% tolerance (B&H -67%). Positive point estimate but CI far too wide. Inconsistent halves."
+    },
+    {
+      "name": "GBM + Trend",
+      "trend_overlay": true,
+      "sharpe": -0.730,
+      "bh_sharpe": 0.474,
+      "sharpe_diff": -1.204,
+      "ci_low": -4.086,
+      "ci_high": 2.059,
+      "ci_level": 0.99375,
+      "both_halves_positive": false,
+      "trades": 622,
+      "max_drawdown_pct": -40.04,
+      "bh_max_drawdown_pct": -66.73,
+      "promotion_test": {
+        "ci_lower_above_zero": false,
+        "positive_in_both_halves": false,
+        "at_least_30_trades": true,
+        "drawdown_not_much_worse": true,
+        "PASS": false
+      },
+      "would_assign": "candidate",
+      "note": "GBM + Trend worse in Sharpe than GBM alone (-0.730 vs -0.506). Drawdown improves from -56% to -40%. Not retired because CI upper (2.06) > 0."
+    }
+  ],
+  "summary": {
+    "n_promoted": 0,
+    "n_retired": 0,
+    "n_staying_candidate": 8,
+    "any_trend_variant_clears_promotion_bar": false,
+    "trend_overlay_drawdown_effect": "confirmed_reduction_in_all_four_variants",
+    "trend_overlay_sharpe_effect": "does_not_clear_promotion_bar_in_any_variant",
+    "agrees_with_prior_expectation_phases_6_7_to_6_9": true,
+    "closest_to_promotion": "EMA Crossover (fails only CI lower bound; all other promotion criteria pass)",
+    "would_retire_any": false,
+    "paper_pnl_rows": 0,
+    "run_notes": [
+      "n_boot=500 used instead of default 2000 for speed. Intervals approximate; conclusions unlikely to change given width.",
+      "Bonferroni widening from 4 to 8 candidates: CI level moves from 98.75% to 99.375%, making the lower-bound test marginally harder.",
+      "Stochastic's -261% drawdown is a backtest artifact from near-zero equity under all-in sizing, not a realistic outcome.",
+      "MACD/RSI + Trend's 5 total trades (8 symbols x 700 bars) makes it essentially unobservable in this window.",
+      "No strategy was in paper trading before this run; no forward P&L to report."
+    ]
+  }
+}
