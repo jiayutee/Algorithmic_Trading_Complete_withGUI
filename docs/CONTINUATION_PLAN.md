@@ -26,6 +26,20 @@ For every implementation slice, update this plan, notebook, evidence/handoff, th
 The owner requested that overnight and interactive agents use the same workflow. The orchestrator and its release specialist now require isolated task branches/worktrees, full local tests, a PR against main, latest-head CI reporting and owner review before merge. Unmerged tasks remain In progress. Retries reuse a recorded, exclusively owned task worktree; pending-review PRs are not duplicated. Runtime checkout updates remain separate from merging.
 
 See [workflow evidence and activation notes](artifacts/orchestrator-pr-workflow-2026-09-20.md). The news and trading backlog above is unchanged.
+
+## 2026-09-21 — chart-linked news context
+Implemented a Dash-first Market Context tab from the owner's MEXC reference: event markers and selection, conditional-case filters, observed price context, expandable evidence-linked explanations and source coverage. Shared interpretation code can serve desktop later. See [evidence and limitations](artifacts/news-context-2026-09-21.md). Merged as PR #21.
+
+## 2026-09-22 — optional AI research on top of Market Context
+Owner asked to add AI research to the analysis, using a free model if the configured sentiment pipeline is good enough to build on. `core/sentiment.py` was reviewed: FinBERT (optional) -> DeepSeek LLM (opt-in) -> keyword rule-based fallback, with chunking and per-row fallback on partial LLM failures -- judged solid enough to extend rather than replace.
+
+Added `core/ai_research.py`: an on-demand, per-event research note from Groq (free tier, `GROQ_API_KEY`), reasoning only from the same supplied headline/summary text plus the existing sentiment label, never fetched automatically (a "Get AI research on selected event" button, so cost/latency stays bounded to what the reader actually opens). Any missing key, network error, timeout or malformed JSON returns `None` and the deterministic `core/news_interpretation.py` reading is shown unaffected -- this is additive, not a replacement path.
+
+Not done: no evaluation of the AI research note's own accuracy or calibration (it is presented as a hypothesis to verify, consistently with the deterministic path's disclaimers, not tested against outcomes). The owner has since added `GROQ_API_KEY` to `.env` (2026-09-22); the live success path has not yet been exercised against the real API. See [evidence artifact](artifacts/ai-research-2026-09-22.md).
+
+## 2026-09-23 — research loop: trend-filtered candidates
+The loop had four candidates (MACD/RSI, EMA Crossover, Stochastic, GBM) because those are the only standalone signal strategies that run in the current environment; TD3/DDPG/FinRL need `stable_baselines3`/`finrl` plus trained model files, the LSTM is deprecated, and the trend filter is an overlay rather than a signal source. Added a `trend_overlay` flag to `Candidate` and four wrapped variants ("... + Trend", 8 candidates total) so the overlay is tested on the same promotion rules as everything else. The Bonferroni level widens automatically with the candidate count. Expectation, from Phases 6.7-6.9: drawdown improves, Sharpe versus buy-and-hold does not clear the bar. No result has been produced yet -- the loop has not been re-run with the new candidates, and no promotion is implied. RL candidates were not added: they would need installed dependencies, trained artifacts and a pre-registered training protocol first.
+
 ## 2026-09-23 — Phase 9.3 re-run (5 days of collected data)
 
 Ran `training_ground/experiments_9_3_collected.py` with the main checkout's Kalshi DB (896 snapshots, 560 resolved,
