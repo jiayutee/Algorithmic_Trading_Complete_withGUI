@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from dash import dcc, html, Input, Output, State, ctx, no_update
 from core.chart_builder import THEME
 from core.news_context import (fetch_snapshot, candles_from_figure, observed_move, candle_step, ai_research_for_event,
-                               scenario_fan, event_mix, SCENARIO_HORIZONS)
+                               scenario_fan, event_mix, effective_bias, SCENARIO_HORIZONS)
 
 COLORS = {'bullish': '#42d9a1', 'bearish': '#ff6b86', 'unknown': '#a9b6cd', 'mixed': '#f2c66d'}
 
@@ -46,8 +46,8 @@ def context_panel():
 def filtered_events(snapshot, mode):
     events = (snapshot or {}).get('events', [])
     return [e for e in events if mode == 'all' or
-            (mode == 'unclear' and e['interpretation']['conditional_bias'] not in ('bullish','bearish')) or
-            e['interpretation']['conditional_bias'] == mode]
+            (mode == 'unclear' and effective_bias(e)[0] not in ('bullish','bearish')) or
+            effective_bias(e)[0] == mode]
 
 
 def safe_url(value):
@@ -73,14 +73,27 @@ def ai_research_block(ai_research):
         html.P(ai_research['limitations'], className='context-note')])
 
 
+def model_reading_block(event):
+    r = event.get('model_reading')
+    if not r:
+        return None
+    shown = effective_bias(event)[1] == 'model'
+    return html.Div(className='context-ai-research', children=[
+        html.Strong('Model reading (' + r['method'].replace('model-reading-groq-', 'Groq ') + ', untested label)'),
+        html.P('{} · {:.0%} confidence{}'.format(r['bias'].capitalize(), r['confidence'],
+               '' if shown or r['bias'] == 'unclear' else ' · below the 60% threshold, so not used to colour this event')),
+        html.P(r['reason']),
+        html.P('A labelling aid from the headline text only; it has not been tested against price moves and does not tilt the scenario fans.', className='context-note')])
+
+
 def event_card(event, selected, ai_research=None):
-    i = event['interpretation']; impact = i['conditional_bias']; color = COLORS.get(impact, COLORS['unknown'])
+    i = event['interpretation']; impact, source = effective_bias(event); color = COLORS.get(impact, COLORS['unknown'])
     url = safe_url(event.get('url'))
     title = html.A(event['headline'], href=url, target='_blank', rel='noopener noreferrer') if url else html.Span(event['headline'])
     return html.Article(className='context-event selected' if selected else 'context-event',
         style={'borderLeftColor':color}, children=[
             html.Div([html.Time(pd.Timestamp(event['time']).strftime('%d %b · %H:%M UTC')),
-                      html.Span(impact.capitalize() + (' case' if impact in ('bullish','bearish') else ''),
+                      html.Span(impact.capitalize() + (' case' if impact in ('bullish','bearish') else '') + (' · model' if source == 'model' else ''),
                                 className='context-badge', style={'color':color})]),
             html.H4(title), html.Small(event['source']),
             html.Details(open=selected, children=[html.Summary('Interpretation'),
@@ -92,6 +105,7 @@ def event_card(event, selected, ai_research=None):
                 html.P('Headline tone: '+i['headline_tone']['label']+' · '+i['headline_tone']['model'], className='context-note'),
                 html.P(i['conditional_bias_basis'], className='context-note'),
                 html.P(' '.join(i['limitations']) if isinstance(i['limitations'],list) else i['limitations'], className='context-note'),
+                model_reading_block(event),
                 ai_research_block(ai_research) if selected else None])])
 
 
@@ -127,18 +141,21 @@ def context_figure(figure, events, selected, scenarios=None, horizon=14, mix=Non
                       low=candles.low, close=candles.close, name='Loaded price',
                       increasing_line_color=COLORS['bullish'], decreasing_line_color=COLORS['bearish']))
         for impact, color in COLORS.items():
-            points = []
-            for event in events:
-                t = pd.Timestamp(event['time'])
-                if event['interpretation']['conditional_bias'] != impact or t < candles.index[0] or t >= candles.index[-1] + candle_step(candles):
-                    continue
-                idx = candles.index.searchsorted(t, side='right')-1
-                points.append((t, candles.high.iloc[idx]*1.006, event))
-            if points:
-                fig.add_trace(go.Scatter(x=[p[0] for p in points], y=[p[1] for p in points], mode='markers',
-                    marker={'color':color,'size':11,'symbol':'diamond'}, name=impact.capitalize()+' context',
-                    customdata=[p[2]['id'] for p in points], text=[p[2]['headline'] for p in points],
-                    hovertemplate='%{text}<br>%{x}<extra></extra>'))
+            for source, symbol_, tag in (('rules', 'diamond', 'context (rules)'), ('model', 'circle-open', 'reading (model, untested)')):
+                points = []
+                for event in events:
+                    t = pd.Timestamp(event['time'])
+                    bias, src = effective_bias(event)
+                    if bias != impact or (src or 'rules') != source or t < candles.index[0] or t >= candles.index[-1] + candle_step(candles):
+                        continue
+                    idx = candles.index.searchsorted(t, side='right')-1
+                    points.append((t, candles.high.iloc[idx]*1.006, event))
+                if points:
+                    fig.add_trace(go.Scatter(x=[p[0] for p in points], y=[p[1] for p in points], mode='markers',
+                        marker={'color':color,'size':11 if source == 'rules' else 12,'symbol':symbol_, 'line': {'width': 2, 'color': color}},
+                        name=impact.capitalize()+' '+tag,
+                        customdata=[p[2]['id'] for p in points], text=[p[2]['headline'] for p in points],
+                        hovertemplate='%{text}<br>%{x}<extra></extra>'))
         event = next((e for e in events if e['id']==selected), None)
         if event and candles.index[0] <= pd.Timestamp(event['time']) < candles.index[-1] + candle_step(candles):
             fig.add_shape(type='line', x0=event['time'], x1=event['time'], y0=0, y1=1, yref='paper',
@@ -167,7 +184,7 @@ def register_context_callbacks(app):
         if not symbol:
             return {'events':[], 'error':'Load a chart before refreshing context.'}, None
         try:
-            snapshot = fetch_snapshot(symbol)
+            snapshot = fetch_snapshot(symbol, model_readings=True)
         except Exception:
             snapshot = {'symbol':symbol,'events':[], 'sources':[], 'error':'News is unavailable. Refresh to retry; no cached results are shown.'}
         return snapshot, figure
@@ -221,6 +238,12 @@ def register_context_callbacks(app):
         health = [html.Div(str(s.get('name'))+' · '+str(s.get('status','unknown'))) for s in snapshot.get('sources',[])]
         status = snapshot.get('error') or '{} · {} events · Retrieved {} · candle snapshot from last context refresh'.format(
             snapshot.get('symbol',''),len(events),snapshot.get('as_of',''))
+        mr = snapshot.get('model_readings') or {}
+        if not snapshot.get('error') and mr.get('status') not in (None, 'off'):
+            status += ' · model readings {}/{}{}'.format(mr.get('received', 0), mr.get('requested', 0),
+                                                         '' if mr.get('status') in ('ok', 'partial') else ' (unavailable: rate limit or error; rule labels only)')
+        elif not snapshot.get('error') and mr.get('status') == 'off':
+            status += ' · model readings off (set GROQ_API_KEY)'
         hidden = snapshot.get('hidden') or {}
         if not snapshot.get('error') and sum(hidden.values()):
             status += ' · hidden as not market context: {} off-topic, {} explainer/reference pages, {} undated web results'.format(
@@ -232,8 +255,8 @@ def register_context_callbacks(app):
             movement += (' Scenario fans are volatility-scaled simulations, not forecasts: {} paths per scenario are resampled from this '
                          'chart\'s own daily moves (sigma {:.2%}); the shaded band is the middle 50%, the dotted line the median, and the '
                          'jagged line one example path. Median after {} bars: {:+.1%} bullish / {:+.1%} bearish / {:+.1%} range. Reported '
-                         'cases in view: {} bullish, {} bearish, {} unclear/mixed; the counts describe the news, they do not tilt the '
-                         'fans or make either more likely (the readings have not been shown to predict price: Phase 13.1).').format(
+                         'cases in view: {} bullish, {} bearish, {} unclear/mixed (rules plus confident, untested model readings); the counts describe the news, they do not tilt the '
+                         'fans or make either more likely (no reading has been shown to predict price: Phase 13.1).').format(
                 fan['n_paths'], fan['sigma'], fan['horizon'], sc['bullish']['median'][-1] / fan['last'] - 1,
                 sc['bearish']['median'][-1] / fan['last'] - 1, sc['range']['median'][-1] / fan['last'] - 1,
                 mix['bullish'], mix['bearish'], mix['unclear'])
