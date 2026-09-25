@@ -551,6 +551,62 @@ class TestGetOptionsChain:
         df = get_options_chain(ib_env.ib, "AAPL")
         assert set(df["right"].unique()).issubset({"C", "P"})
 
+    # -----------------------------------------------------------------------
+    # Gap-closing tests (Phase 4.5 IBKR mock-harness gap-check)
+    # -----------------------------------------------------------------------
+
+    def test_req_sec_def_opt_params_exception_returns_empty(self, ib_env):
+        """reqSecDefOptParams raising an exception (e.g. timeout) → empty DataFrame.
+
+        The existing test_req_sec_def_opt_params_returns_empty_gives_empty_df covers
+        the empty-list path.  This test covers the *exception* path (timeout / socket
+        error), which exercises a different except-branch inside get_options_chain.
+        """
+        _setup_ib(ib_env.ib)
+        ib_env.ib.reqSecDefOptParams.side_effect = TimeoutError(
+            "IB gateway timed out requesting option parameters"
+        )
+        from core.options_chain import CHAIN_COLUMNS, get_options_chain
+        df = get_options_chain(ib_env.ib, "AAPL")
+        assert isinstance(df, pd.DataFrame)
+        assert list(df.columns) == CHAIN_COLUMNS
+        assert len(df) == 0
+
+    def test_no_placeorder_called_during_chain_retrieval(self, ib_env):
+        """options_chain module is strictly read-only: placeOrder is never invoked.
+
+        get_options_chain must call only qualifyContracts, reqSecDefOptParams and
+        reqTickers.  Any call to placeOrder, cancelOrder or similar order-placement
+        methods would be a safety regression.
+        """
+        _setup_ib(ib_env.ib)
+        from core.options_chain import get_options_chain
+        df = get_options_chain(ib_env.ib, "AAPL")
+        assert len(df) > 0, "pre-condition: chain must be non-empty so all code paths ran"
+        # The MagicMock records every call; placeOrder must never appear.
+        ib_env.ib.placeOrder.assert_not_called()
+
+    def test_output_rows_sorted_by_strike_ascending(self, ib_env):
+        """Rows are in non-decreasing strike order (two rights per strike: C then P).
+
+        The production code builds contracts as:
+            [Option(..., strike, right) for strike in sorted_strikes for right in ('C','P')]
+        and the mock preserves that ordering, so the output strike column must be
+        non-decreasing.
+
+        NOTE: Real IBKR connections may return tickers in a different order; if that
+        becomes an issue in integration testing, an explicit df.sort_values('strike')
+        should be added to get_options_chain before returning.
+        """
+        strikes = [140.0, 145.0, 150.0, 155.0, 160.0]
+        _setup_ib(ib_env.ib, strikes=strikes)
+        from core.options_chain import get_options_chain
+        df = get_options_chain(ib_env.ib, "AAPL")
+        assert len(df) == len(strikes) * 2, "expected one call + one put per selected strike"
+        assert df["strike"].is_monotonic_increasing, (
+            f"expected strikes to be non-decreasing; got {df['strike'].tolist()}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: DataLoader.get_options_chain (thin entry point)

@@ -11,6 +11,7 @@ import pandas as pd
 
 from core.logger import logger
 from core.news_sources import (
+    OUTCOME_ERROR,
     BaseNewsSource,
     BraveSearchSource,
     EventRegistrySource,
@@ -397,19 +398,26 @@ class NewsPipeline:
             return []
 
         lock = threading.Lock()
-        results: dict[str, tuple[list[NewsItem], float, str]] = {}
+        # results dict value: (items, elapsed_seconds, err_string, outcome_class)
+        results: dict[str, tuple[list[NewsItem], float, str, str]] = {}
         closed = False
 
         def worker(source: BaseNewsSource) -> None:
             t0 = time.monotonic()
+            outcome_class = OUTCOME_ERROR
             try:
                 q = ticker_query if (ticker_query and getattr(source, "query_style", "text") == "ticker") else query
-                items, err = list(source.fetch(q, limit) or []), ""
+                # Use fetch_classified() to get the failure classification alongside items.
+                # fetch_classified() must not raise; exceptions here are a programming error.
+                items, outcome_class = source.fetch_classified(q, limit)
+                items = list(items or [])
+                err = ""
             except Exception as exc:  # noqa: BLE001
-                items, err = [], f"{type(exc).__name__}: {exc}"[:120]
+                items, err = [], type(exc).__name__
+                outcome_class = OUTCOME_ERROR
             with lock:
                 if not closed:                       # ignore stragglers that finish after the deadline
-                    results[source.name] = (items, time.monotonic() - t0, err)
+                    results[source.name] = (items, time.monotonic() - t0, err, outcome_class)
 
         threads = [threading.Thread(target=worker, args=(src,), daemon=True, name=f"news-{src.name}") for src in active]
         started = time.monotonic()
@@ -425,8 +433,9 @@ class NewsPipeline:
         summary = []
         for source in active:
             if source.name in done:
-                items, seconds, err = done[source.name]
-                failed = self.health.record(source.name, len(items), seconds, err)
+                items, seconds, err, outcome_class = done[source.name]
+                failed = self.health.record(source.name, len(items), seconds, err,
+                                            failure_class=outcome_class)
                 gathered.extend(items)
                 summary.append(f"{source.name}={len(items)}{'!' if failed else ''}/{seconds:.1f}s")
             else:

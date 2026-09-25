@@ -25,6 +25,9 @@ from core.logger import logger
 
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 _TIMEOUT_S = 12
+# gpt-oss models spend part of this budget on hidden reasoning; at 400 tokens 5 of 8 live calls failed with
+# HTTP 400 'max completion tokens reached before generating a valid document', at 1500 all 6 succeeded.
+_MAX_TOKENS = 1500
 _ALLOWED_BIAS = {"bullish", "bearish", "mixed", "unclear"}
 
 _SYSTEM_PROMPT = (
@@ -97,7 +100,7 @@ def research_event(
                 ],
                 "response_format": {"type": "json_object"},
                 "temperature": 0.0,
-                "max_tokens": 400,
+                "max_tokens": _MAX_TOKENS,
             },
             timeout=_TIMEOUT_S,
         )

@@ -18,6 +18,34 @@ from bs4 import BeautifulSoup
 from core.logger import logger
 
 
+# ---------------------------------------------------------------------------
+# Fetch outcome classification constants
+# ---------------------------------------------------------------------------
+# Returned by fetch_classified() and stored in the health registry's
+# last_status field so callers can distinguish *why* a source returned empty.
+#
+# Circuit-breaker treatment:
+#   ok, ok_empty  → NOT a failure
+#   rate_limited, auth_failed, parse_error, timeout, error → failure
+
+OUTCOME_OK = "ok"                   # items delivered
+OUTCOME_OK_EMPTY = "ok_empty"       # valid response, legitimately no results
+OUTCOME_RATE_LIMITED = "rate_limited"   # HTTP 429
+OUTCOME_AUTH_FAILED = "auth_failed"     # HTTP 401/403 or missing/invalid key
+OUTCOME_PARSE_ERROR = "parse_error"     # unparseable payload (bad JSON/XML)
+OUTCOME_TIMEOUT = "timeout"             # network or HTTP read timeout
+OUTCOME_ERROR = "error"                 # other / unclassified
+
+
+def _classify_http_status(status_code: int) -> str:
+    """Map an HTTP status code to a fetch outcome classification."""
+    if status_code == 429:
+        return OUTCOME_RATE_LIMITED
+    if status_code in (401, 403):
+        return OUTCOME_AUTH_FAILED
+    return OUTCOME_ERROR
+
+
 TRACKING_PARAMS = {
     "cmpid",
     "fbclid",
@@ -125,6 +153,77 @@ def request_with_retries(session: requests.Session, method: str, url: str, **kwa
             continue
 
 
+def request_with_outcome(
+    session: requests.Session, method: str, url: str, **kwargs
+) -> tuple[requests.Response | None, str]:
+    """Like request_with_retries but also returns a failure-class string.
+
+    Returns ``(response, outcome)`` where ``outcome`` is one of the ``OUTCOME_*``
+    constants.  When ``response`` is not ``None`` the caller should treat the
+    outcome as ``OUTCOME_OK`` (whether it is ok vs ok_empty depends on the parsed
+    payload).  On all final-failure paths the response is ``None``.
+
+    Key differences from request_with_retries:
+    - HTTP 401/403 → OUTCOME_AUTH_FAILED (not retried)
+    - HTTP 429     → OUTCOME_RATE_LIMITED (retried with backoff, then gives up)
+    - Timeout      → OUTCOME_TIMEOUT
+    - Other errors → OUTCOME_ERROR
+    """
+    try:
+        max_retries = int(os.getenv("NEWS_FETCH_MAX_RETRIES", "3"))
+    except Exception:
+        max_retries = 3
+    try:
+        backoff_factor = float(os.getenv("NEWS_FETCH_BACKOFF_FACTOR", "0.5"))
+    except Exception:
+        backoff_factor = 0.5
+
+    last_outcome: str = OUTCOME_ERROR
+    attempt = 0
+    while attempt < max_retries:
+        attempt += 1
+        try:
+            resp = session.request(method, url, **kwargs)
+            if resp.status_code == 429:
+                last_outcome = OUTCOME_RATE_LIMITED
+                if attempt >= max_retries:
+                    logger.warning("HTTP %s rate-limited (429) after %s attempts; giving up", method.upper(), attempt)
+                    return None, OUTCOME_RATE_LIMITED
+                sleep_time = min(2 ** attempt * 0.5 + random.uniform(0, 0.5), 30)
+                logger.warning("HTTP 429 (attempt %s/%s); backing off %.1fs", attempt, max_retries, sleep_time)
+                time.sleep(sleep_time)
+                continue
+            if resp.status_code in (401, 403):
+                # Auth errors are deterministic — do not retry
+                logger.warning("HTTP %s auth failed (%s)", method.upper(), resp.status_code)
+                return None, OUTCOME_AUTH_FAILED
+            resp.raise_for_status()
+            return resp, OUTCOME_OK
+        except requests.exceptions.Timeout:
+            last_outcome = OUTCOME_TIMEOUT
+            if attempt >= max_retries:
+                logger.warning("HTTP %s timed out after %s attempts", method.upper(), attempt)
+                return None, OUTCOME_TIMEOUT
+            time.sleep(backoff_factor * (2 ** (attempt - 1)))
+            continue
+        except requests.exceptions.HTTPError as exc:
+            code = exc.response.status_code if exc.response is not None else 0
+            last_outcome = _classify_http_status(code) if code else OUTCOME_ERROR
+            if attempt >= max_retries:
+                logger.warning("HTTP %s failed after %s attempts (status %s)", method.upper(), attempt, code)
+                return None, last_outcome
+            time.sleep(backoff_factor * (2 ** (attempt - 1)) + random.uniform(0, backoff_factor))
+            continue
+        except Exception as exc:
+            last_outcome = OUTCOME_ERROR
+            if attempt >= max_retries:
+                logger.warning("HTTP %s failed after %s attempts: %s", method.upper(), attempt, type(exc).__name__)
+                return None, OUTCOME_ERROR
+            time.sleep(backoff_factor * (2 ** (attempt - 1)) + random.uniform(0, backoff_factor))
+            continue
+    return None, last_outcome
+
+
 def normalize_query(query: str) -> str:
     return re.sub(r"\s+", " ", query or "").strip()
 
@@ -139,6 +238,30 @@ class BaseNewsSource:
     def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
         raise NotImplementedError
 
+    def fetch_classified(self, query: str, limit: int = 50) -> tuple[list[NewsItem], str]:
+        """Fetch news items and return a failure-class string alongside the results.
+
+        Returns ``(items, outcome)`` where ``outcome`` is one of the ``OUTCOME_*``
+        constants defined in this module:
+          - ``ok``          — items delivered
+          - ``ok_empty``    — valid response, no results (not a circuit-breaker failure)
+          - ``rate_limited``— HTTP 429
+          - ``auth_failed`` — HTTP 401/403 or missing/invalid key
+          - ``parse_error`` — unparseable payload (JSON/XML schema change)
+          - ``timeout``     — network timeout
+          - ``error``       — other / unclassified
+
+        Subclasses that do network I/O override this method to provide accurate
+        classification.  This default implementation wraps ``fetch()`` so that
+        third-party adapters that only override ``fetch()`` remain compatible.
+        Exceptions from ``fetch()`` are caught and classified as ``error``.
+        """
+        try:
+            items = self.fetch(query, limit)
+            return list(items or []), (OUTCOME_OK if items else OUTCOME_OK_EMPTY)
+        except Exception:
+            return [], OUTCOME_ERROR
+
 
 class NewsApiSource(BaseNewsSource):
     name = "newsapi"
@@ -148,9 +271,9 @@ class NewsApiSource(BaseNewsSource):
         self.api_key = api_key or ""
         self.session = session or requests.Session()
 
-    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+    def fetch_classified(self, query: str, limit: int = 50) -> tuple[list[NewsItem], str]:
         if not self.api_key:
-            return []
+            return [], OUTCOME_AUTH_FAILED
 
         params = {
             "q": normalize_query(query),
@@ -159,21 +282,30 @@ class NewsApiSource(BaseNewsSource):
             "sortBy": "publishedAt",
         }
         # Prefer the newer X-Api-Key header, but fall back to Authorization for
-        # older setups. Use the request_with_retries helper for both attempts.
+        # older setups. Use request_with_outcome for both attempts.
         headers = {"X-Api-Key": self.api_key}
         try:
-            response = request_with_retries(self.session, "get", "https://newsapi.org/v2/everything", params=params, headers=headers, timeout=20)
-            # If the helper returned None (final failure), attempt one fallback
-            # using the older Authorization header.
+            response, outcome = request_with_outcome(
+                self.session, "get", "https://newsapi.org/v2/everything",
+                params=params, headers=headers, timeout=20,
+            )
             if response is None:
-                logger.info("NewsAPI fetch: initial X-Api-Key attempt failed, trying Authorization fallback")
-                response = request_with_retries(self.session, "get", "https://newsapi.org/v2/everything", params=params, headers={"Authorization": self.api_key}, timeout=20)
+                # Auth failure is deterministic — do not retry with other header
+                if outcome == OUTCOME_AUTH_FAILED:
+                    return [], OUTCOME_AUTH_FAILED
+                logger.info("NewsAPI fetch: X-Api-Key attempt failed (%s), trying Authorization fallback", outcome)
+                response, outcome = request_with_outcome(
+                    self.session, "get", "https://newsapi.org/v2/everything",
+                    params=params, headers={"Authorization": self.api_key}, timeout=20,
+                )
                 if response is None:
-                    return []
-            payload = response.json()
-        except Exception as exc:
-            logger.warning("NewsAPI fetch failed for %s: %s", query, exc)
-            return []
+                    return [], outcome
+            try:
+                payload = response.json()
+            except ValueError:
+                return [], OUTCOME_PARSE_ERROR
+        except Exception:
+            return [], OUTCOME_ERROR
 
         articles = payload.get("articles", []) or []
         items: list[NewsItem] = []
@@ -191,7 +323,10 @@ class NewsApiSource(BaseNewsSource):
                     source_reliability=self.reliability,
                 )
             )
-        return items
+        return items, (OUTCOME_OK if items else OUTCOME_OK_EMPTY)
+
+    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+        return self.fetch_classified(query, limit)[0]
 
 
 class GDELTSource(BaseNewsSource):
@@ -204,7 +339,7 @@ class GDELTSource(BaseNewsSource):
     def __init__(self, session: requests.Session | None = None):
         self.session = session or requests.Session()
 
-    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+    def fetch_classified(self, query: str, limit: int = 50) -> tuple[list[NewsItem], str]:
         import time as _time
         elapsed = _time.monotonic() - GDELTSource._last_call
         if elapsed < self._MIN_INTERVAL:
@@ -220,20 +355,33 @@ class GDELTSource(BaseNewsSource):
             "maxrecords": min(limit, 25),
         }
         try:
-            response = request_with_retries(self.session, "get", "https://api.gdeltproject.org/api/v2/doc/doc", params=params, timeout=20)
+            response, outcome = request_with_outcome(
+                self.session, "get", "https://api.gdeltproject.org/api/v2/doc/doc",
+                params=params, timeout=20,
+            )
             if response is None:
-                return []
-            payload = response.json()
-        except Exception as exc:
-            logger.warning("GDELT fetch failed for %s: %s", query, exc)
-            return []
+                return [], outcome
+            try:
+                payload = response.json()
+            except ValueError:
+                return [], OUTCOME_PARSE_ERROR
+        except Exception:
+            return [], OUTCOME_ERROR
 
-        article_candidates = payload.get("articles") or payload.get("result", {}).get("articles") or payload.get("records") or []
+        article_candidates = (
+            payload.get("articles")
+            or payload.get("result", {}).get("articles")
+            or payload.get("records")
+            or []
+        )
         items: list[NewsItem] = []
         for article in article_candidates[:limit]:
             items.append(
                 NewsItem(
-                    datetime_utc=coerce_datetime(article.get("seendate") or article.get("datetime") or article.get("date") or article.get("pubDate")),
+                    datetime_utc=coerce_datetime(
+                        article.get("seendate") or article.get("datetime")
+                        or article.get("date") or article.get("pubDate")
+                    ),
                     source=article.get("sourceCountry") or article.get("domain") or self.name,
                     headline=article.get("title") or article.get("headline") or "",
                     url=article.get("url") or article.get("link") or "",
@@ -244,7 +392,10 @@ class GDELTSource(BaseNewsSource):
                     source_reliability=self.reliability,
                 )
             )
-        return items
+        return items, (OUTCOME_OK if items else OUTCOME_OK_EMPTY)
+
+    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+        return self.fetch_classified(query, limit)[0]
 
 
 class EventRegistrySource(BaseNewsSource):
@@ -255,11 +406,11 @@ class EventRegistrySource(BaseNewsSource):
         self.api_key = api_key or ""
         self.session = session or requests.Session()
 
-    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+    def fetch_classified(self, query: str, limit: int = 50) -> tuple[list[NewsItem], str]:
         if not self.api_key:
-            return []
+            return [], OUTCOME_AUTH_FAILED
 
-        payload = {
+        body = {
             "apiKey": self.api_key,
             "keyword": normalize_query(query),
             "articlesSortBy": "date",
@@ -268,26 +419,42 @@ class EventRegistrySource(BaseNewsSource):
             "lang": ["eng"],
         }
         try:
-            response = request_with_retries(self.session, "post", "https://eventregistry.org/api/v1/article/getArticles", json=payload, timeout=25)
+            response, outcome = request_with_outcome(
+                self.session, "post",
+                "https://eventregistry.org/api/v1/article/getArticles",
+                json=body, timeout=25,
+            )
             if response is None:
-                return []
-            payload = response.json()
-        except Exception as exc:
-            logger.warning("EventRegistry fetch failed for %s: %s", query, exc)
-            return []
+                return [], outcome
+            try:
+                payload = response.json()
+            except ValueError:
+                return [], OUTCOME_PARSE_ERROR
+        except Exception:
+            return [], OUTCOME_ERROR
 
-        article_candidates = (
-            payload.get("articles", {}).get("results")
-            or payload.get("articles", {}).get("results", {}).get("results")
-            or payload.get("results")
-            or []
-        )
+        # Defensive extraction — EventRegistry nests results under articles.results;
+        # some responses have an additional level of nesting.  Avoid calling .get()
+        # on a non-dict value when the key exists but holds an empty list.
+        _articles = payload.get("articles") or {}
+        if isinstance(_articles, dict):
+            article_candidates = _articles.get("results") or []
+            if not article_candidates:
+                _nested = _articles.get("results")
+                if isinstance(_nested, dict):
+                    article_candidates = _nested.get("results") or []
+        else:
+            article_candidates = []
+        if not article_candidates:
+            article_candidates = payload.get("results") or []
         items: list[NewsItem] = []
         for article in article_candidates[:limit]:
             source = article.get("source") or {}
             items.append(
                 NewsItem(
-                    datetime_utc=coerce_datetime(article.get("dateTimePub") or article.get("date") or article.get("publishedAt")),
+                    datetime_utc=coerce_datetime(
+                        article.get("dateTimePub") or article.get("date") or article.get("publishedAt")
+                    ),
                     source=source.get("title") or source.get("name") or self.name,
                     headline=article.get("title") or article.get("headline") or "",
                     url=article.get("url") or "",
@@ -298,7 +465,10 @@ class EventRegistrySource(BaseNewsSource):
                     source_reliability=self.reliability,
                 )
             )
-        return items
+        return items, (OUTCOME_OK if items else OUTCOME_OK_EMPTY)
+
+    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+        return self.fetch_classified(query, limit)[0]
 
 
 class BraveSearchSource(BaseNewsSource):
@@ -320,7 +490,12 @@ class BraveSearchSource(BaseNewsSource):
             parts.extend([snippet for snippet in extra_snippets if isinstance(snippet, str)])
         return " ".join(part.strip() for part in parts if part).strip()
 
-    def _fetch_endpoint(self, endpoint: str, query: str, limit: int) -> list[dict[str, Any]]:
+    def _fetch_endpoint_classified(
+        self, endpoint: str, query: str, limit: int
+    ) -> tuple[list[dict[str, Any]], str]:
+        """Fetch one Brave endpoint and return (raw_results, outcome_class)."""
+        if not self.api_key:
+            return [], OUTCOME_AUTH_FAILED
         params = {
             "q": normalize_query(query),
             "count": min(limit, 20),
@@ -332,40 +507,67 @@ class BraveSearchSource(BaseNewsSource):
             "X-Subscription-Token": self.api_key,
             "Accept": "application/json",
         }
-        response = request_with_retries(self.session, "get", endpoint, params=params, headers=headers, timeout=20)
+        response, outcome = request_with_outcome(
+            self.session, "get", endpoint, params=params, headers=headers, timeout=20,
+        )
         if response is None:
-            return []
-
-        payload = response.json()
-        results = payload.get("results") or payload.get("web", {}).get("results") or payload.get("news", {}).get("results") or []
+            return [], outcome
+        try:
+            payload = response.json()
+        except ValueError:
+            return [], OUTCOME_PARSE_ERROR
+        results = (
+            payload.get("results")
+            or payload.get("web", {}).get("results")
+            or payload.get("news", {}).get("results")
+            or []
+        )
         if isinstance(results, list):
-            return [result for result in results if isinstance(result, dict)]
-        return []
+            filtered = [r for r in results if isinstance(r, dict)]
+            return filtered, (OUTCOME_OK if filtered else OUTCOME_OK_EMPTY)
+        return [], OUTCOME_OK_EMPTY
 
-    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+    def _fetch_endpoint(self, endpoint: str, query: str, limit: int) -> list[dict[str, Any]]:
+        """Backward-compatible wrapper used by existing tests."""
+        return self._fetch_endpoint_classified(endpoint, query, limit)[0]
+
+    def fetch_classified(self, query: str, limit: int = 50) -> tuple[list[NewsItem], str]:
         if not self.api_key:
-            return []
+            return [], OUTCOME_AUTH_FAILED
 
         endpoints = [
             ("https://api.search.brave.com/res/v1/news/search", "news"),
             ("https://api.search.brave.com/res/v1/web/search", "web"),
         ]
         results: list[dict[str, Any]] = []
+        last_outcome = OUTCOME_OK_EMPTY
         endpoint_name = "news"
         for endpoint, label in endpoints:
             try:
-                results = self._fetch_endpoint(endpoint, query, limit)
-            except Exception as exc:
-                logger.warning("Brave Search fetch failed for %s via %s: %s", query, endpoint, exc)
-                results = []
-            if results:
+                raw, ep_outcome = self._fetch_endpoint_classified(endpoint, query, limit)
+            except Exception:
+                raw, ep_outcome = [], OUTCOME_ERROR
+            last_outcome = ep_outcome
+            if raw:
+                results = raw
                 endpoint_name = label
                 break
+            # Auth failures are deterministic — don't try the next endpoint
+            if ep_outcome == OUTCOME_AUTH_FAILED:
+                return [], OUTCOME_AUTH_FAILED
+
+        if not results:
+            return [], last_outcome
 
         items: list[NewsItem] = []
         for result in results[:limit]:
             profile = result.get("profile") or {}
-            source_name = result.get("source") or result.get("publisher") or (profile.get("name") if isinstance(profile, dict) else None) or self.name
+            source_name = (
+                result.get("source")
+                or result.get("publisher")
+                or (profile.get("name") if isinstance(profile, dict) else None)
+                or self.name
+            )
             published_at = (
                 result.get("published")
                 or result.get("date")
@@ -389,7 +591,10 @@ class BraveSearchSource(BaseNewsSource):
                 )
             )
 
-        return items
+        return items, (OUTCOME_OK if items else OUTCOME_OK_EMPTY)
+
+    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+        return self.fetch_classified(query, limit)[0]
 
 
 class RssSource(BaseNewsSource):
@@ -412,24 +617,31 @@ class RssSource(BaseNewsSource):
     # aggressive rate-limiting. Yahoo Finance RSS enforces strict per-IP limits.
     _YAHOO_BASE_DELAY = 2.0
 
-    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+    def fetch_classified(self, query: str, limit: int = 50) -> tuple[list[NewsItem], str]:
+        if not self.feed_urls:
+            return [], OUTCOME_OK_EMPTY
         items: list[NewsItem] = []
+        last_outcome = OUTCOME_OK_EMPTY
         for feed_url in self.feed_urls:
             # Apply a mandatory base delay before hitting Yahoo RSS endpoints
             if "yahoo.com" in feed_url.lower():
                 time.sleep(self._YAHOO_BASE_DELAY)
             try:
-                response = request_with_retries(self.session, "get", feed_url, timeout=20)
+                response, outcome = request_with_outcome(self.session, "get", feed_url, timeout=20)
                 if response is None:
-                    raise RuntimeError("max retries exceeded")
-            except Exception as exc:
-                logger.warning("RSS fetch failed for %s: %s", feed_url, exc)
+                    last_outcome = outcome
+                    logger.warning("RSS fetch failed for %s (%s)", feed_url, outcome)
+                    continue
+            except Exception:
+                last_outcome = OUTCOME_ERROR
+                logger.warning("RSS fetch error for %s", feed_url)
                 continue
 
             try:
                 root = ET.fromstring(response.text)
-            except ET.ParseError as exc:
-                logger.warning("RSS parse failed for %s: %s", feed_url, exc)
+            except ET.ParseError:
+                last_outcome = OUTCOME_PARSE_ERROR
+                logger.warning("RSS parse failed for %s", feed_url)
                 continue
 
             channel = root.find("channel")
@@ -460,8 +672,14 @@ class RssSource(BaseNewsSource):
                     )
                 )
                 if len(items) >= limit:
-                    return items
-        return items
+                    return items, OUTCOME_OK
+
+        if items:
+            return items, OUTCOME_OK
+        return [], last_outcome
+
+    def fetch(self, query: str, limit: int = 50) -> list[NewsItem]:
+        return self.fetch_classified(query, limit)[0]
 
 
 def fuzzy_title_match(left: str, right: str) -> float:
@@ -487,24 +705,23 @@ class DuckDuckGoSource(BaseNewsSource):
         self.session = session or requests.Session()
         self.session.headers.update({"User-Agent": self._USER_AGENT})
 
-    def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
+    def fetch_classified(self, query: str, limit: int = 25) -> tuple[list[NewsItem], str]:
         q = normalize_query(query)
-        items: list[NewsItem] = []
         try:
-            resp = request_with_retries(
+            resp, outcome = request_with_outcome(
                 self.session, "post",
                 "https://html.duckduckgo.com/html/",
                 data={"q": q},
                 timeout=15,
             )
             if resp is None:
-                return []
+                return [], outcome
             html = resp.text
-        except Exception as exc:
-            logger.warning("DuckDuckGo fetch failed for %s: %s", query, exc)
-            return []
+        except Exception:
+            return [], OUTCOME_ERROR
 
         soup = BeautifulSoup(html, "html.parser")
+        items: list[NewsItem] = []
 
         # Primary: <a class="result__a"> inside <div class="result">
         result_links = soup.select("a.result__a")
@@ -556,7 +773,10 @@ class DuckDuckGoSource(BaseNewsSource):
 
         if not items:
             logger.warning("DuckDuckGo returned 0 results for '%s' (HTML structure may have changed)", query)
-        return items
+        return items, (OUTCOME_OK if items else OUTCOME_OK_EMPTY)
+
+    def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
+        return self.fetch_classified(query, limit)[0]
 
 
 class OpenBBNewsSource(BaseNewsSource):
@@ -623,13 +843,11 @@ class OpenBBNewsSource(BaseNewsSource):
     def __init__(self, provider: str = "yfinance"):
         self.provider = provider
 
-    def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
+    def fetch_classified(self, query: str, limit: int = 25) -> tuple[list[NewsItem], str]:
         # query is typically "AAPL" or "Apple AAPL earnings"
         # Extract the ticker symbol (first word, strip non-alphanumeric)
         raw_ticker = query.split()[0].upper()
         # Map crypto exchange pairs (e.g. BTCUSDT) to yfinance news symbols (BTC-USD).
-        # yfinance's news endpoint is equity-oriented and does not recognise
-        # Binance/exchange-format crypto pairs, causing 0 results for crypto tickers.
         ticker = self.map_to_news_ticker(raw_ticker)
         if ticker != raw_ticker:
             logger.debug("OpenBB news: mapped ticker %s -> %s for yfinance news provider", raw_ticker, ticker)
@@ -638,8 +856,21 @@ class OpenBBNewsSource(BaseNewsSource):
             result = obb.news.company(ticker, limit=limit, provider=self.provider)
             raw = result.results if hasattr(result, "results") else []
         except Exception as e:
-            logger.warning("OpenBB news fetch failed for %s: %s", ticker, e)
-            return []
+            # OpenBB hides the underlying HTTP status; classify best-effort from the
+            # exception message. This is intentionally conservative — we only promote
+            # to rate_limited/auth_failed when the exception text is unambiguous.
+            msg = str(e).lower()
+            if "401" in msg or "403" in msg or "unauthorized" in msg or "forbidden" in msg or "invalid" in msg and "key" in msg:
+                logger.warning("OpenBB news: auth failure for %s", ticker)
+                return [], OUTCOME_AUTH_FAILED
+            if "429" in msg or "rate limit" in msg or "too many" in msg:
+                logger.warning("OpenBB news: rate limited for %s", ticker)
+                return [], OUTCOME_RATE_LIMITED
+            if "timeout" in msg:
+                logger.warning("OpenBB news: timeout for %s", ticker)
+                return [], OUTCOME_TIMEOUT
+            logger.warning("OpenBB news fetch failed for %s: %s", ticker, type(e).__name__)
+            return [], OUTCOME_ERROR
 
         items: list[NewsItem] = []
         for article in raw:
@@ -679,7 +910,10 @@ class OpenBBNewsSource(BaseNewsSource):
             self.provider,
             f" [mapped from {raw_ticker}]" if ticker != raw_ticker else "",
         )
-        return items
+        return items, (OUTCOME_OK if items else OUTCOME_OK_EMPTY)
+
+    def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
+        return self.fetch_classified(query, limit)[0]
 
 
 class McpDuckDuckGoSource(BaseNewsSource):
@@ -701,3 +935,7 @@ class McpDuckDuckGoSource(BaseNewsSource):
             limit,
         )
         return []
+
+    def fetch_classified(self, query: str, limit: int = 50) -> tuple[list[NewsItem], str]:
+        self.fetch(query, limit)  # trigger the informational log
+        return [], OUTCOME_OK_EMPTY
