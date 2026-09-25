@@ -248,7 +248,7 @@
       <h1>AlgoTrader <span>Notebook</span></h1>
       <div class="subtitle">Sprint status + quant lessons — updated as we go, not a one-time snapshot</div>
     </div>
-    <div class="updated" id="updated-at">Last updated: 2026-09-22 — optional AI research (Groq) added to Market Context</div>
+    <div class="updated" id="updated-at">Last updated: 2026-09-23 — AI research live smoke: retired Groq default model replaced</div>
   </header>
 
   <nav class="tabs">
@@ -407,6 +407,12 @@
 
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
+    <div class="assess-card">
+      <h3>2026-09-23 — AI research live smoke (Groq key now set)</h3>
+      <p>First real call failed: HTTP 404 because Groq no longer serves the default model <code>llama-3.3-70b-versatile</code>, so the keyed feature still showed nothing. The key itself is valid. One verification call with <code>openai/gpt-oss-120b</code> worked (HTTP 200, 1.9 s), and the AI note rendered next to the unchanged deterministic reading. PR changes the default model only.</p>
+      <p>Caveat from the single sample: the note called a report of a past price surge "bullish" (0.80), while the deterministic reading said "unknown". Accuracy is still unevaluated. Not merged or deployed yet.</p>
+      <p><a href="artifacts/ai-research-smoke-2026-09-23.md">Evidence and limitations</a></p>
+    </div>
     <div class="assess-card">
       <h3>2026-09-22 — optional AI research on top of Market Context</h3>
       <p>Owner asked to add AI research to the analysis, using a free model if the configured sentiment pipeline (FinBERT / DeepSeek / rule-based fallback in <code>core/sentiment.py</code>) was good enough to build on -- it was, so <code>core/ai_research.py</code> extends it rather than replacing it: a free-tier Groq call, fetched on demand per selected event (a button, not automatic), reasoning only from the same supplied headline/summary text plus the existing sentiment label. Any missing key, network error, timeout or malformed response returns nothing and the deterministic reading is shown unaffected.</p>

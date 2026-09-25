@@ -102,7 +102,7 @@ scripts/
 - News fetch budget: `NEWS_FETCH_DEADLINE_SECONDS` (default 6); sources still running when it expires are abandoned and
   skipped for a cool-down after repeated failures
 - AI research (Dash "Market Context" tab, `core/ai_research.py`): opt-in, free-tier. Set `GROQ_API_KEY` (get one at
-  console.groq.com/keys); optional `GROQ_MODEL` (default `llama-3.3-70b-versatile`), `AI_RESEARCH_ENABLED=false` to
+  console.groq.com/keys); optional `GROQ_MODEL` (default `openai/gpt-oss-120b`; the old default `llama-3.3-70b-versatile` now 404s), `AI_RESEARCH_ENABLED=false` to
   disable outright. Fetched on demand per selected event (button, not automatic), reasons only from the supplied
   headline/summary text plus the existing sentiment-pipeline label, and any failure/missing key returns `None` --
   the deterministic rule-based interpretation in `core/news_interpretation.py` is unaffected either way. Output is a
