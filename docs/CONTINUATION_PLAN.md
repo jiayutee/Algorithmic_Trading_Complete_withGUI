@@ -52,6 +52,11 @@ Ran `training_ground/experiments_9_3_collected.py` with the main checkout's Kals
 - Phase 9.2 stays on HOLD per pre-registered rules.
 - Evidence: `training_ground/results/phase_9_3_collected.json`; archive: `phase_9_3_collected_20260922.json`.
 
+## 2026-09-23 — AI research live activation smoke
+One real Groq call through the Market Context path failed with HTTP 404: Groq has retired the default model `llama-3.3-70b-versatile`, so the keyed feature still showed no AI block. The key is valid. One verification call on `openai/gpt-oss-120b` succeeded (1.9 s), and the note rendered beside the unchanged deterministic reading. The orchestrator PR changes only the default model. Single-sample caveat: the note read a past price surge as "bullish" at 0.80 confidence. Accuracy, calibration and rate limits are still untested. Not merged or deployed. See [smoke evidence](artifacts/ai-research-smoke-2026-09-23.md).
+
+Follow-up (review of this PR, 2026-09-25): the replacement `openai/gpt-oss-120b` is a reasoning model whose hidden reasoning shares the completion budget, so the original `max_tokens=400` failed intermittently with HTTP 400 (`max completion tokens reached before generating a valid document`): 3 of 8 live calls succeeded. At `max_tokens=1500` 6 of 6 succeeded (a second setting with `reasoning_effort=low` also 6 of 6). The limit is now 1500 with a regression test. Small samples; the note's accuracy is still unevaluated.
+
 ## 2026-09-25 — scenario fans on the Market Context chart, and the test of the event readings
 Owner asked to extrapolate price action for bullish, bearish and unclear/mixed contexts, then said a straight line is too simple. The chart now draws scenario **fans**: 500 paths per scenario, block-bootstrapped from the loaded candles' own daily log returns (mean removed, 5-day blocks so volatility clustering survives), with a constant per-bar tilt of +-1 sigma/sqrt(horizon) for bullish/bearish and none for range. Each scenario shows the middle-50% band, the median (dotted) and one jagged example path; horizon 7/14/30 bars; deterministic for the same candles. These are simulations, not forecasts. The legend counts reported events per reading, but the counts do not tilt the fans.
 

@@ -90,3 +90,12 @@ def test_malformed_json_returns_none(monkeypatch):
         result = research_event(headline="Something happened", summary="", symbol="AAPL",
                                  event_category="unclassified", sentiment_label="unknown")
     assert result is None
+
+
+def test_token_limit_leaves_room_for_a_reasoning_models_hidden_thinking(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    payload = {"conditional_bias": "unclear", "confidence": 0.3, "reasoning": "Too vague to call a direction."}
+    with patch("core.ai_research.requests.post", return_value=_mock_groq_response(payload)) as mock_post:
+        research_event(headline="Something happened", summary="", symbol="AAPL", event_category="unclassified", sentiment_label="unknown")
+    assert mock_post.call_args.kwargs["json"]["max_tokens"] >= 1000
+    assert mock_post.call_args.kwargs["json"]["model"] == "openai/gpt-oss-120b"
