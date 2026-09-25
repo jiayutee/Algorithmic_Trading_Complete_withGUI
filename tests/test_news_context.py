@@ -152,24 +152,37 @@ def _candles(n=60, vol=0.02, seed=1):
     return pd.DataFrame({'open': close, 'high': close * 1.01, 'low': close * 0.99, 'close': close}, index=idx)
 
 
-def test_scenario_paths_start_at_last_close_and_end_one_sigma_apart():
+def test_scenario_fan_starts_at_last_close_tilts_the_median_and_is_not_a_straight_line():
     import math
-    from core.news_context import scenario_paths
+    from core.news_context import scenario_fan
     c = _candles()
-    p = scenario_paths(c, 14)
-    assert p['bullish'][0] == p['bearish'][0] == p['range_mid'][0] == p['last'] == float(c['close'].iloc[-1])
-    assert len(p['times']) == 15 and p['times'][0] == c.index[-1] and p['times'][-1] == c.index[-1] + pd.Timedelta(days=14)
-    move = p['sigma'] * math.sqrt(14)
-    assert math.isclose(p['bullish'][-1] / p['last'], math.exp(move)) and math.isclose(p['bearish'][-1] / p['last'], math.exp(-move))
-    assert all(hi >= lo for hi, lo in zip(p['range_high'], p['range_low']))
-    assert p['range_high'][-1] > p['bullish'][-1] - 1e-9        # the cone at the horizon is the same 1-sigma boundary
+    f = scenario_fan(c, 14)
+    last = float(c['close'].iloc[-1])
+    assert f['last'] == last and len(f['times']) == 15 and f['times'][-1] == c.index[-1] + pd.Timedelta(days=14)
+    sc = f['scenarios']
+    for name in ('bullish', 'bearish', 'range'):
+        assert sc[name]['median'][0] == sc[name]['sample'][0] == last
+        assert all(a <= b <= c_ for a, b, c_ in zip(sc[name]['q25'], sc[name]['median'], sc[name]['q75']))
+        assert all(lo <= a and b <= hi for lo, a, b, hi in zip(sc[name]['q10'], sc[name]['q25'], sc[name]['q75'], sc[name]['q90']))
+    assert sc['bullish']['median'][-1] > sc['range']['median'][-1] > sc['bearish']['median'][-1]
+    assert sc['bullish']['median'][-1] / last - 1 > 0.5 * (math.exp(f['sigma'] * math.sqrt(14)) - 1)
+    sample = sc['bullish']['sample']
+    steps = [b - a for a, b in zip(sample, sample[1:])]
+    assert len({round(x, 6) for x in steps}) > 5                       # jagged: the increments are not all equal
+
+
+def test_scenario_fan_is_deterministic_and_the_shocks_are_shared():
+    from core.news_context import scenario_fan
+    c = _candles()
+    a, b = scenario_fan(c, 14), scenario_fan(c, 14)
+    assert a['scenarios']['bullish']['median'] == b['scenarios']['bullish']['median']
+    assert scenario_fan(c, 14, seed=5)['scenarios']['range']['sample'] != a['scenarios']['range']['sample']
 
 
 def test_scenarios_need_history_and_a_moving_price():
-    from core.news_context import scenario_paths
-    assert scenario_paths(_candles(20), 14) is None
-    flat = _candles(60, vol=0.0)
-    assert scenario_paths(flat, 14) is None
+    from core.news_context import scenario_fan
+    assert scenario_fan(_candles(20), 14) is None
+    assert scenario_fan(_candles(60, vol=0.0), 14) is None
 
 
 def test_event_mix_counts_cases_without_turning_them_into_probabilities():
@@ -188,5 +201,6 @@ def test_context_figure_draws_three_labelled_scenarios_only_when_asked():
     assert any(n.startswith('Bullish scenario (3 bullish') for n in names)
     assert any(n.startswith('Bearish scenario (1 bearish') for n in names)
     assert any(n.startswith('Unclear / range scenario (2 unclear/mixed') for n in names)
+    assert len(on.data) == 1 + 3 * 3                                    # candles + (band, example path, median) x 3 scenarios
     off = context_figure(serialized, [], None, False)[0]
     assert not any('scenario' in (t.name or '') for t in off.data)
