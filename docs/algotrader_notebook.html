@@ -248,7 +248,7 @@
       <h1>AlgoTrader <span>Notebook</span></h1>
       <div class="subtitle">Sprint status + quant lessons — updated as we go, not a one-time snapshot</div>
     </div>
-    <div class="updated" id="updated-at">Last updated: 2026-09-20 — orchestrator branch/PR workflow merged (PRs #13, #14); Sprint Board reconciled</div>
+    <div class="updated" id="updated-at">Last updated: 2026-09-22 — optional AI research (Groq) added to Market Context</div>
   </header>
 
   <nav class="tabs">
@@ -408,10 +408,27 @@
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
     <div class="assess-card">
+      <h3>2026-09-22 — optional AI research on top of Market Context</h3>
+      <p>Owner asked to add AI research to the analysis, using a free model if the configured sentiment pipeline (FinBERT / DeepSeek / rule-based fallback in <code>core/sentiment.py</code>) was good enough to build on -- it was, so <code>core/ai_research.py</code> extends it rather than replacing it: a free-tier Groq call, fetched on demand per selected event (a button, not automatic), reasoning only from the same supplied headline/summary text plus the existing sentiment label. Any missing key, network error, timeout or malformed response returns nothing and the deterministic reading is shown unaffected.</p>
+      <p>Not evaluated: the AI note's own accuracy or calibration. It is presented as a hypothesis to verify, same as the deterministic path, never a forecast. <code>GROQ_API_KEY</code> is not yet set, so the feature is currently inert until the owner adds a free key from console.groq.com.</p>
+      <p><a href="artifacts/ai-research-2026-09-22.md">Evidence and limitations</a></p>
+    </div>
+    <div class="assess-card">
+      <h3>2026-09-21 — Market Context: news beside the candles</h3>
+      <p>Dash-first implementation inspired by the owner's MEXC reference: publication markers, selectable timeline, conditional bullish/bearish cases, observed price change and expandable explanations with evidence, contrary factors and watch points. Refresh is on demand, with source coverage shown.</p>
+      <p>Interpretation is explicitly rule-based and conditional, not a verified forecast. Desktop integration, macro calendar and deeper grounded-model analysis remain open.</p>
+      <p><a href="artifacts/news-context-2026-09-21.md">Evidence and limitations</a> · <a href="https://app.notion.com/p/3e2d2ab050d98108bc0ddaa22221c02d">Notion task and PR status</a></p>
+    </div>
+    <div class="assess-card">
       <h3>2026-09-20 — workflow merged, Sprint Board reconciled</h3>
       <p><strong>Merged to main:</strong> PR #13 (Claude's <code>scripts/orchestrator_git.sh</code> worktree/branch/PR helper) and PR #14 (Codex's workflow rules, launcher wiring and a fix that stops worktree recreation from discarding unpushed commits). CI was green; main is at 45465ae. The 23:20 overnight run is the first real use of the workflow, so its first PR still needs review. GitHub branch protection is not configured, so "never push to main" is a rule in the runbook, not something GitHub enforces.</p>
       <p><strong>Sprint Board:</strong> rows 6.0, 6.1, 6.2, 6.3 and 7.0 were built but still read "Not started", so the overnight routine would have redone them; they are now Done. Phase 4.3 (options order execution, changes the live-order path) and 9.2 (Kalshi probability model, needs about four weeks of resolved snapshots plus a pre-registered protocol) now carry HOLD notes and resume only on owner approval.</p>
       <p>Still no strategy with a proven edge: the trend filter cuts drawdown but shows no significant Sharpe gain. The Codex entries below are unchanged.</p>
+    </div>
+    <div class="assess-card">
+      <h3>2026-09-20 — news failures are now named (PR pending review)</h3>
+      <p>Each news source now reports <em>why</em> it returned nothing: rate limit, auth failure, unparseable reply, timeout, other error, or a genuinely empty answer (which is not counted as a failure). Implemented and tested offline on a task branch; not merged, not deployed. A repeat live probe (BTC, AAPL) got items only from DuckDuckGo and OpenBB; Brave, RSS and GDELT hit the 6 s budget, which still hides their own cause. That is a known limit, not a fix.</p>
+      <p><a href="artifacts/news-failure-classification-2026-09-20.md">Evidence and limits</a> · <a href="artifacts/news-source-smoke-2026-09-20.json">Probe JSON</a> · no sentiment or news edge is established.</p>
     </div>
     <div class="assess-card">
       <h3>2026-09-20 — consistent branch and PR workflow</h3>

@@ -11,7 +11,9 @@ pipeline for every refresh -- per-pipeline state would be forgotten immediately.
 
 What counts as a failure: an exception, a timeout, or an *empty* result that took longer than
 ``slow_empty_seconds`` (a quick empty answer just means "no news for this query"; a slow empty
-one is almost always a swallowed rate-limit/retry storm).
+one is almost always a swallowed rate-limit/retry storm).  Specific failure classes
+(``rate_limited``, ``auth_failed``, ``parse_error``) are always counted as failures regardless
+of response time.  ``ok_empty`` is never a failure.
 """
 from __future__ import annotations
 
@@ -20,6 +22,13 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Dict
+
+
+# Outcome classes that the health registry treats as failures.
+# Must stay consistent with OUTCOME_* constants in news_sources.py.
+_FAIL_CLASSES = frozenset({"rate_limited", "auth_failed", "parse_error", "timeout", "error"})
+# Outcome classes that are definitively NOT failures (circuit stays closed).
+_OK_CLASSES = frozenset({"ok", "ok_empty"})
 
 
 @dataclass
@@ -60,19 +69,66 @@ class SourceHealthRegistry:
         with self._lock:
             return max(0.0, self._state(name).open_until - self._clock())
 
-    def record(self, name: str, n_items: int, seconds: float, error: str = "") -> bool:
-        """Record one outcome; returns True if it counted as a failure."""
-        failed = bool(error) or (n_items == 0 and seconds > self.slow_empty_seconds)
+    def record(self, name: str, n_items: int, seconds: float, error: str = "",
+               failure_class: str = "") -> bool:
+        """Record one outcome; returns True if it counted as a failure.
+
+        Parameters
+        ----------
+        name:
+            Source name (must match the source's ``.name`` attribute).
+        n_items:
+            Number of items delivered (0 for empty/failed fetches).
+        seconds:
+            Wall-clock time the fetch took.
+        error:
+            Legacy free-text error string (kept for backward compatibility).
+            Prefer ``failure_class`` for new callers.
+        failure_class:
+            One of the ``OUTCOME_*`` constants from ``core.news_sources``:
+            ``ok``, ``ok_empty``     → not a failure (circuit stays closed)
+            ``rate_limited``         → failure (HTTP 429)
+            ``auth_failed``          → failure (HTTP 401/403 or missing key)
+            ``parse_error``          → failure (unparseable payload)
+            ``timeout``              → failure (network/HTTP timeout)
+            ``error``                → failure (other/unclassified)
+            When provided, takes precedence over the legacy error/slow_empty logic
+            for determining both the failure flag and ``last_status``.
+        """
+        # Determine failure from failure_class when provided, else fall back to
+        # the legacy heuristic (bool(error) or slow empty result).
+        if failure_class in _FAIL_CLASSES:
+            failed = True
+        elif failure_class in _OK_CLASSES:
+            failed = False
+        else:
+            # Legacy path: no classified outcome — use error text + slow-empty heuristic
+            failed = bool(error) or (n_items == 0 and seconds > self.slow_empty_seconds)
+
         with self._lock:
             st = self._state(name)
             st.last_checked_at = datetime.now(timezone.utc).isoformat()
             st.last_item_count = n_items
             st.last_elapsed_seconds = seconds
-            st.last_status = "error" if error else ("ok" if n_items else ("slow_empty" if failed else "empty"))
+
+            # last_status: use failure_class when provided; fall back to generic labels
+            if failure_class:
+                if failure_class == "ok" and n_items == 0:
+                    # Shouldn't happen (caller should pass ok_empty), but handle gracefully
+                    st.last_status = "ok_empty"
+                else:
+                    st.last_status = failure_class
+            else:
+                st.last_status = "error" if error else ("ok" if n_items else ("slow_empty" if failed else "empty"))
+
             if failed:
                 st.failures += 1
                 st.consecutive_failures += 1
-                st.last_reason = error or f"empty after {seconds:.1f}s"
+                # last_reason: prefer the human-readable error hint (e.g. "timed out
+                # after 6s") when explicitly provided; otherwise store the classified
+                # outcome name.  Raw exception messages with URLs or keys are excluded:
+                # the pipeline passes only type(exc).__name__, not exc.__str__().
+                st.last_reason = error or failure_class or f"empty after {seconds:.1f}s"
                 if st.consecutive_failures >= self.threshold:
                     st.cooldown = min(self.max_cooldown, st.cooldown * 2 if st.cooldown else self.base_cooldown)
                     st.open_until = self._clock() + st.cooldown
@@ -88,7 +144,8 @@ class SourceHealthRegistry:
         return failed
 
     def record_timeout(self, name: str, budget: float) -> None:
-        self.record(name, 0, budget, error=f"timed out after {budget:.0f}s")
+        self.record(name, 0, budget, error=f"timed out after {budget:.0f}s",
+                    failure_class="timeout")
         with self._lock:
             self._state(name).last_status = "timeout"
 

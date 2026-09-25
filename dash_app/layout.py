@@ -21,6 +21,7 @@ from dash import dcc, html, dash_table
 
 from core import ui_options
 from core.chart_builder import THEME, build_candlestick_figure
+from dash_app.news_context import context_panel
 from core.strategy_manager import backtrader_strategies
 
 # ---------------------------------------------------------------------------
@@ -1282,6 +1283,8 @@ def _bottom_tabs_panel() -> html.Div:
                     # Populated by the update_news_earnings_panel callback in
                     # callbacks.py when user clicks Refresh or loads a chart.
                     # ----------------------------------------------------------
+                    dcc.Tab(label="Market Context", value="market-context-tab", style=_TAB_STYLE,
+                            selected_style=_TAB_SELECTED_STYLE, children=[context_panel()]),
                     dcc.Tab(
                         label="News & Earnings",
                         value="news-earnings-tab",

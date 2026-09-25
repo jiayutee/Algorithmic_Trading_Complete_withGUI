@@ -208,14 +208,34 @@ def test_one_broken_candidate_does_not_stop_the_loop(paths):
 
 def test_default_candidates_all_load_and_include_the_ml_strategy():
     names = [c.name for c in rl.DEFAULT_CANDIDATES]
-    assert "GBM (LightGBM)" in names and len(names) == 4
+    assert "GBM (LightGBM)" in names and len(names) == 8
+    assert len(set(names)) == len(names)
     for c in rl.DEFAULT_CANDIDATES:
         assert issubclass(c.load(), bt.Strategy)
+
+
+def test_trend_candidates_wrap_their_base_strategy_and_plain_ones_do_not():
+    by_name = {c.name: c for c in rl.DEFAULT_CANDIDATES}
+    for base in ("MACD/RSI", "EMA Crossover", "Stochastic", "GBM (LightGBM)"):
+        plain = by_name[base]
+        wrapped = by_name[base.replace(" (LightGBM)", "") + " + Trend"]
+        assert not plain.trend_overlay and wrapped.trend_overlay
+        assert wrapped.strategy == plain.strategy and wrapped.params == plain.params
+        assert getattr(wrapped.load(), "_trend_overlay_wrapped", False)
+        assert not getattr(plain.load(), "_trend_overlay_wrapped", False)
+        assert issubclass(wrapped.load(), plain.load())
 
 
 def test_a_real_strategy_runs_end_to_end_and_yields_a_valid_position():
     ev = evaluate_candidate(rl.DEFAULT_CANDIDATES[1], _data(700), n_boot=50, eval_days=400)      # EMA crossover
     assert ev["trades"] >= 1 and set(ev["target_positions"].values()) <= {-1, 0, 1}
+    assert not np.isnan(ev["sharpe_diff"])
+
+
+def test_a_trend_overlaid_candidate_runs_end_to_end_and_yields_a_valid_position():
+    cand = next(c for c in rl.DEFAULT_CANDIDATES if c.name == "EMA Crossover + Trend")
+    ev = evaluate_candidate(cand, _data(700), n_boot=50, eval_days=400)
+    assert set(ev["target_positions"].values()) <= {-1, 0, 1}
     assert not np.isnan(ev["sharpe_diff"])
 
 
@@ -227,3 +247,14 @@ def test_cli_status_prints_states_and_paper_pnl(paths, capsys, monkeypatch):
     assert rl._cli(["status"]) == 0
     out = capsys.readouterr().out
     assert "Oracle" in out and "paper" in out and "days" in out
+
+
+def test_format_report_keeps_long_candidate_names_apart_from_the_status_column():
+    ev = {"strategy": {"sharpe": 0.8, "max_drawdown": -0.2}, "buy_hold": {"sharpe": 0.5}, "sharpe_diff": 0.3,
+          "ci": [-1.0, 2.0], "trades": 100}
+    rep = {"run_date": "d", "symbols": ["A"], "paper_pnl": [], "candidates": [
+        {"candidate": "EMA Crossover + Trend", "status": "candidate", "evaluation": ev, "test": {"PASS": False, "x": False}},
+        {"candidate": "MACD/RSI", "status": "candidate", "evaluation": ev, "test": {"PASS": False, "x": False}}]}
+    lines = rl.format_report(rep).splitlines()
+    assert "EMA Crossover + Trend  candidate" in lines[2]
+    assert lines[1].index("status") == lines[2].index("candidate", len("EMA Crossover + Trend")) == lines[3].index("candidate")

@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-20T21:58:19.342101+00:00",
+  "scope": "raw source fetch only; excludes sentiment, filtering and persistence",
+  "fetch_deadline_seconds": 6.0,
+  "elapsed_seconds": 12.011,
+  "probes": [
+    {
+      "symbol": "BTCUSDT",
+      "text_query": "Bitcoin",
+      "status": "degraded",
+      "raw_item_count": 10,
+      "elapsed_seconds": 6.005,
+      "sources": [
+        {
+          "name": "brave",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "text",
+          "status": "timeout",
+          "last_result": "timeout",
+          "item_count": 0,
+          "elapsed_seconds": 6.0,
+          "last_checked_at": "2026-09-20T21:58:13.336798+00:00",
+          "last_success_at": null,
+          "retry_in_seconds": 0.0,
+          "failures": 1
+        },
+        {
+          "name": "rss",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "text",
+          "status": "timeout",
+          "last_result": "timeout",
+          "item_count": 0,
+          "elapsed_seconds": 6.0,
+          "last_checked_at": "2026-09-20T21:58:13.336810+00:00",
+          "last_success_at": null,
+          "retry_in_seconds": 0.0,
+          "failures": 1
+        },
+        {
+          "name": "duckduckgo",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "text",
+          "status": "ok",
+          "last_result": "ok",
+          "item_count": 5,
+          "elapsed_seconds": 2.3377914999999994,
+          "last_checked_at": "2026-09-20T21:58:13.336816+00:00",
+          "last_success_at": "2026-09-20T21:58:13.336816+00:00",
+          "retry_in_seconds": 0.0,
+          "failures": 0
+        },
+        {
+          "name": "openbb_news",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "ticker",
+          "status": "ok",
+          "last_result": "ok",
+          "item_count": 5,
+          "elapsed_seconds": 1.4338912079999995,
+          "last_checked_at": "2026-09-20T21:58:13.336821+00:00",
+          "last_success_at": "2026-09-20T21:58:13.336821+00:00",
+          "retry_in_seconds": 0.0,
+          "failures": 0
+        },
+        {
+          "name": "gdelt",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "text",
+          "status": "timeout",
+          "last_result": "timeout",
+          "item_count": 0,
+          "elapsed_seconds": 6.0,
+          "last_checked_at": "2026-09-20T21:58:13.336825+00:00",
+          "last_success_at": null,
+          "retry_in_seconds": 0.0,
+          "failures": 1
+        },
+        {
+          "name": "newsapi",
+          "enabled": false,
+          "status": "disabled",
+          "reason": "Set NEWSAPI_API_KEY"
+        },
+        {
+          "name": "eventregistry",
+          "enabled": false,
+          "status": "disabled",
+          "reason": "Set EVENTREGISTRY_API_KEY"
+        }
+      ]
+    },
+    {
+      "symbol": "AAPL",
+      "text_query": "AAPL",
+      "status": "degraded",
+      "raw_item_count": 10,
+      "elapsed_seconds": 6.005,
+      "sources": [
+        {
+          "name": "brave",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "text",
+          "status": "cooldown",
+          "last_result": "error",
+          "item_count": 0,
+          "elapsed_seconds": 4.633298,
+          "last_checked_at": "2026-09-20T21:58:19.341905+00:00",
+          "last_success_at": null,
+          "retry_in_seconds": 119.99983375,
+          "failures": 2
+        },
+        {
+          "name": "rss",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "text",
+          "status": "cooldown",
+          "last_result": "rate_limited",
+          "item_count": 0,
+          "elapsed_seconds": 5.51892325,
+          "last_checked_at": "2026-09-20T21:58:19.341921+00:00",
+          "last_success_at": null,
+          "retry_in_seconds": 119.999841833,
+          "failures": 2
+        },
+        {
+          "name": "duckduckgo",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "text",
+          "status": "ok",
+          "last_result": "ok",
+          "item_count": 5,
+          "elapsed_seconds": 0.6411712080000012,
+          "last_checked_at": "2026-09-20T21:58:19.341926+00:00",
+          "last_success_at": "2026-09-20T21:58:19.341926+00:00",
+          "retry_in_seconds": 0.0,
+          "failures": 0
+        },
+        {
+          "name": "openbb_news",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "ticker",
+          "status": "ok",
+          "last_result": "ok",
+          "item_count": 5,
+          "elapsed_seconds": 0.3330516670000012,
+          "last_checked_at": "2026-09-20T21:58:19.341930+00:00",
+          "last_success_at": "2026-09-20T21:58:19.341930+00:00",
+          "retry_in_seconds": 0.0,
+          "failures": 0
+        },
+        {
+          "name": "gdelt",
+          "enabled": true,
+          "reason": "configured",
+          "query_style": "text",
+          "status": "cooldown",
+          "last_result": "timeout",
+          "item_count": 0,
+          "elapsed_seconds": 6.0,
+          "last_checked_at": "2026-09-20T21:58:19.341935+00:00",
+          "last_success_at": null,
+          "retry_in_seconds": 119.999855292,
+          "failures": 2
+        },
+        {
+          "name": "newsapi",
+          "enabled": false,
+          "status": "disabled",
+          "reason": "Set NEWSAPI_API_KEY"
+        },
+        {
+          "name": "eventregistry",
+          "enabled": false,
+          "status": "disabled",
+          "reason": "Set EVENTREGISTRY_API_KEY"
+        }
+      ]
+    }
+  ],
+  "usable": true,
+  "git_commit": "215e62b0055a2c3c14bec8fc92df8f4400e3ade2",
+  "git_dirty": true
+}

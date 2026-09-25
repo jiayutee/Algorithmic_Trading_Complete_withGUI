@@ -61,10 +61,15 @@ class Candidate:
     strategy: str                         # "module:Class"
     params: Dict[str, Any] = field(default_factory=dict)
     description: str = ""
+    trend_overlay: bool = False           # wrap the strategy with the 28-bar weekly trend filter (drawdown reduction)
 
     def load(self):
         mod, cls = self.strategy.split(":")
-        return getattr(importlib.import_module(mod), cls)
+        strategy_cls = getattr(importlib.import_module(mod), cls)
+        if self.trend_overlay:
+            from strategies.trend_filter_strategy import with_trend_overlay
+            strategy_cls = with_trend_overlay(strategy_cls)
+        return strategy_cls
 
 
 # All-in per trade so each strategy is comparable with a 100%-invested buy-and-hold.
@@ -78,6 +83,17 @@ DEFAULT_CANDIDATES: List[Candidate] = [
               "Stochastic %K/%D cross in extreme zones"),
     Candidate("GBM (LightGBM)", "strategies.gbm_strategy:GBMStrategy", dict(_ALLIN),
               "Walk-forward LightGBM next-day direction"),
+    # Trend-filtered variants (Phase 12.1). The overlay was validated as DRAWDOWN reduction, not alpha (Phases 6.7-6.9), so
+    # these are tested on the same footing as every other candidate: they must beat buy-and-hold Sharpe to be promoted, and
+    # the Bonferroni level below widens automatically with the larger candidate count. Expect most to fail that bar.
+    Candidate("MACD/RSI + Trend", "strategies.simple_strategies:MACD_RSI_Strategy", dict(_ALLIN),
+              "MACD/RSI, only allowed to hold while the 28-bar trend is up", trend_overlay=True),
+    Candidate("EMA Crossover + Trend", "strategies.simple_strategies:EMACrossoverStrategy", dict(_ALLIN),
+              "EMA crossover, only allowed to hold while the 28-bar trend is up", trend_overlay=True),
+    Candidate("Stochastic + Trend", "strategies.simple_strategies:StochasticStrategy", dict(_ALLIN),
+              "Stochastic, only allowed to hold while the 28-bar trend is up", trend_overlay=True),
+    Candidate("GBM + Trend", "strategies.gbm_strategy:GBMStrategy", dict(_ALLIN),
+              "LightGBM direction model, only allowed to hold while the 28-bar trend is up", trend_overlay=True),
 ]
 
 # ------------------------------------------------------------------------- evaluation
@@ -295,7 +311,8 @@ def run_cycle(data: Optional[Dict[str, pd.DataFrame]] = None, candidates: Option
         test = promotion_test(ev)
         run_id = log.log_run(
             name=f"research-loop {cand.name}", model_type="strategy",
-            params={"candidate": cand.name, "strategy": cand.strategy, **cand.params, "fee": FEE, "eval_days": eval_days,
+            params={"candidate": cand.name, "strategy": cand.strategy, "trend_overlay": cand.trend_overlay, **cand.params,
+                    "fee": FEE, "eval_days": eval_days,
                     "block": BLOCK, "ci_level": level},
             metrics={"sharpe": ev["strategy"]["sharpe"], "bh_sharpe": ev["buy_hold"]["sharpe"], "sharpe_diff": ev["sharpe_diff"],
                      "ci_low": ev["ci"][0], "ci_high": ev["ci"][1], "trades": ev["trades"],
@@ -311,25 +328,27 @@ def run_cycle(data: Optional[Dict[str, pd.DataFrame]] = None, candidates: Option
 
 
 def format_report(rep: Dict[str, Any]) -> str:
+    # Name column grows with the longest candidate name so long names never run into the status column.
+    w = max([18] + [len(c["candidate"]) + 2 for c in rep["candidates"]] + [len(r["candidate"]) + 2 for r in rep.get("paper_pnl") or []])
     lines = [f"Research loop report -- data through {rep['run_date']} ({len(rep['symbols'])} symbols)",
-             f"{'candidate':<18}{'status':<10}{'Sharpe':>8}{'B&H':>7}{'diff':>8}{'CI':>20}{'trades':>8}{'maxDD%':>8}  promotion test"]
+             f"{'candidate':<{w}}{'status':<10}{'Sharpe':>8}{'B&H':>7}{'diff':>8}{'CI':>20}{'trades':>8}{'maxDD%':>8}  promotion test"]
     for c in rep["candidates"]:
         if c.get("skipped"):
-            lines.append(f"{c['candidate']:<18}{'retired':<10} (skipped)")
+            lines.append(f"{c['candidate']:<{w}}{'retired':<10} (skipped)")
             continue
         if "error" in c:
-            lines.append(f"{c['candidate']:<18}{c['status']:<10} ERROR: {c['error'][:60]}")
+            lines.append(f"{c['candidate']:<{w}}{c['status']:<10} ERROR: {c['error'][:60]}")
             continue
         ev, t = c["evaluation"], c["test"]
         failed = [k for k, v in t.items() if k != "PASS" and not v]
-        lines.append(f"{c['candidate']:<18}{c['status']:<10}{ev['strategy']['sharpe']:>8.2f}{ev['buy_hold']['sharpe']:>7.2f}"
+        lines.append(f"{c['candidate']:<{w}}{c['status']:<10}{ev['strategy']['sharpe']:>8.2f}{ev['buy_hold']['sharpe']:>7.2f}"
                      f"{ev['sharpe_diff']:>+8.2f}{'[%+.2f, %+.2f]' % tuple(ev['ci']):>20}{ev['trades']:>8}"
                      f"{ev['strategy']['max_drawdown']*100:>8.0f}  {'PASS' if t['PASS'] else 'fail: ' + ', '.join(failed)}"
                      f"{'   -> ' + c['note'] if c.get('changed') else ''}")
     if rep.get("paper_pnl"):
         lines.append("\nForward paper P&L (positions recorded by earlier runs, marked to newer prices):")
         for r in rep["paper_pnl"]:
-            lines.append(f"  {r['candidate']:<18}{r['days']:>4} days  {r['return_pct']:+7.2f}%  {r['trades']} position changes")
+            lines.append(f"  {r['candidate']:<{w}}{r['days']:>4} days  {r['return_pct']:+7.2f}%  {r['trades']} position changes")
     else:
         lines.append("\nNo strategy is in paper trading yet (none has passed every promotion test).")
     return "\n".join(lines)

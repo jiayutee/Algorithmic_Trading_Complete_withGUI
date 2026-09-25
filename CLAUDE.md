@@ -42,6 +42,10 @@ core/
   trend_overlay.py        # Trend-filter rule (28-bar, weekly): drawdown reduction, NOT alpha (Phases 6.7-6.9)
   risk_sizing.py          # Volatility-targeting helpers (Phase 6.6; result: did not help)
   news_health.py          # Per-source circuit breaker so one rate-limited news source can't stall a refresh
+  news_context.py         # Read-only chart-linked news snapshots for the Dash "Market Context" tab (no sentiment/store writes)
+  news_interpretation.py  # Deterministic rule-based event reading (conditional bias, mechanism, counterargument) -- not a forecast
+  sentiment.py            # Headline sentiment: FinBERT (optional) -> DeepSeek LLM (opt-in, DEEPSEEK_API_KEY) -> rule-based fallback
+  ai_research.py          # Optional AI research note per event (Groq, opt-in GROQ_API_KEY): best-effort, on demand, never blocks
 brokers/
   simulatedbroker.py      # Paper trading, order history, positions
   binance_connector.py    # Live Binance (paper flag)
@@ -97,6 +101,12 @@ scripts/
 - Run tests: `~/miniconda3/bin/python3 -m pytest --ignore=test_gui.py -v` (or the 3.11 env's python)
 - News fetch budget: `NEWS_FETCH_DEADLINE_SECONDS` (default 6); sources still running when it expires are abandoned and
   skipped for a cool-down after repeated failures
+- AI research (Dash "Market Context" tab, `core/ai_research.py`): opt-in, free-tier. Set `GROQ_API_KEY` (get one at
+  console.groq.com/keys); optional `GROQ_MODEL` (default `llama-3.3-70b-versatile`), `AI_RESEARCH_ENABLED=false` to
+  disable outright. Fetched on demand per selected event (button, not automatic), reasons only from the supplied
+  headline/summary text plus the existing sentiment-pipeline label, and any failure/missing key returns `None` --
+  the deterministic rule-based interpretation in `core/news_interpretation.py` is unaffected either way. Output is a
+  hypothesis to verify, never a forecast or trading signal.
 - IBKR (Phase 4.1): opt-in. Set `IBKR_ENABLED=1` (+ optional `IBKR_HOST`/`IBKR_PORT` (default 7497 = TWS paper; Gateway paper 4002)/`IBKR_CLIENT_ID`) and run TWS/Gateway with API enabled; needs `pip install ib_insync`. Tests use a mocked `ib_insync`; a live connection is only for manual verification. Orders always go through the live-order guard.
 - Daily data collectors (launchd, plain Python, no Claude tokens): `com.algotrader.collect-news` (07:20) and
   `com.algotrader.collect-kalshi` (07:05, 12:05, 17:05, local time) run `scripts/run_collectors.sh news|kalshi`, log to
