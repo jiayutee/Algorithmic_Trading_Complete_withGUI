@@ -6,6 +6,7 @@ import hashlib
 import math
 import base64
 import binascii
+import re
 import numpy as np
 import pandas as pd
 
@@ -13,10 +14,31 @@ from core.news_interpretation import interpret_news
 from core.ai_research import research_event
 
 
+# Web-search sources return pages, not dated articles: the item time is just the fetch time, so they would
+# sit at "now" on the timeline and cannot be placed against the candles.
+UNDATED_SOURCES = {'duckduckgo'}
+
+# Evergreen explainers, reference/price pages and promotions carry no information about a price move.
+_EVERGREEN = re.compile(
+    r"\b(what(?:\s+\w+){0,3}?\s+(?:is|are|was)\b(?!\s+(?:driving|behind|causing|pushing|moving|next|happening|going|up|down)\b)|"
+    r"how(?:\s+\w+){0,3}?\s+works?\b|how (?:to|does|do)\b|explained\b|beginner'?s?|basics\b|for beginners|guide to|a guide\b|"
+    r"tutorial|101\b|wikipedia|price and chart|price chart|live chart|"
+    r"best (crypto|trading|broker|exchange)|top \d+ .*(broker|platform|exchange)|broker(-| )?(vergleich|comparison)|"
+    r"plattform|review\b.*\b(2\d{3})\b)", re.I)
+
+# Kept on the timeline: about the selected asset, or market-wide (rates, inflation...). Everything else is counted, not shown.
+_RELEVANT = {'direct', 'macro'}
+
+
+def is_evergreen(headline):
+    return bool(_EVERGREEN.search(headline or ''))
+
+
 def build_snapshot(items, symbol, source_status=(), now=None):
     now = pd.Timestamp(now or datetime.now(timezone.utc))
     now = now.tz_localize('UTC') if now.tzinfo is None else now.tz_convert('UTC')
     events, seen = [], set()
+    hidden = {'undated': 0, 'evergreen': 0, 'off_topic': 0}
     for item in items:
         timestamp = pd.to_datetime(item.datetime_utc, utc=True, errors='coerce')
         if pd.isna(timestamp) or timestamp > now:  # published news is never an upcoming calendar
@@ -26,14 +48,23 @@ def build_snapshot(items, symbol, source_status=(), now=None):
         if not key or key in seen:
             continue
         seen.add(key)
+        if str(item.source or '').lower() in UNDATED_SOURCES:
+            hidden['undated'] += 1
+            continue
+        if is_evergreen(headline):
+            hidden['evergreen'] += 1
+            continue
         interpretation = interpret_news(item, symbol)
+        if interpretation['relevance'] not in _RELEVANT:
+            hidden['off_topic'] += 1
+            continue
         events.append({'id': hashlib.sha256((timestamp.isoformat()+key).encode()).hexdigest()[:20],
                        'time': timestamp.isoformat(), 'headline': headline,
                        'source': item.source or 'Unknown source', 'url': item.url,
                        'interpretation': interpretation})
     events.sort(key=lambda e: e['time'], reverse=True)
     return {'symbol': symbol, 'as_of': now.isoformat(), 'events': events[:40],
-            'sources': list(source_status), 'error': None}
+            'sources': list(source_status), 'hidden': hidden, 'error': None}
 
 
 def fetch_snapshot(symbol, pipeline=None):

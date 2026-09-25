@@ -185,4 +185,8 @@ def register_context_callbacks(app):
         health = [html.Div(str(s.get('name'))+' · '+str(s.get('status','unknown'))) for s in snapshot.get('sources',[])]
         status = snapshot.get('error') or '{} · {} events · Retrieved {} · candle snapshot from last context refresh'.format(
             snapshot.get('symbol',''),len(events),snapshot.get('as_of',''))
+        hidden = snapshot.get('hidden') or {}
+        if not snapshot.get('error') and sum(hidden.values()):
+            status += ' · hidden as not market context: {} off-topic, {} explainer/reference pages, {} undated web results'.format(
+                hidden.get('off_topic', 0), hidden.get('evergreen', 0), hidden.get('undated', 0))
         return fig, rows, movement, status, health

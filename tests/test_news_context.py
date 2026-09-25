@@ -11,7 +11,7 @@ def item(headline='Bitcoin exchange suffers hack', time='2026-09-01T12:00:00Z'):
 
 
 def test_snapshot_removes_duplicates_invalid_future_and_orders_publications():
-    items=[item(),item(),item('Future', '2030-01-01T00:00:00Z'),item('Older','2026-08-31T00:00:00Z')]
+    items=[item(),item(),item('Future', '2030-01-01T00:00:00Z'),item('Older Bitcoin story','2026-08-31T00:00:00Z')]
     report=build_snapshot(items,'BTCUSDT',now=datetime(2026,9,2,tzinfo=timezone.utc))
     assert len(report['events'])==2
     assert report['events'][0]['headline']==items[0].headline
@@ -87,7 +87,7 @@ def test_ai_research_for_event_returns_none_without_event():
 def test_ai_research_for_event_passes_interpretation_fields_through():
     from unittest.mock import patch
     from core.news_context import ai_research_for_event
-    event = build_snapshot([item('Company beats earnings estimates')], 'AAPL',
+    event = build_snapshot([item('AAPL beats earnings estimates')], 'AAPL',
                             now=datetime(2026, 9, 2, tzinfo=timezone.utc))['events'][0]
     with patch('core.news_context.research_event', return_value={'method': 'ai-research-groq-test'}) as mock_call:
         result = ai_research_for_event(event, 'AAPL')
@@ -113,3 +113,33 @@ def test_event_card_renders_ai_research_when_present():
     rendered = str(event_card(event, True, ai_research).to_plotly_json())
     assert 'Because of the supplied text.' in rendered
     assert 'Check official statement' in rendered
+
+
+def _src(headline, source='CoinDesk'):
+    return NewsItem(datetime_utc=pd.Timestamp('2026-09-01T12:00:00Z').to_pydatetime(), source=source, headline=headline)
+
+
+def test_explainer_reference_and_undated_search_pages_are_kept_off_the_timeline():
+    items = [_src('Bitcoin ETFs have erased a $5.8 billion hole'),
+             _src('What Bitcoin Is And How It Works - Forbes', 'Forbes'),
+             _src('How does Bitcoin work? - Bitcoin', 'duckduckgo'),
+             _src('Bitcoin & Crypto Basics: Beginner Guides to Get Started', 'duckduckgo'),
+             _src('BTC USD — Bitcoin Price and Chart — TradingView', 'duckduckgo'),
+             _src('Bitcoin - Wikipedia', 'duckduckgo'),
+             _src('Top 9 Daytrading Plattformen - Top 9 Trading Broker 2026', 'duckduckgo')]
+    report = build_snapshot(items, 'BTCUSDT', now=datetime(2026, 9, 2, tzinfo=timezone.utc))
+    assert [e['headline'] for e in report['events']] == ['Bitcoin ETFs have erased a $5.8 billion hole']
+    assert report['hidden']['undated'] == 5 and report['hidden']['evergreen'] == 1
+
+
+def test_unrelated_and_other_asset_news_is_counted_but_not_shown():
+    items = [_src('Bitcoin Surges Past $87,000 After CLARITY Act Failure: 3 Reasons Why'),
+             _src('U.S. retail sales rise to 6%'),
+             _src('Zcash Recent Surge: Is $5,000 the Next Target?'),
+             _src("What to know about Anthropic's new $12B computing deal")]
+    report = build_snapshot(items, 'BTCUSDT', now=datetime(2026, 9, 2, tzinfo=timezone.utc))
+    shown = [e['headline'] for e in report['events']]
+    assert 'Bitcoin Surges Past $87,000 After CLARITY Act Failure: 3 Reasons Why' in shown
+    assert 'U.S. retail sales rise to 6%' in shown          # market-wide data stays
+    assert not any('Zcash' in h or 'Anthropic' in h for h in shown)
+    assert report['hidden']['off_topic'] == 2 and report['hidden']['evergreen'] == 0
