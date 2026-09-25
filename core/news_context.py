@@ -34,6 +34,24 @@ def is_evergreen(headline):
     return bool(_EVERGREEN.search(headline or ''))
 
 
+def context_filter(item, symbol):
+    """(reason, interpretation): reason is 'undated' / 'evergreen' / 'off_topic' when the item is kept off the timeline, else None."""
+    if str(item.source or '').lower() in UNDATED_SOURCES:
+        return 'undated', None
+    if is_evergreen(str(item.headline or '')):
+        return 'evergreen', None
+    interpretation = interpret_news(item, symbol)
+    if interpretation['relevance'] not in _RELEVANT:
+        return 'off_topic', interpretation
+    return None, interpretation
+
+
+def keep_for_context(item, symbol):
+    """The interpretation if Market Context would show this item, else None (shared with the Phase 13.1 test)."""
+    reason, interpretation = context_filter(item, symbol)
+    return None if reason else interpretation
+
+
 def build_snapshot(items, symbol, source_status=(), now=None):
     now = pd.Timestamp(now or datetime.now(timezone.utc))
     now = now.tz_localize('UTC') if now.tzinfo is None else now.tz_convert('UTC')
@@ -48,15 +66,9 @@ def build_snapshot(items, symbol, source_status=(), now=None):
         if not key or key in seen:
             continue
         seen.add(key)
-        if str(item.source or '').lower() in UNDATED_SOURCES:
-            hidden['undated'] += 1
-            continue
-        if is_evergreen(headline):
-            hidden['evergreen'] += 1
-            continue
-        interpretation = interpret_news(item, symbol)
-        if interpretation['relevance'] not in _RELEVANT:
-            hidden['off_topic'] += 1
+        reason, interpretation = context_filter(item, symbol)
+        if reason:
+            hidden[reason] += 1
             continue
         events.append({'id': hashlib.sha256((timestamp.isoformat()+key).encode()).hexdigest()[:20],
                        'time': timestamp.isoformat(), 'headline': headline,

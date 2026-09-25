@@ -47,5 +47,16 @@ edge until costs and a trading rule are tested.
   is a separate step.
 - Deviations from this protocol are labelled exploratory and appended below, not edited in.
 
-# Results
-(appended after the run)
+# Results (run 2026-09-25 on the stored news; `training_ground/results/phase_13_1.json`)
+**INCONCLUSIVE -- zero directional reads, so the readings cannot be tested at all yet.**
+
+Of 427 stored events tagged with the collected symbols, Market Context's filter kept 320 (96 undated web-search results,
+5 explainer pages and 6 off-topic items removed). All 320 read `unknown`: no event met the narrow completed-event wording
+the rules require for a bullish or bearish case (213 are `unclassified`, 51 `market_flows`, 18 `regulation`, 13
+`network_activity`, 12 `monetary_policy`, 8 `earnings`, 3 `security`, 2 `macro_data`). With 0 symbol-days carrying a
+read against the required 30 (10 per side), no interval or verdict on predictive value can be computed, and none is claimed.
+
+What this does say: the current rules essentially never fire on crypto news, so the chart's bullish/bearish labels are
+almost always "unclear" and carry no tested information either way. The protocol was not changed after seeing this.
+Ways to get a testable signal are separate, pre-registered steps: (1) test the sentiment-pipeline headline tone (the
+existing H3 route, needs the collector's 300 qualifying days), (2) log AI research notes going forward and score them later.
