@@ -143,3 +143,50 @@ def test_unrelated_and_other_asset_news_is_counted_but_not_shown():
     assert 'U.S. retail sales rise to 6%' in shown          # market-wide data stays
     assert not any('Zcash' in h or 'Anthropic' in h for h in shown)
     assert report['hidden']['off_topic'] == 2 and report['hidden']['evergreen'] == 0
+
+
+def _candles(n=60, vol=0.02, seed=1):
+    import numpy as np
+    idx = pd.date_range('2026-01-01', periods=n, freq='D', tz='UTC')
+    close = 100 * np.exp(np.cumsum(np.random.default_rng(seed).normal(0, vol, n)))
+    return pd.DataFrame({'open': close, 'high': close * 1.01, 'low': close * 0.99, 'close': close}, index=idx)
+
+
+def test_scenario_paths_start_at_last_close_and_end_one_sigma_apart():
+    import math
+    from core.news_context import scenario_paths
+    c = _candles()
+    p = scenario_paths(c, 14)
+    assert p['bullish'][0] == p['bearish'][0] == p['range_mid'][0] == p['last'] == float(c['close'].iloc[-1])
+    assert len(p['times']) == 15 and p['times'][0] == c.index[-1] and p['times'][-1] == c.index[-1] + pd.Timedelta(days=14)
+    move = p['sigma'] * math.sqrt(14)
+    assert math.isclose(p['bullish'][-1] / p['last'], math.exp(move)) and math.isclose(p['bearish'][-1] / p['last'], math.exp(-move))
+    assert all(hi >= lo for hi, lo in zip(p['range_high'], p['range_low']))
+    assert p['range_high'][-1] > p['bullish'][-1] - 1e-9        # the cone at the horizon is the same 1-sigma boundary
+
+
+def test_scenarios_need_history_and_a_moving_price():
+    from core.news_context import scenario_paths
+    assert scenario_paths(_candles(20), 14) is None
+    flat = _candles(60, vol=0.0)
+    assert scenario_paths(flat, 14) is None
+
+
+def test_event_mix_counts_cases_without_turning_them_into_probabilities():
+    from core.news_context import event_mix
+    events = [{'interpretation': {'conditional_bias': b}} for b in ('bullish', 'bullish', 'bearish', 'unknown', 'mixed')]
+    assert event_mix(events) == {'bullish': 2, 'bearish': 1, 'unclear': 2}
+
+
+def test_context_figure_draws_three_labelled_scenarios_only_when_asked():
+    import json
+    from core.chart_builder import build_candlestick_figure
+    df = pd.DataFrame({'Open': _candles()['open'], 'High': _candles()['high'], 'Low': _candles()['low'], 'Close': _candles()['close']})
+    serialized = json.loads(build_candlestick_figure(df, symbol='BTCUSDT').to_json())
+    on = context_figure(serialized, [], None, True, 14, {'bullish': 3, 'bearish': 1, 'unclear': 2})[0]
+    names = [t.name for t in on.data if t.name]
+    assert any(n.startswith('Bullish scenario (3 bullish') for n in names)
+    assert any(n.startswith('Bearish scenario (1 bearish') for n in names)
+    assert any(n.startswith('Unclear / range scenario (2 unclear/mixed') for n in names)
+    off = context_figure(serialized, [], None, False)[0]
+    assert not any('scenario' in (t.name or '') for t in off.data)

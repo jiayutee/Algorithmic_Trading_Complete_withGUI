@@ -5,7 +5,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import dcc, html, Input, Output, State, ctx, no_update
 from core.chart_builder import THEME
-from core.news_context import fetch_snapshot, candles_from_figure, observed_move, candle_step, ai_research_for_event
+from core.news_context import (fetch_snapshot, candles_from_figure, observed_move, candle_step, ai_research_for_event,
+                               scenario_paths, event_mix, SCENARIO_HORIZONS)
 
 COLORS = {'bullish': '#42d9a1', 'bearish': '#ff6b86', 'unknown': '#a9b6cd', 'mixed': '#f2c66d'}
 
@@ -25,6 +26,12 @@ def context_panel():
             dcc.Dropdown(id='context-selected', options=[], placeholder='Select an event to inspect', clearable=True),
             html.Button('Get AI research on selected event', id='context-ai-button', n_clicks=0)]),
         html.Div(id='context-ai-status', className='context-note', role='status'),
+        html.Div(className='context-scenario-controls', children=[
+            dcc.Checklist(id='context-scenarios', options=[{'label': ' Show scenario projections (illustrative, not a forecast)', 'value': 'on'}],
+                          value=['on']),
+            html.Span('Horizon (bars):'),
+            dcc.RadioItems(id='context-horizon', options=[{'label': str(h), 'value': h} for h in SCENARIO_HORIZONS],
+                           value=14, inline=True)]),
         dcc.Loading(children=html.Div(className='context-grid', children=[
             html.Div([dcc.Graph(id='context-chart', config={'displaylogo':False}),
                       html.Div(id='context-move', className='context-note')]),
@@ -32,7 +39,7 @@ def context_panel():
         html.Details([html.Summary('Feed coverage'), html.Div(id='context-health')]),
         html.P('Interpretations are conditional rule-based context. Optional AI research (Groq, opt-in via '
                'GROQ_API_KEY) is a hosted-LLM hypothesis from the same text, fetched on demand, never a forecast. '
-               'Price changes do not establish causation. Scheduled earnings are shown in News & Earnings; '
+               'Dotted scenario lines are volatility-scaled illustrations, not forecasts. Price changes do not establish causation. Scheduled earnings are shown in News & Earnings; '
                'no macro calendar is connected.', className='context-note')])
 
 
@@ -88,7 +95,23 @@ def event_card(event, selected, ai_research=None):
                 ai_research_block(ai_research) if selected else None])])
 
 
-def context_figure(figure, events, selected):
+SCENARIO_COLORS = {'bullish': '#42d9a1', 'bearish': '#ff6b86', 'range': '#f2c66d'}
+
+
+def add_scenarios(fig, paths, mix):
+    """Dotted scenario lines plus the range cone; every legend entry says these are scenarios, not forecasts."""
+    t = paths['times']
+    fig.add_trace(go.Scatter(x=t + t[::-1], y=paths['range_high'] + paths['range_low'][::-1], fill='toself',
+                  fillcolor='rgba(242,198,109,0.10)', line={'width': 0}, hoverinfo='skip', showlegend=False))
+    for key, label, ys in (('bullish', 'Bullish scenario', paths['bullish']), ('bearish', 'Bearish scenario', paths['bearish']),
+                           ('range', 'Unclear / range scenario', paths['range_mid'])):
+        n = mix['bullish'] if key == 'bullish' else mix['bearish'] if key == 'bearish' else mix['unclear']
+        fig.add_trace(go.Scatter(x=t, y=ys, mode='lines', line={'color': SCENARIO_COLORS[key], 'width': 2, 'dash': 'dot'},
+                      name='{} ({} {} events)'.format(label, n, key if key != 'range' else 'unclear/mixed'),
+                      hovertemplate=label + ': %{y:,.2f}<br>%{x}<extra></extra>'))
+
+
+def context_figure(figure, events, selected, scenarios=None, horizon=14, mix=None):
     candles = candles_from_figure(figure)
     fig = go.Figure()
     if not candles.empty:
@@ -114,6 +137,11 @@ def context_figure(figure, events, selected):
                           line={'color':'#8eabff','width':2,'dash':'dot'})
             fig.add_shape(type='rect', x0=event['time'], x1=max(pd.Timestamp(event['time']),candles.index[-1]), y0=0, y1=1, yref='paper',
                           fillcolor='#8eabff', opacity=.07, line_width=0)
+        paths = scenario_paths(candles, horizon) if scenarios else None
+        if paths:
+            add_scenarios(fig, paths, mix or {'bullish': 0, 'bearish': 0, 'unclear': 0})
+            # Open zoomed on recent bars + the projection so the lines are legible (the full history stays one drag away).
+            fig.update_xaxes(range=[candles.index[max(0, len(candles) - max(45, 4 * horizon))], paths['times'][-1] + candle_step(candles)])
     else:
         fig.add_annotation(text='Load a chart, then refresh context.', x=.5,y=.5,xref='paper',yref='paper',showarrow=False)
     fig.update_layout(template='plotly_dark',paper_bgcolor='#111722',plot_bgcolor='#111722',height=430,
@@ -168,12 +196,12 @@ def register_context_callbacks(app):
                   Output('context-move','children'), Output('context-status','children'), Output('context-health','children'),
                   Input('context-snapshot','data'), Input('context-candles','data'),
                   Input('context-filter','value'), Input('context-selected','value'), Input('active-symbol-store','data'),
-                  Input('context-ai-research','data'))
-    def render(snapshot, figure, mode, selected, active_symbol, ai_research):
+                  Input('context-ai-research','data'), Input('context-scenarios','value'), Input('context-horizon','value'))
+    def render(snapshot, figure, mode, selected, active_symbol, ai_research, scenarios, horizon):
         if not snapshot or snapshot.get('symbol') != active_symbol:
             return context_figure(None,[],None)[0], [], '', 'Refresh context for the loaded symbol.', []
         events = filtered_events(snapshot, mode)
-        fig, candles = context_figure(figure, events, selected)
+        fig, candles = context_figure(figure, events, selected, bool(scenarios), horizon or 14, event_mix(snapshot.get('events')))
         event = next((e for e in events if e['id']==selected),None)
         move = observed_move(candles, event['time']) if event else None
         movement = ('Observed close-to-close move: {:+.2f}% · candle open times {} → {}. Last loaded candle may still be forming.'
@@ -189,4 +217,14 @@ def register_context_callbacks(app):
         if not snapshot.get('error') and sum(hidden.values()):
             status += ' · hidden as not market context: {} off-topic, {} explainer/reference pages, {} undated web results'.format(
                 hidden.get('off_topic', 0), hidden.get('evergreen', 0), hidden.get('undated', 0))
+        paths = scenario_paths(candles, horizon or 14) if scenarios else None
+        if paths:
+            mix = event_mix(snapshot.get('events'))
+            movement += (' Scenario lines (dotted) are volatility-scaled illustrations, not forecasts: one standard deviation '
+                         '(daily-return sigma {:.2%}) over {} bars is about {:+.1%} / {:+.1%}. Reported cases in view: {} bullish, {} bearish, {} unclear/mixed; '
+                         'the counts describe the news, they do not tilt the lines or make either more likely.').format(
+                paths['sigma'], paths['horizon'], paths['bullish'][-1] / paths['last'] - 1, paths['bearish'][-1] / paths['last'] - 1,
+                mix['bullish'], mix['bearish'], mix['unclear'])
+        elif scenarios:
+            movement += ' Scenario lines need at least 30 loaded candles.'
         return fig, rows, movement, status, health
