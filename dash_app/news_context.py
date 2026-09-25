@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from dash import dcc, html, Input, Output, State, ctx, no_update
 from core.chart_builder import THEME
 from core.news_context import (fetch_snapshot, candles_from_figure, observed_move, candle_step, ai_research_for_event,
-                               scenario_paths, event_mix, SCENARIO_HORIZONS)
+                               scenario_fan, event_mix, SCENARIO_HORIZONS)
 
 COLORS = {'bullish': '#42d9a1', 'bearish': '#ff6b86', 'unknown': '#a9b6cd', 'mixed': '#f2c66d'}
 
@@ -27,7 +27,7 @@ def context_panel():
             html.Button('Get AI research on selected event', id='context-ai-button', n_clicks=0)]),
         html.Div(id='context-ai-status', className='context-note', role='status'),
         html.Div(className='context-scenario-controls', children=[
-            dcc.Checklist(id='context-scenarios', options=[{'label': ' Show scenario projections (illustrative, not a forecast)', 'value': 'on'}],
+            dcc.Checklist(id='context-scenarios', options=[{'label': ' Show scenario fans (simulated, not a forecast)', 'value': 'on'}],
                           value=['on']),
             html.Span('Horizon (bars):'),
             dcc.RadioItems(id='context-horizon', options=[{'label': str(h), 'value': h} for h in SCENARIO_HORIZONS],
@@ -39,7 +39,7 @@ def context_panel():
         html.Details([html.Summary('Feed coverage'), html.Div(id='context-health')]),
         html.P('Interpretations are conditional rule-based context. Optional AI research (Groq, opt-in via '
                'GROQ_API_KEY) is a hosted-LLM hypothesis from the same text, fetched on demand, never a forecast. '
-               'Dotted scenario lines are volatility-scaled illustrations, not forecasts. Price changes do not establish causation. Scheduled earnings are shown in News & Earnings; '
+               'Scenario fans are volatility-scaled simulations, not forecasts. Price changes do not establish causation. Scheduled earnings are shown in News & Earnings; '
                'no macro calendar is connected.', className='context-note')])
 
 
@@ -98,17 +98,25 @@ def event_card(event, selected, ai_research=None):
 SCENARIO_COLORS = {'bullish': '#42d9a1', 'bearish': '#ff6b86', 'range': '#f2c66d'}
 
 
-def add_scenarios(fig, paths, mix):
-    """Dotted scenario lines plus the range cone; every legend entry says these are scenarios, not forecasts."""
-    t = paths['times']
-    fig.add_trace(go.Scatter(x=t + t[::-1], y=paths['range_high'] + paths['range_low'][::-1], fill='toself',
-                  fillcolor='rgba(242,198,109,0.10)', line={'width': 0}, hoverinfo='skip', showlegend=False))
-    for key, label, ys in (('bullish', 'Bullish scenario', paths['bullish']), ('bearish', 'Bearish scenario', paths['bearish']),
-                           ('range', 'Unclear / range scenario', paths['range_mid'])):
+def _rgba(hex_color, alpha):
+    h = hex_color.lstrip('#')
+    return 'rgba({},{},{},{})'.format(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+
+
+def add_scenarios(fig, fan, mix):
+    """Per scenario: shaded middle-50% band, dotted median, and one jagged example path (all toggled together in the legend).
+    Every legend entry says these are scenarios, not forecasts."""
+    t = fan['times']
+    for key, label in (('bullish', 'Bullish scenario'), ('bearish', 'Bearish scenario'), ('range', 'Unclear / range scenario')):
+        sc, color = fan['scenarios'][key], SCENARIO_COLORS[key]
         n = mix['bullish'] if key == 'bullish' else mix['bearish'] if key == 'bearish' else mix['unclear']
-        fig.add_trace(go.Scatter(x=t, y=ys, mode='lines', line={'color': SCENARIO_COLORS[key], 'width': 2, 'dash': 'dot'},
-                      name='{} ({} {} events)'.format(label, n, key if key != 'range' else 'unclear/mixed'),
-                      hovertemplate=label + ': %{y:,.2f}<br>%{x}<extra></extra>'))
+        fig.add_trace(go.Scatter(x=t + t[::-1], y=sc['q75'] + sc['q25'][::-1], fill='toself', fillcolor=_rgba(color, 0.13),
+                      line={'width': 0}, hoverinfo='skip', showlegend=False, legendgroup=key))
+        fig.add_trace(go.Scatter(x=t, y=sc['sample'], mode='lines', line={'color': _rgba(color, 0.75), 'width': 1.2},
+                      showlegend=False, legendgroup=key, hovertemplate=label + ' (one example path): %{y:,.2f}<br>%{x}<extra></extra>'))
+        fig.add_trace(go.Scatter(x=t, y=sc['median'], mode='lines', line={'color': color, 'width': 2, 'dash': 'dot'},
+                      legendgroup=key, name='{} ({} {} events)'.format(label, n, key if key != 'range' else 'unclear/mixed'),
+                      hovertemplate=label + ' median: %{y:,.2f}<br>%{x}<extra></extra>'))
 
 
 def context_figure(figure, events, selected, scenarios=None, horizon=14, mix=None):
@@ -137,11 +145,11 @@ def context_figure(figure, events, selected, scenarios=None, horizon=14, mix=Non
                           line={'color':'#8eabff','width':2,'dash':'dot'})
             fig.add_shape(type='rect', x0=event['time'], x1=max(pd.Timestamp(event['time']),candles.index[-1]), y0=0, y1=1, yref='paper',
                           fillcolor='#8eabff', opacity=.07, line_width=0)
-        paths = scenario_paths(candles, horizon) if scenarios else None
-        if paths:
-            add_scenarios(fig, paths, mix or {'bullish': 0, 'bearish': 0, 'unclear': 0})
-            # Open zoomed on recent bars + the projection so the lines are legible (the full history stays one drag away).
-            fig.update_xaxes(range=[candles.index[max(0, len(candles) - max(45, 4 * horizon))], paths['times'][-1] + candle_step(candles)])
+        fan = scenario_fan(candles, horizon) if scenarios else None
+        if fan:
+            add_scenarios(fig, fan, mix or {'bullish': 0, 'bearish': 0, 'unclear': 0})
+            # Open zoomed on recent bars + the projection so the fans are legible (the full history stays one drag away).
+            fig.update_xaxes(range=[candles.index[max(0, len(candles) - max(45, 4 * horizon))], fan['times'][-1] + candle_step(candles)])
     else:
         fig.add_annotation(text='Load a chart, then refresh context.', x=.5,y=.5,xref='paper',yref='paper',showarrow=False)
     fig.update_layout(template='plotly_dark',paper_bgcolor='#111722',plot_bgcolor='#111722',height=430,
@@ -217,13 +225,17 @@ def register_context_callbacks(app):
         if not snapshot.get('error') and sum(hidden.values()):
             status += ' · hidden as not market context: {} off-topic, {} explainer/reference pages, {} undated web results'.format(
                 hidden.get('off_topic', 0), hidden.get('evergreen', 0), hidden.get('undated', 0))
-        paths = scenario_paths(candles, horizon or 14) if scenarios else None
-        if paths:
+        fan = scenario_fan(candles, horizon or 14) if scenarios else None
+        if fan:
             mix = event_mix(snapshot.get('events'))
-            movement += (' Scenario lines (dotted) are volatility-scaled illustrations, not forecasts: one standard deviation '
-                         '(daily-return sigma {:.2%}) over {} bars is about {:+.1%} / {:+.1%}. Reported cases in view: {} bullish, {} bearish, {} unclear/mixed; '
-                         'the counts describe the news, they do not tilt the lines or make either more likely.').format(
-                paths['sigma'], paths['horizon'], paths['bullish'][-1] / paths['last'] - 1, paths['bearish'][-1] / paths['last'] - 1,
+            sc = fan['scenarios']
+            movement += (' Scenario fans are volatility-scaled simulations, not forecasts: {} paths per scenario are resampled from this '
+                         'chart\'s own daily moves (sigma {:.2%}); the shaded band is the middle 50%, the dotted line the median, and the '
+                         'jagged line one example path. Median after {} bars: {:+.1%} bullish / {:+.1%} bearish / {:+.1%} range. Reported '
+                         'cases in view: {} bullish, {} bearish, {} unclear/mixed; the counts describe the news, they do not tilt the '
+                         'fans or make either more likely (the readings have not been shown to predict price: Phase 13.1).').format(
+                fan['n_paths'], fan['sigma'], fan['horizon'], sc['bullish']['median'][-1] / fan['last'] - 1,
+                sc['bearish']['median'][-1] / fan['last'] - 1, sc['range']['median'][-1] / fan['last'] - 1,
                 mix['bullish'], mix['bearish'], mix['unclear'])
         elif scenarios:
             movement += ' Scenario lines need at least 30 loaded candles.'
