@@ -32,12 +32,12 @@ def _detail(d: Dict) -> str:
 
 
 def execution_view(journal: Optional[ExecutionJournal] = None, now: Optional[float] = None, limit: int = 40) -> dict:
-    """{headline, running, halted, symbols:[...], decisions:[...], issues:[...], account:{...}}. Never raises."""
+    """{headline, running, halted, hb_age_s, symbols:[...], decisions:[...], issues:[...], account:{...}}. Never raises."""
     now = time.time() if now is None else now
     try:
         if journal is None and not os.path.exists(default_journal_path()):     # just looking must not create a database
             return {"headline": "Paper execution STOPPED | never run on this machine", "running": False, "halted": None,
-                    "symbols": [], "decisions": [], "issues": [], "account": {}, "risk": {}}
+                    "hb_age_s": None, "symbols": [], "decisions": [], "issues": [], "account": {}, "risk": {}}
         j = journal or ExecutionJournal()
         st = j.get("status") or {}
         holder = j.lease_holder(now)
@@ -58,8 +58,11 @@ def execution_view(journal: Optional[ExecutionJournal] = None, now: Optional[flo
                    for s, info in (st.get("per_symbol") or {}).items()]
         decisions = [{"when": _fmt_ts(d["ts"]), "symbol": d["symbol"], "action": d["action"], "status": d.get("status") or "",
                       "detail": _detail(d), "id": d["decision_id"]} for d in j.decisions(limit=limit)]
-        return {"headline": headline, "running": running, "halted": halted, "symbols": symbols, "decisions": decisions,
+        return {"headline": headline, "running": running, "halted": halted,
+                "hb_age_s": round(hb_age, 1) if hb_age is not None else None,
+                "symbols": symbols, "decisions": decisions,
                 "issues": issues, "account": st.get("account", {}), "risk": st.get("risk", {})}
     except Exception as exc:  # noqa: BLE001 -- a status view must never break a UI
-        return {"headline": f"Execution status unavailable: {exc}", "running": False, "halted": None, "symbols": [],
+        return {"headline": f"Execution status unavailable: {exc}", "running": False, "halted": None,
+                "hb_age_s": None, "symbols": [],
                 "decisions": [], "issues": [str(exc)], "account": {}, "risk": {}}
