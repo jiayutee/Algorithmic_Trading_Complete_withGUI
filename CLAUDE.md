@@ -45,7 +45,7 @@ core/
   news_context.py         # Read-only chart-linked news snapshots for the Dash "Market Context" tab (no sentiment/store writes)
   news_interpretation.py  # Deterministic rule-based event reading (conditional bias, mechanism, counterargument) -- not a forecast
   sentiment.py            # Headline sentiment: FinBERT (optional) -> DeepSeek LLM (opt-in, DEEPSEEK_API_KEY) -> rule-based fallback
-  ai_research.py          # Optional AI research note per event (Groq, opt-in GROQ_API_KEY): best-effort, on demand, never blocks
+  ai_research.py          # Optional Groq (opt-in GROQ_API_KEY): on-demand research note per event + batch model readings that colour Market Context events (untested labels)
 brokers/
   simulatedbroker.py      # Paper trading, order history, positions
   binance_connector.py    # Live Binance (paper flag)

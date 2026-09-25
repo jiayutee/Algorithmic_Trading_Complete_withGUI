@@ -10,8 +10,9 @@ import re
 import numpy as np
 import pandas as pd
 
+from core.logger import logger
 from core.news_interpretation import interpret_news
-from core.ai_research import research_event
+from core.ai_research import research_event, read_events, readings_enabled, READING_MIN_CONFIDENCE
 
 
 # Web-search sources return pages, not dated articles: the item time is just the fetch time, so they would
@@ -79,13 +80,65 @@ def build_snapshot(items, symbol, source_status=(), now=None):
             'sources': list(source_status), 'hidden': hidden, 'error': None}
 
 
-def fetch_snapshot(symbol, pipeline=None):
-    """Reuse app routing, deadline and prefilter without sentiment calls or DB writes."""
+MODEL_READING_MAX = 24        # most recent events that get a model reading per refresh (bounds free-tier use)
+
+
+def effective_bias(event):
+    """(bias, source): the rule-based case when it is directional, else a confident model reading, else ('unknown', None).
+
+    The rules win when they fire (they need explicit completed-event wording); a model reading colours an event only at
+    or above READING_MIN_CONFIDENCE. Both are labels for the reader, not forecasts."""
+    rules = (event.get('interpretation') or {}).get('conditional_bias')
+    if rules in ('bullish', 'bearish', 'mixed'):
+        return rules, 'rules'
+    reading = event.get('model_reading') or {}
+    if reading.get('bias') in ('bullish', 'bearish', 'mixed') and float(reading.get('confidence') or 0) >= READING_MIN_CONFIDENCE:
+        return reading['bias'], 'model'
+    return 'unknown', None
+
+
+def annotate_model_readings(snapshot, reader=None, max_events=MODEL_READING_MAX):
+    """Attach event['model_reading'] to the most recent events the rules left non-directional; best-effort, never raises.
+
+    Adds snapshot['model_readings'] = {status, requested, received}. status: 'off' (no key / disabled), 'ok', 'partial',
+    'unavailable' (asked, nothing usable came back)."""
+    info = {'status': 'off', 'requested': 0, 'received': 0}
+    snapshot['model_readings'] = info
+    try:
+        if reader is None and not readings_enabled():
+            return snapshot
+        reader = reader or read_events
+        pending = [e for e in (snapshot.get('events') or [])[:max_events]
+                   if (e.get('interpretation') or {}).get('conditional_bias') not in ('bullish', 'bearish', 'mixed')]
+        info['requested'] = len(pending)
+        if not pending:
+            info['status'] = 'ok'
+            return snapshot
+        got = reader([{'id': e['id'], 'headline': e['headline'],
+                       'summary': ((e['interpretation'].get('evidence') or {}).get('excerpt') or '')
+                       if (e['interpretation'].get('evidence') or {}).get('excerpt') != e['headline'] else '',
+                       'category': e['interpretation'].get('event_category', '')} for e in pending], snapshot.get('symbol', ''))
+        by_id = {e['id']: e for e in pending}
+        for eid, reading in (got or {}).items():
+            if eid in by_id:
+                by_id[eid]['model_reading'] = reading
+        info['received'] = sum(1 for e in pending if e.get('model_reading'))
+        info['status'] = 'ok' if info['received'] == info['requested'] else ('partial' if info['received'] else 'unavailable')
+    except Exception as exc:  # noqa: BLE001 -- labels are an extra; the timeline must still load
+        logger.warning("model readings failed: %s", exc)
+        info['status'] = 'unavailable'
+    return snapshot
+
+
+def fetch_snapshot(symbol, pipeline=None, model_readings=False):
+    """Reuse app routing, deadline and prefilter without sentiment calls or DB writes.
+    ``model_readings=True`` adds best-effort model labels (Groq) for events the rules leave unclear."""
     from core.news_pipeline import get_default_news_pipeline, _query_variants
     pipeline = pipeline or get_default_news_pipeline()
     items = pipeline._fetch_all_sources(_query_variants(symbol)[0], 40, ticker_query=symbol)
     items = pipeline._prefilter(items, symbol, None)
-    return build_snapshot(items, symbol, pipeline.source_status())
+    snapshot = build_snapshot(items, symbol, pipeline.source_status())
+    return annotate_model_readings(snapshot) if model_readings else snapshot
 
 
 def _chart_array(value):
@@ -156,10 +209,10 @@ SCENARIO_HORIZONS = (7, 14, 30)
 
 
 def event_mix(events):
-    """How many reported events read bullish / bearish / unclear (a count of cases, not a probability)."""
+    """How many reported events read bullish / bearish / unclear, rules plus confident model readings (a count of cases, not a probability)."""
     mix = {'bullish': 0, 'bearish': 0, 'unclear': 0}
     for e in events or []:
-        bias = (e.get('interpretation') or {}).get('conditional_bias')
+        bias, _ = effective_bias(e)
         mix[bias if bias in ('bullish', 'bearish') else 'unclear'] += 1
     return mix
 

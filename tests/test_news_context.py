@@ -204,3 +204,73 @@ def test_context_figure_draws_three_labelled_scenarios_only_when_asked():
     assert len(on.data) == 1 + 3 * 3                                    # candles + (band, example path, median) x 3 scenarios
     off = context_figure(serialized, [], None, False)[0]
     assert not any('scenario' in (t.name or '') for t in off.data)
+
+
+def _event(headline='Bitcoin ETFs see inflows', reading=None, symbol='BTCUSDT'):
+    ev = build_snapshot([_src(headline)], symbol, now=datetime(2026, 9, 2, tzinfo=timezone.utc))['events'][0]
+    if reading:
+        ev['model_reading'] = reading
+    return ev
+
+
+def _reading(bias, conf):
+    return {'bias': bias, 'confidence': conf, 'reason': 'because', 'method': 'model-reading-groq-test'}
+
+
+def test_effective_bias_prefers_rules_then_confident_model_readings_else_unknown():
+    from core.news_context import effective_bias
+    assert effective_bias(_event()) == ('unknown', None)
+    assert effective_bias(_event(reading=_reading('bullish', 0.85))) == ('bullish', 'model')
+    assert effective_bias(_event(reading=_reading('bullish', 0.59))) == ('unknown', None)       # below the fixed threshold
+    assert effective_bias(_event(reading=_reading('unclear', 0.95))) == ('unknown', None)
+    hack = _event('Bitcoin exchange was hacked, funds stolen', reading=_reading('bullish', 0.99))
+    assert effective_bias(hack) == ('bearish', 'rules')                                          # rules win when they fire
+
+
+def test_annotate_model_readings_labels_only_non_directional_events_and_reports_status():
+    from core.news_context import annotate_model_readings
+    snap = build_snapshot([_src('Bitcoin ETFs see inflows'), _src('Bitcoin exchange was hacked, funds stolen')], 'BTCUSDT',
+                          now=datetime(2026, 9, 2, tzinfo=timezone.utc))
+    seen = {}
+
+    def reader(items, symbol):
+        seen['ids'] = [i['headline'] for i in items]
+        return {items[0]['id']: _reading('bullish', 0.8)}
+
+    annotate_model_readings(snap, reader=reader)
+    assert seen['ids'] == ['Bitcoin ETFs see inflows']                                           # the rule-directional hack is not sent
+    assert snap['model_readings'] == {'status': 'ok', 'requested': 1, 'received': 1}
+    assert any(e.get('model_reading') for e in snap['events'])
+    snap2 = build_snapshot([_src('Bitcoin ETFs see inflows')], 'BTCUSDT', now=datetime(2026, 9, 2, tzinfo=timezone.utc))
+    annotate_model_readings(snap2, reader=lambda items, symbol: {})
+    assert snap2['model_readings']['status'] == 'unavailable'
+    snap3 = build_snapshot([_src('Bitcoin ETFs see inflows')], 'BTCUSDT', now=datetime(2026, 9, 2, tzinfo=timezone.utc))
+    annotate_model_readings(snap3, reader=lambda items, symbol: 1 / 0)                           # a broken reader never breaks the timeline
+    assert snap3['model_readings']['status'] == 'unavailable' and len(snap3['events']) == 1
+
+
+def test_annotation_is_off_without_a_key_and_fetch_snapshot_is_opt_in(monkeypatch):
+    from core.news_context import annotate_model_readings
+    monkeypatch.delenv('GROQ_API_KEY', raising=False)
+    snap = build_snapshot([_src('Bitcoin ETFs see inflows')], 'BTCUSDT', now=datetime(2026, 9, 2, tzinfo=timezone.utc))
+    assert annotate_model_readings(snap)['model_readings']['status'] == 'off'
+    pipe = Mock()
+    pipe._fetch_all_sources.return_value = [item()]
+    pipe._prefilter.return_value = [item()]
+    pipe.source_status.return_value = []
+    assert 'model_readings' not in fetch_snapshot('BTCUSDT', pipe)                              # default never calls a model
+
+
+def test_model_readings_drive_the_filter_marker_and_card_and_are_labelled_untested():
+    import json
+    from core.chart_builder import build_candlestick_figure
+    events = [_event('Bitcoin ETFs see inflows', _reading('bullish', 0.85)), _event('Bitcoin holds steady')]
+    events[0]['time'] = '2026-02-20T12:00:00+00:00'
+    assert [e['headline'] for e in filtered_events({'events': events}, 'bullish')] == ['Bitcoin ETFs see inflows']
+    assert [e['headline'] for e in filtered_events({'events': events}, 'unclear')] == ['Bitcoin holds steady']
+    df = pd.DataFrame({'Open': _candles()['open'], 'High': _candles()['high'], 'Low': _candles()['low'], 'Close': _candles()['close']})
+    serialized = json.loads(build_candlestick_figure(df, symbol='BTCUSDT').to_json())
+    fig = context_figure(serialized, events, None)[0]
+    assert any('Bullish reading (model, untested)' == t.name for t in fig.data)
+    card = str(event_card(events[0], True).to_plotly_json())
+    assert 'Bullish case · model' in card and 'untested label' in card and 'does not tilt the scenario fans' in card
