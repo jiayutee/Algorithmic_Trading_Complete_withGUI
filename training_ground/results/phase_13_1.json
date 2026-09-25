@@ -1,0 +1,57 @@
+{
+  "horizons": {
+    "1": {
+      "n": 0,
+      "n_bullish": 0,
+      "n_bearish": 0,
+      "mean": null,
+      "ci": [
+        null,
+        null
+      ]
+    },
+    "3": {
+      "n": 0,
+      "n_bullish": 0,
+      "n_bearish": 0,
+      "mean": null,
+      "ci": [
+        null,
+        null
+      ]
+    },
+    "7": {
+      "n": 0,
+      "n_bullish": 0,
+      "n_bearish": 0,
+      "mean": null,
+      "ci": [
+        null,
+        null
+      ]
+    }
+  },
+  "primary_horizon": 3,
+  "checks": {
+    "ci_lower_above_zero": false,
+    "positive_in_both_halves": false,
+    "placebo_p_below_0_05": false,
+    "enough_reads": false
+  },
+  "placebo_p": null,
+  "verdict": "INCONCLUSIVE (too few directional reads to say anything)",
+  "level": 0.9833333333333333,
+  "run_at": "2026-09-25T20:48:17.772414+00:00",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "LTCUSDT",
+    "DOGEUSDT",
+    "SOLUSDT"
+  ],
+  "n_symbol_days_with_read": 0,
+  "reads_by_symbol": {}
+}
