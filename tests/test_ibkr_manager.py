@@ -141,3 +141,47 @@ def test_no_live_connection_is_ever_attempted_by_the_suite():
                     and isinstance(n.func.value, ast.Attribute) and n.func.value.attr == "ib":
                 calls.append(str(p))
     assert calls == ["brokers/ib_connector.py"]
+
+
+# ---------------------------------------------------------------------------
+# Gap 3: live-order-guard price gap (Phase 4.5 IBKR mock-harness gap-check)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("symbol", [
+    "AAPL260101C00200000",  # option-style ticker
+    "ESH25",                # futures-style ticker
+    "EUR",                  # FX-style ticker (base currency)
+])
+def test_ibkr_unresolvable_price_refused_before_placeorder(ib_env, monkeypatch, symbol):
+    """When live trading is enabled but the guard cannot determine a price for the
+    symbol, the order is BLOCKED and ib.placeOrder is never called.
+
+    This pins the CURRENT fail-closed behaviour for IBKRConnector.submit_order:
+    the method has no ``price`` parameter, so the guard always queries its price
+    provider (DataLoader.get_latest_price) to compute the notional.  When that
+    lookup returns None (exotic symbol, network error, …) the guard refuses the
+    order rather than sending it with an unverifiable value.
+
+    Production code (execution_guard.py, ib_connector.py) is unchanged; this
+    test only observes the existing behaviour.
+    """
+    from brokers.execution_guard import ExecutionGuard, OrderBlockedError, set_guard
+
+    # Inject a guard with live trading fully enabled but no price resolution.
+    test_guard = ExecutionGuard(
+        env={"LIVE_TRADING_ENABLED": "true", "LIVE_DRY_RUN": "false",
+             "KILL_SWITCH_FILE": "/tmp/_ibkr_gapcheck_no_ks"},
+        price_provider=lambda s: None,   # simulates a symbol whose price cannot be fetched
+    )
+    set_guard(test_guard)
+    try:
+        conn = ib_env.ibc.IBKRConnector()
+        conn.paper_mode = False   # exercise the live-order guard path
+
+        with pytest.raises(OrderBlockedError, match="cannot determine"):
+            conn.submit_order(symbol, 1, "buy")
+
+        # The order must have been stopped BEFORE ib.placeOrder was ever reached.
+        ib_env.ib.placeOrder.assert_not_called()
+    finally:
+        set_guard(None)
