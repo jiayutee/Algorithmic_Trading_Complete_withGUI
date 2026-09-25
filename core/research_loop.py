@@ -328,25 +328,27 @@ def run_cycle(data: Optional[Dict[str, pd.DataFrame]] = None, candidates: Option
 
 
 def format_report(rep: Dict[str, Any]) -> str:
+    # Name column grows with the longest candidate name so long names never run into the status column.
+    w = max([18] + [len(c["candidate"]) + 2 for c in rep["candidates"]] + [len(r["candidate"]) + 2 for r in rep.get("paper_pnl") or []])
     lines = [f"Research loop report -- data through {rep['run_date']} ({len(rep['symbols'])} symbols)",
-             f"{'candidate':<18}{'status':<10}{'Sharpe':>8}{'B&H':>7}{'diff':>8}{'CI':>20}{'trades':>8}{'maxDD%':>8}  promotion test"]
+             f"{'candidate':<{w}}{'status':<10}{'Sharpe':>8}{'B&H':>7}{'diff':>8}{'CI':>20}{'trades':>8}{'maxDD%':>8}  promotion test"]
     for c in rep["candidates"]:
         if c.get("skipped"):
-            lines.append(f"{c['candidate']:<18}{'retired':<10} (skipped)")
+            lines.append(f"{c['candidate']:<{w}}{'retired':<10} (skipped)")
             continue
         if "error" in c:
-            lines.append(f"{c['candidate']:<18}{c['status']:<10} ERROR: {c['error'][:60]}")
+            lines.append(f"{c['candidate']:<{w}}{c['status']:<10} ERROR: {c['error'][:60]}")
             continue
         ev, t = c["evaluation"], c["test"]
         failed = [k for k, v in t.items() if k != "PASS" and not v]
-        lines.append(f"{c['candidate']:<18}{c['status']:<10}{ev['strategy']['sharpe']:>8.2f}{ev['buy_hold']['sharpe']:>7.2f}"
+        lines.append(f"{c['candidate']:<{w}}{c['status']:<10}{ev['strategy']['sharpe']:>8.2f}{ev['buy_hold']['sharpe']:>7.2f}"
                      f"{ev['sharpe_diff']:>+8.2f}{'[%+.2f, %+.2f]' % tuple(ev['ci']):>20}{ev['trades']:>8}"
                      f"{ev['strategy']['max_drawdown']*100:>8.0f}  {'PASS' if t['PASS'] else 'fail: ' + ', '.join(failed)}"
                      f"{'   -> ' + c['note'] if c.get('changed') else ''}")
     if rep.get("paper_pnl"):
         lines.append("\nForward paper P&L (positions recorded by earlier runs, marked to newer prices):")
         for r in rep["paper_pnl"]:
-            lines.append(f"  {r['candidate']:<18}{r['days']:>4} days  {r['return_pct']:+7.2f}%  {r['trades']} position changes")
+            lines.append(f"  {r['candidate']:<{w}}{r['days']:>4} days  {r['return_pct']:+7.2f}%  {r['trades']} position changes")
     else:
         lines.append("\nNo strategy is in paper trading yet (none has passed every promotion test).")
     return "\n".join(lines)

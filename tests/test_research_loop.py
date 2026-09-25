@@ -247,3 +247,14 @@ def test_cli_status_prints_states_and_paper_pnl(paths, capsys, monkeypatch):
     assert rl._cli(["status"]) == 0
     out = capsys.readouterr().out
     assert "Oracle" in out and "paper" in out and "days" in out
+
+
+def test_format_report_keeps_long_candidate_names_apart_from_the_status_column():
+    ev = {"strategy": {"sharpe": 0.8, "max_drawdown": -0.2}, "buy_hold": {"sharpe": 0.5}, "sharpe_diff": 0.3,
+          "ci": [-1.0, 2.0], "trades": 100}
+    rep = {"run_date": "d", "symbols": ["A"], "paper_pnl": [], "candidates": [
+        {"candidate": "EMA Crossover + Trend", "status": "candidate", "evaluation": ev, "test": {"PASS": False, "x": False}},
+        {"candidate": "MACD/RSI", "status": "candidate", "evaluation": ev, "test": {"PASS": False, "x": False}}]}
+    lines = rl.format_report(rep).splitlines()
+    assert "EMA Crossover + Trend  candidate" in lines[2]
+    assert lines[1].index("status") == lines[2].index("candidate", len("EMA Crossover + Trend")) == lines[3].index("candidate")
