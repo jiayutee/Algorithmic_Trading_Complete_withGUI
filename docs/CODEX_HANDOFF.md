@@ -46,3 +46,6 @@ At original publication GitHub had not yet reported checks. Subsequent main CI p
 
 ## Next action
 Follow item 1 in CONTINUATION_PLAN.md: typed provider failures and replayable fixtures. Do not infer provider causes from empty output. No paid feed was purchased, no news edge was proved, and no live trading was enabled. Historical plan items are not all completed.
+
+## 2026-09-23 addendum — AI research activation smoke
+Groq retired `llama-3.3-70b-versatile` (HTTP 404). Branch `orchestrator/day88-ai-research-smoke` changes the default to `openai/gpt-oss-120b` after one successful live verification call. The branch is unmerged. Evidence: [ai-research-smoke-2026-09-23.md](artifacts/ai-research-smoke-2026-09-23.md). Next: owner review. Optionally log Groq's error body on failure, and separate reports of past moves from forward reasoning in the prompt.
