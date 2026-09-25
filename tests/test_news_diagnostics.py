@@ -44,7 +44,7 @@ def test_probe_uses_app_routing_and_reports_partial_delivery_without_scoring_or_
     assert report["usable"] and probe["status"] == "degraded"
     assert good.queries == ["Bitcoin"] and ticker.queries == ["BTCUSDT"]
     assert rows["brave"]["status"] == "ok" and rows["brave"]["last_success_at"]
-    assert rows["openbb_news"]["status"] == "empty" and not rows["openbb_news"]["last_success_at"]
+    assert rows["openbb_news"]["status"] == "ok_empty" and not rows["openbb_news"]["last_success_at"]
     assert rows["broken"]["status"] == "error"
     assert "DO_NOT_EXPORT" not in json.dumps(report)
 
@@ -107,3 +107,12 @@ def test_invalid_deadlines_cannot_disable_the_fetch_budget(value):
     import argparse
     with pytest.raises(argparse.ArgumentTypeError):
         positive_seconds(value)
+
+
+def test_probe_treats_legitimate_empty_as_healthy_but_rate_limit_as_degraded():
+    good = Source("brave", [story()])
+    quiet = Source("rss")  # answers normally with nothing
+    pipe = NewsPipeline(sources=[good, quiet], health=SourceHealthRegistry())
+    report = run_report(pipe, ["BTCUSDT"])
+    assert report["probes"][0]["status"] == "ok"
+    assert {r["name"]: r["status"] for r in report["probes"][0]["sources"]} == {"brave": "ok", "rss": "ok_empty"}

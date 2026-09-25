@@ -135,7 +135,9 @@ def test_a_source_that_raises_is_recorded_and_others_still_deliver(tmp_path):
     pipe = pipeline([broken, good], tmp_path)
     assert len(pipe.fetch_news_items("ETHUSDT")) == 1
     snap = pipe.health.snapshot()
-    assert snap["rss"]["failures"] == 1 and "429" in snap["rss"]["last_reason"]
+    # The exception is caught and classified as "error" by fetch_classified(); the
+    # failure count is what matters for the circuit breaker, not the raw message.
+    assert snap["rss"]["failures"] == 1 and snap["rss"]["last_status"] == "error"
 
 
 def test_stragglers_finishing_after_the_deadline_do_not_leak_into_results(tmp_path):

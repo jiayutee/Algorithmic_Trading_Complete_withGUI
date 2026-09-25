@@ -26,6 +26,11 @@ from core.news_pipeline import NewsPipeline, _query_variants
 from core.logger import logger
 
 
+# ok_empty = the source answered normally with no matches; rate_limited/auth_failed/parse_error/timeout/error/cooldown
+# are all degraded, and each row's "status" now names which one (no raw exception text is exported).
+HEALTHY_STATUSES = frozenset({"ok", "ok_empty"})
+
+
 def run_report(pipeline: NewsPipeline, symbols: list[str], limit: int = 5) -> dict:
     """Use the same query routing, deadline and circuit breaker as a normal refresh.
 
@@ -41,7 +46,7 @@ def run_report(pipeline: NewsPipeline, symbols: list[str], limit: int = 5) -> di
         rows = pipeline.source_status()
         enabled = [r for r in rows if r["enabled"]]
         status = "unavailable" if not items else (
-            "ok" if all(r["status"] == "ok" for r in enabled) else "degraded")
+            "ok" if all(r["status"] in HEALTHY_STATUSES for r in enabled) else "degraded")
         probes.append({"symbol": symbol, "text_query": query, "status": status,
                        "raw_item_count": len(items), "elapsed_seconds": round(time.monotonic() - t0, 3),
                        "sources": rows})
