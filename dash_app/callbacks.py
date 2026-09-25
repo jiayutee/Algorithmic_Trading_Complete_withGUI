@@ -96,6 +96,12 @@ def _get_equity_loader():
 # places an order.
 _broker: Optional[object] = None
 
+# Module-level BrokerManager singleton for the options chain panel (IBKR,
+# read-only).  Lazily initialised the first time Load Chain is clicked, but
+# ONLY when IBKR_ENABLED is set.  Tests replace this with a mock via
+# monkeypatch.setattr(cb, "_get_options_bm", lambda: fake_bm).
+_options_bm: Optional[object] = None
+
 
 def _get_broker():
     """Return the module-level SimulatedBroker, creating it on first call."""
@@ -107,6 +113,30 @@ def _get_broker():
                                   max_price_age_s=300.0 if path is not None else None)
         logger.info("[Dash] SimulatedBroker created (%s)", f"durable account at {path}" if path else "in-memory")
     return _broker
+
+
+def _get_options_bm():
+    """Return the module-level BrokerManager for IBKR options data.
+
+    Lazily created if IBKR_ENABLED=1 and ib_insync is installed.  Returns None
+    (without raising) if IBKR is not enabled or BrokerManager creation fails.
+    Tests can replace this function via::
+
+        monkeypatch.setattr(cb, "_get_options_bm", lambda: fake_bm)
+
+    or reset the singleton::
+
+        monkeypatch.setattr(cb, "_options_bm", None)
+    """
+    global _options_bm
+    if _options_bm is None and os.environ.get("IBKR_ENABLED"):
+        try:
+            from core.broker_manager import BrokerManager
+            _options_bm = BrokerManager()
+            logger.info("[Dash] BrokerManager for options chain created")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[Dash] could not create BrokerManager for options: %s", exc)
+    return _options_bm
 
 
 def _broker_or_none():
@@ -2508,6 +2538,41 @@ def register_callbacks(app: dash.Dash) -> None:
     )
     def update_pnl_card(_order_status: object, _n_intervals: object):
         return _build_pnl_card(_broker_or_none())
+
+    # ------------------------------------------------------------------
+    # Phase 5.1: Options chain panel (read-only, IBKR, Greeks table)
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("options-chain-table", "data"),
+        Output("options-chain-status", "children"),
+        Input("options-chain-load-btn", "n_clicks"),
+        State("symbol-dropdown", "value"),
+        State("custom-symbol-input", "value"),
+        State("options-chain-expiry-input", "value"),
+        prevent_initial_call=True,
+    )
+    def load_options_chain(
+        n_clicks: int,
+        symbol: str,
+        custom_symbol: Optional[str],
+        expiry: Optional[str],
+    ):
+        """Load the options chain for the currently selected symbol.
+
+        Read-only: calls core.options_chain via the IBKR broker.  No order
+        path.  Degrades to a clear message if IBKR is unavailable.
+        """
+        if not n_clicks:
+            return no_update, no_update
+
+        resolved = _resolve_symbol(custom_symbol, symbol)
+        from dash_app.options_chain_panel import build_options_chain_data
+        rows, status_msg = build_options_chain_data(
+            resolved,
+            broker_manager=_get_options_bm(),
+            expiry=expiry or None,
+        )
+        return rows, status_msg
 
     # ------------------------------------------------------------------
     # Placeholder wiring points for future phases
