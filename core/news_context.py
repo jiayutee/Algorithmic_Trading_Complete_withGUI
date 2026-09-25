@@ -137,3 +137,53 @@ def ai_research_for_event(event, symbol):
         event_category=interpretation.get('event_category', 'unclassified'),
         sentiment_label=(interpretation.get('headline_tone') or {}).get('label', 'unknown'),
     )
+
+
+SCENARIO_MIN_BARS = 30
+SCENARIO_HORIZONS = (7, 14, 30)
+
+
+def event_mix(events):
+    """How many reported events read bullish / bearish / unclear (a count of cases, not a probability)."""
+    mix = {'bullish': 0, 'bearish': 0, 'unclear': 0}
+    for e in events or []:
+        bias = (e.get('interpretation') or {}).get('conditional_bias')
+        mix[bias if bias in ('bullish', 'bearish') else 'unclear'] += 1
+    return mix
+
+
+def scenario_paths(candles, horizon=14, z=1.0):
+    """Illustrative bullish / bearish / range scenarios from the last close, scaled by realised volatility.
+
+    NOT a forecast and not fitted to outcomes: no model here has shown predictive skill (Phases 6.5-6.9). Each path just
+    shows what a ``z``-sigma move over ``horizon`` bars looks like for this instrument:
+      bullish  straight line to  last * exp(+z * sigma * sqrt(h))
+      bearish  straight line to  last * exp(-z * sigma * sqrt(h))
+      range    flat at the last close, with the +-z*sigma*sqrt(i) cone around it
+    sigma is the standard deviation of the loaded candles' log close-to-close returns. Returns None if too little history.
+    """
+    if candles is None or len(candles) < SCENARIO_MIN_BARS or horizon < 1:
+        return None
+    closes = pd.to_numeric(candles['close'], errors='coerce').dropna()
+    closes = closes[closes > 0]
+    returns = np.log(closes).diff().dropna()
+    if len(returns) < SCENARIO_MIN_BARS - 1:
+        return None
+    sigma = float(returns.std(ddof=1))
+    last = float(closes.iloc[-1])
+    if not math.isfinite(sigma) or sigma <= 0 or not math.isfinite(last):
+        return None
+    step = candle_step(candles)
+    start = candles.index[-1]
+    steps = list(range(0, horizon + 1))
+    times = [start + step * i for i in steps]
+    end = z * sigma * math.sqrt(horizon)
+    cone = [z * sigma * math.sqrt(i) for i in steps]
+    return {
+        'times': times, 'last': last, 'sigma': sigma, 'horizon': horizon, 'z': z,
+        'bullish': [last * math.exp(end * i / horizon) for i in steps],
+        'bearish': [last * math.exp(-end * i / horizon) for i in steps],
+        'range_high': [last * math.exp(c) for c in cone],
+        'range_low': [last * math.exp(-c) for c in cone],
+        'range_mid': [last for _ in steps],
+    }
