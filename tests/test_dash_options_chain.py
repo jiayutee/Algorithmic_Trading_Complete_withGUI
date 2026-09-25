@@ -283,15 +283,15 @@ class TestBuildOptionsChainDataHappyPath:
         assert _EXPIRY_A in msg
 
     def test_rows_are_dicts_not_nan_values(self):
-        """Float columns must contain formatted strings, never raw NaN."""
+        """Cells are text, finite numbers or None (shown as '--'); never NaN/Inf, which JSON cannot carry."""
         from dash_app.options_chain_panel import build_options_chain_data
         import math
         rows, _ = build_options_chain_data("AAPL", broker_manager=self._bm)
         for row in rows:
             for k, v in row.items():
-                assert isinstance(v, str), f"Row[{k!r}] is not a string: {v!r}"
-                # Formatted floats should never be the Python "nan" string
-                assert v.lower() != "nan", f"Row[{k!r}] contains raw 'nan'"
+                assert v is None or isinstance(v, (str, float)), f"Row[{k!r}] has unexpected type: {v!r}"
+                if isinstance(v, float):
+                    assert math.isfinite(v), f"Row[{k!r}] is not finite: {v!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -520,47 +520,23 @@ class TestNoOrderPath:
 
 
 # ---------------------------------------------------------------------------
-# 7. _fmt_float and _format_chain_row unit tests
+# 7. _num and _format_chain_row unit tests
 # ---------------------------------------------------------------------------
 
-class TestFmtFloat:
-    """_fmt_float must format numbers and return '--' for missing values."""
+class TestNum:
+    """_num keeps finite numbers as floats and turns anything missing or non-finite into None."""
 
     @pytest.fixture(autouse=True)
     def _import(self):
-        from dash_app.options_chain_panel import _fmt_float
-        self._fn = _fmt_float
+        from dash_app.options_chain_panel import _num
+        self._fn = _num
 
-    def test_none_returns_dash(self):
-        assert self._fn(None) == "--"
+    def test_missing_and_non_finite_become_none(self):
+        for bad in (None, float("nan"), float("inf"), float("-inf"), "n/a"):
+            assert self._fn(bad) is None
 
-    def test_nan_returns_dash(self):
-        import math
-        assert self._fn(float("nan")) == "--"
-
-    def test_inf_returns_dash(self):
-        assert self._fn(float("inf")) == "--"
-        assert self._fn(float("-inf")) == "--"
-
-    def test_zero_returns_formatted_zero(self):
-        assert self._fn(0.0) == "0.0000"
-
-    def test_positive_float_formatted(self):
-        result = self._fn(0.52, 4)
-        assert result == "0.5200"
-
-    def test_ndigits_respected(self):
-        result = self._fn(150.0, 2)
-        assert result == "150.00"
-
-    def test_string_input_not_crash(self):
-        # Non-numeric strings should return "--"
-        result = self._fn("n/a")
-        assert result == "--"
-
-    def test_numeric_string_formatted(self):
-        result = self._fn("0.25", 2)
-        assert result == "0.25"
+    def test_numbers_stay_numbers(self):
+        assert self._fn(0.0) == 0.0 and self._fn(150.0) == 150.0 and self._fn("0.25") == 0.25
 
 
 class TestFormatChainRow:
@@ -579,7 +555,7 @@ class TestFormatChainRow:
         expected_keys = {c["id"] for c in CHAIN_TABLE_COLUMNS}
         assert set(result.keys()) == expected_keys
 
-    def test_nan_values_become_dash(self):
+    def test_nan_values_become_none(self):
         from dash_app.options_chain_panel import _format_chain_row
         import pandas as pd
         import math
@@ -591,10 +567,10 @@ class TestFormatChainRow:
         })
         result = _format_chain_row(row)
         for col in ["bid", "ask", "mid", "iv", "delta", "gamma", "theta", "vega"]:
-            assert result[col] == "--", f"{col!r} should be '--' for NaN input"
+            assert result[col] is None, f"{col!r} should be None for NaN input (the table shows '--')"
 
-    def test_values_are_all_strings(self):
-        from dash_app.options_chain_panel import _format_chain_row
+    def test_numeric_columns_hold_numbers_so_sorting_is_numeric(self):
+        from dash_app.options_chain_panel import _format_chain_row, CHAIN_TABLE_COLUMNS
         import pandas as pd
         row = pd.Series({
             "strike": 150.0, "right": "C", "expiry": "20991016",
@@ -603,5 +579,8 @@ class TestFormatChainRow:
             "theta": -0.05, "vega": 0.15, "underlying_price": 150.0,
         })
         result = _format_chain_row(row)
+        numeric_ids = {c["id"] for c in CHAIN_TABLE_COLUMNS if c.get("type") == "numeric"}
+        assert numeric_ids == set(result) - {"right", "expiry"}
         for k, v in result.items():
-            assert isinstance(v, str), f"Expected str for {k!r}, got {type(v).__name__}"
+            assert isinstance(v, float if k in numeric_ids else str), f"unexpected type for {k!r}: {type(v).__name__}"
+        assert sorted([100.0, 20.0]) == [20.0, 100.0]                      # the reason: strings would sort '100.00' < '20.00'

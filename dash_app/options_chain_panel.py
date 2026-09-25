@@ -26,19 +26,24 @@ from core.options_chain import CHAIN_COLUMNS
 logger = logging.getLogger(__name__)
 
 # Human-readable column headers for the DataTable (order matches CHAIN_COLUMNS).
+def _numeric(name: str, col_id: str, digits: int) -> dict:
+    # type "numeric" makes the DataTable sort by value ("100" after "20"); nully shows "--" for missing data.
+    return {"name": name, "id": col_id, "type": "numeric", "format": {"specifier": f".{digits}f", "nully": "--"}}
+
+
 CHAIN_TABLE_COLUMNS = [
-    {"name": "Strike",     "id": "strike"},
-    {"name": "C/P",        "id": "right"},
-    {"name": "Expiry",     "id": "expiry"},
-    {"name": "Bid",        "id": "bid"},
-    {"name": "Ask",        "id": "ask"},
-    {"name": "Mid",        "id": "mid"},
-    {"name": "IV",         "id": "iv"},
-    {"name": "Delta",      "id": "delta"},
-    {"name": "Gamma",      "id": "gamma"},
-    {"name": "Theta",      "id": "theta"},
-    {"name": "Vega",       "id": "vega"},
-    {"name": "Underlying", "id": "underlying_price"},
+    _numeric("Strike", "strike", 2),
+    {"name": "C/P", "id": "right"},
+    {"name": "Expiry", "id": "expiry"},
+    _numeric("Bid", "bid", 4),
+    _numeric("Ask", "ask", 4),
+    _numeric("Mid", "mid", 4),
+    _numeric("IV", "iv", 4),
+    _numeric("Delta", "delta", 4),
+    _numeric("Gamma", "gamma", 4),
+    _numeric("Theta", "theta", 4),
+    _numeric("Vega", "vega", 4),
+    _numeric("Underlying", "underlying_price", 2),
 ]
 
 # Sanity-check: IDs must match CHAIN_COLUMNS in order.
@@ -51,21 +56,19 @@ assert [c["id"] for c in CHAIN_TABLE_COLUMNS] == list(CHAIN_COLUMNS), (
 # Internal formatting helpers
 # ---------------------------------------------------------------------------
 
-def _fmt_float(val, ndigits: int = 4) -> str:
-    """Format a numeric value as a string; returns '--' for None / NaN / Inf."""
+def _num(val) -> Optional[float]:
+    """A finite float, or None for None / NaN / Inf / non-numeric (the table then shows '--')."""
     if val is None:
-        return "--"
+        return None
     try:
         f = float(val)
     except (TypeError, ValueError):
-        return "--"
-    if math.isnan(f) or math.isinf(f):
-        return "--"
-    return f"{f:.{ndigits}f}"
+        return None
+    return None if math.isnan(f) or math.isinf(f) else f
 
 
 def _format_chain_row(row) -> dict:
-    """Convert one row of the chain DataFrame to a display dict.
+    """Convert one row of the chain DataFrame to a table row (numbers stay numbers so the table sorts numerically).
 
     Parameters
     ----------
@@ -84,18 +87,18 @@ def _format_chain_row(row) -> dict:
             return None
 
     return {
-        "strike":           _fmt_float(_get("strike"), 2),
+        "strike":           _num(_get("strike")),
         "right":            str(_get("right") or "--"),
         "expiry":           str(_get("expiry") or "--"),
-        "bid":              _fmt_float(_get("bid"), 4),
-        "ask":              _fmt_float(_get("ask"), 4),
-        "mid":              _fmt_float(_get("mid"), 4),
-        "iv":               _fmt_float(_get("iv"), 4),
-        "delta":            _fmt_float(_get("delta"), 4),
-        "gamma":            _fmt_float(_get("gamma"), 4),
-        "theta":            _fmt_float(_get("theta"), 4),
-        "vega":             _fmt_float(_get("vega"), 4),
-        "underlying_price": _fmt_float(_get("underlying_price"), 2),
+        "bid":              _num(_get("bid")),
+        "ask":              _num(_get("ask")),
+        "mid":              _num(_get("mid")),
+        "iv":               _num(_get("iv")),
+        "delta":            _num(_get("delta")),
+        "gamma":            _num(_get("gamma")),
+        "theta":            _num(_get("theta")),
+        "vega":             _num(_get("vega")),
+        "underlying_price": _num(_get("underlying_price")),
     }
 
 
