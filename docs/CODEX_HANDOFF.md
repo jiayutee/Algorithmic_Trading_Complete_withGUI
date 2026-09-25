@@ -1,6 +1,9 @@
-# Claude / Codex handoff — updated 2026-09-22
+# Claude / Codex handoff — updated 2026-09-24
 
-## Latest: optional AI research on Market Context
+## Latest: first 8-candidate research loop evaluation (2026-09-24)
+Ran the research loop (`python -m core.research_loop run`) against a **scratch copy** of the canonical experiment log (SHA-256 verified unchanged). All 8 candidates remain on trial — 0 promoted, 0 retired. Trend overlay reduces drawdown in all four variants but produces no Sharpe edge, consistent with the Phases 6.7-6.9 pre-registration. EMA Crossover is closest to promotion (all non-CI tests pass; CI lower –0.93 under the 99.375% Bonferroni level). Evidence in [artifacts/research-loop-8cand-2026-09-24.md](artifacts/research-loop-8cand-2026-09-24.md) and its JSON sibling. Canonical promote/retire state untouched; applying decisions is an owner decision.
+
+## Previous: optional AI research on Market Context
 Branch `feat/ai-research-groq`, base `codex/news-event-timeline` (PR #21). Adds `core/ai_research.py`: an on-demand,
 per-event Groq call (free tier, opt-in `GROQ_API_KEY`) that reasons only from the supplied headline/summary text
 plus the existing `core/sentiment.py` label, returning `None` on any failure so the deterministic

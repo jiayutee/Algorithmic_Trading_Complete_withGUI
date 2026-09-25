@@ -40,6 +40,25 @@ Not done: no evaluation of the AI research note's own accuracy or calibration (i
 ## 2026-09-23 — research loop: trend-filtered candidates
 The loop had four candidates (MACD/RSI, EMA Crossover, Stochastic, GBM) because those are the only standalone signal strategies that run in the current environment; TD3/DDPG/FinRL need `stable_baselines3`/`finrl` plus trained model files, the LSTM is deprecated, and the trend filter is an overlay rather than a signal source. Added a `trend_overlay` flag to `Candidate` and four wrapped variants ("... + Trend", 8 candidates total) so the overlay is tested on the same promotion rules as everything else. The Bonferroni level widens automatically with the candidate count. Expectation, from Phases 6.7-6.9: drawdown improves, Sharpe versus buy-and-hold does not clear the bar. No result has been produced yet -- the loop has not been re-run with the new candidates, and no promotion is implied. RL candidates were not added: they would need installed dependencies, trained artifacts and a pre-registered training protocol first.
 
+## 2026-09-24 — research loop: first 8-candidate evaluation (scratch copy)
+
+Ran `python -m core.research_loop run` against a scratch copy of `training_ground/results/experiments.sqlite3` (canonical file SHA-256 verified unchanged before and after: `4a86ff64...f26d34`). Git commit `d00c66b`, 8 symbols, 700 eval bars, data through 2026-09-23, Bonferroni 99.375% CI per candidate (0.05/8).
+
+**Result: 0 promoted, 0 retired. All 8 remain on trial.**
+
+| Candidate | Sharpe | Diff vs B&H | 99.4% CI | Trades | maxDD% | PASS? |
+|---|---|---|---|---|---|---|
+| MACD/RSI | 0.38 | -0.10 | [-3.15, +2.95] | 9 | -5% | fail (3 reasons) |
+| EMA Crossover | 0.88 | +0.41 | [-0.93, +1.74] | 128 | -39% | fail (CI lower only) |
+| Stochastic | 0.36 | -0.12 | [-3.48, +3.24] | 97 | -261% | fail (3 reasons) |
+| GBM (LightGBM) | -0.51 | -0.98 | [-3.50, +1.62] | 1192 | -56% | fail (2 reasons) |
+| MACD/RSI + Trend | 0.59 | +0.11 | [-3.19, +3.20] | 5 | -3% | fail (3 reasons) |
+| EMA Crossover + Trend | 0.57 | +0.10 | [-2.48, +2.99] | 100 | -15% | fail (2 reasons) |
+| Stochastic + Trend | 0.75 | +0.28 | [-2.88, +3.17] | 83 | -107% | fail (3 reasons) |
+| GBM + Trend | -0.73 | -1.20 | [-4.09, +2.06] | 622 | -40% | fail (2 reasons) |
+
+Prior expectation (Phases 6.7-6.9): trend overlay reduces drawdown, does not produce a Sharpe edge. This run agrees: drawdown reduced in all four trend-filtered variants; no trend-filtered variant clears the promotion bar. EMA Crossover remains the closest to promotion (all non-CI tests pass; CI lower -0.93 still below zero). Canonical state untouched; applying any promotion/retirement decision is an owner decision. Evidence: [research-loop-8cand-2026-09-24.md](artifacts/research-loop-8cand-2026-09-24.md) and sibling JSON. Status: evidence only (not merged to main as a code change; docs committed to branch `worktree-agent-a4738bd4b58b22a7b`, PR pending).
+
 ## 2026-09-23 — Phase 9.3 re-run (5 days of collected data)
 
 Ran `training_ground/experiments_9_3_collected.py` with the main checkout's Kalshi DB (896 snapshots, 560 resolved,
