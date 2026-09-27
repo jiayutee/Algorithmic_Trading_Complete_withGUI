@@ -85,3 +85,19 @@ Before letting the news lean the fans, the readings had to be tested: [Phase 13.
 Owner asked why every event reads unclear. The rule-based label can only be directional for security and earnings headlines that name the asset in completed-event wording (0 of 320 stored crypto events qualified), so most of the timeline was grey by design. Added an optional, best-effort **model reading** (Groq, same key): on refresh, the 24 most recent events the rules left non-directional are sent in chunks of 10 for one label each (bullish / bearish / mixed / unclear + confidence + a short reason). Rules win when they fire; a model reading colours an event only at confidence >= 0.6 (fixed in advance, not tuned) and is drawn as a hollow circle, labelled "model, untested", with the reason on the card. Cached per headline for 6 hours; a rate limit or error leaves the rule labels and says so in the status line; off without `GROQ_API_KEY`. The counts feed the legend but still do not tilt the scenario fans.
 
 Live check (10 real BTC headlines, two runs): 10 of 10 labelled in about 3 s. Known weakness: the model still reads some price-move headlines ("Bitcoin Surges Past $87,000 ...") as bullish although the prompt tells it not to, i.e. it partly echoes the move that already happened. The labels have not been tested against later price moves; a pre-registered test would need the labels logged going forward (scoring past events with a model trained later can leak outcomes).
+
+## 2026-09-26 — Phase 9.3 re-run (7 days of collected data)
+
+Ran `training_ground/experiments_9_3_collected.py` with the main checkout's Kalshi DB (1264 snapshots, 962 resolved,
+2026-09-19..26). No protocol change. Previous result file archived as `phase_9_3_collected.json` (09-23 run);
+new output: `training_ground/results/phase_9_3_collected_2026-09-26.json`.
+
+- **Data:** 919 markets pass the two-sided-book filter (was 530), 309 distinct events, 7 distinct closing days.
+  Lead time: 5.9–68.9 h (median 37.9 h). Category mix: commodity 334, city-high-temp 307, sports 169, rainfall 86, politics 23.
+- **L (longshots, ask <= 0.10):** n=356 (189 events), mean ask 0.044, hit rate 0.037, CI97.5 [-0.035, +0.030].
+  Verdict: **no evidence** of overpricing (CI crosses zero, halves have opposite signs).
+- **F (favorites, ask >= 0.90):** n=123 (71 events), mean ask 0.977, hit rate 1.000, CI97.5 [+0.019, +0.027].
+  Verdict: **FINDING** (all three criteria met, second consecutive run). F is 115/123 commodity markets.
+  P(all 123 YES | fairly priced, independence) = 0.058. Bootstrap CI is degenerate (100% hit rate reflects only ask spread).
+- Phase 9.2 stays on HOLD. This is analysis only; no execution path exists or is implied. Interpretation of F is the owner's call.
+- Evidence: `training_ground/results/phase_9_3_collected_2026-09-26.json` and `docs/artifacts/kalshi-9-3-rerun-2026-09-26.md`.
