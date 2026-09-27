@@ -408,6 +408,14 @@
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
     <div class="assess-card">
+      <h3>2026-09-26 — Post-merge validation of main 2f9337f (report only)</h3>
+      <p>Checked PR #30 (model readings) and PR #19 (options chain) after the merge. Suite: base 1489 passed / 3.11 1491 passed, 4 skipped each. With no Groq key the readings report <code>off</code> and the rule labels are unchanged. Mocked Groq: confidence below 0.6 does not colour an event, rules win when they fire, and a 429 or error leaves the rule labels intact. Live (one call each): the research note parsed fine in 2.3 s with no truncation, and a 5-headline batch returned 5 of 5 readings in 1.4 s. No bugs found. The readings are still untested against later prices.</p>
+    </div>
+    <div class="assess-card">
+      <h3>2026-09-25 — Post-merge validation of main 19f8841 (report only)</h3>
+      <p>Suite: base 1484 passed / 3.11 1486 passed, 1 skipped each; CI green. The scenario-fan figure is deterministic (same sha256 across processes and commits). Phase 13.1 reproduces its committed JSON exactly, but with n=0 directional reads, so its INCONCLUSIVE verdict means "no data yet". No bugs found.</p>
+    </div>
+    <div class="assess-card">
       <h3>2026-09-26 — Phase 9.3 re-run (7 days of collected data)</h3>
       <p>Re-ran <code>training_ground/experiments_9_3_collected.py</code> (no protocol change) on the Kalshi collector DB: 1264 snapshots, 962 resolved markets, 2026-09-19 to 2026-09-26. After the two-sided-book filter: 919 markets / 309 events.</p>
       <p><strong>L (longshots, ask &lt;= 0.10):</strong> n=356 (189 events), CI97.5 [−0.035, +0.030]. Verdict: <strong>no evidence</strong> of overpricing (CI crosses zero, halves opposite sign).</p>

@@ -86,6 +86,24 @@ Owner asked why every event reads unclear. The rule-based label can only be dire
 
 Live check (10 real BTC headlines, two runs): 10 of 10 labelled in about 3 s. Known weakness: the model still reads some price-move headlines ("Bitcoin Surges Past $87,000 ...") as bullish although the prompt tells it not to, i.e. it partly echoes the move that already happened. The labels have not been tested against later price moves; a pre-registered test would need the labels logged going forward (scoring past events with a model trained later can leak outcomes).
 
+## 2026-09-25 — post-merge validation of main 19f8841 (report only)
+
+Throwaway worktree on main after the owner merged #16, #17, #18, #20, #25 and #26. Full suite: base env 1484 passed, 3.11 env 1486
+passed (1 skipped each); main CI green. The Market Context scenario-fan figure is deterministic (same sha256 across two processes
+and commits). `training_ground/experiments_13_1.py` reproduces the committed `phase_13_1.json` exactly (only `run_at` differs), but
+that result has n=0 directional reads, so its INCONCLUSIVE verdict means "no data yet", not "tested and failed". No bugs found.
+
+## 2026-09-26 — post-merge validation of main 2f9337f (PR #30 model readings, PR #19 options chain; report only)
+
+- **Suite:** base env 1489 passed, 4 skipped; 3.11 env 1491 passed, 4 skipped (was 1484/1486 with 1 skipped on 19f8841).
+- **Groq key unset:** model readings report status `off`, rule labels unchanged, no model-reading field added, no network call.
+- **Mocked Groq:** a reading with confidence 0.59 does not colour an event; a firing rule beats a 0.99 model reading; a 429 or
+  a connection error leaves the rule labels intact (existing tests in `tests/test_news_context.py` / `tests/test_ai_research.py`
+  plus scratch checks).
+- **Live Groq (one call each):** on-demand research note parsed fine in 2.3 s with all expected keys, no truncation, so the
+  max_tokens fix holds. A 5-headline model-readings batch returned 5 of 5 readings in 1.4 s.
+- No bugs found. This checks plumbing only; the model readings are still untested against later price moves.
+
 ## 2026-09-26 — Phase 9.3 re-run (7 days of collected data)
 
 Ran `training_ground/experiments_9_3_collected.py` with the main checkout's Kalshi DB (1264 snapshots, 962 resolved,
