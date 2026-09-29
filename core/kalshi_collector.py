@@ -6,6 +6,7 @@ without depending on the API's short settled-history window.
 
     python -m core.kalshi_collector collect     # snapshot open, liquid, two-sided markets closing soon
     python -m core.kalshi_collector resolve     # fetch results for snapshotted markets that have settled
+                                                # (exits 3 with a WARN line if any lookup failed)
     python -m core.kalshi_collector status
 
 Storage: SQLite, default ``training_ground/datasets/kalshi_snapshots.sqlite3`` (env ``KALSHI_DB_PATH``).
@@ -117,6 +118,9 @@ def status(db_path: Optional[str] = None) -> Dict[str, object]:
     return {"snapshots": n, "markets": mk, "first": t0, "last": t1, "days": days, "resolved_markets": res, "labelled_snapshots": labelled}
 
 
+RESOLVE_ERRORS_RC = 3  # `resolve` exit code when any market lookup failed
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["collect", "resolve", "status"])
@@ -129,6 +133,11 @@ def main(argv=None) -> int:
     client = KalshiClient()
     out = collect(client, args.db) if args.cmd == "collect" else resolve(client, args.db)
     print(out)
+    if args.cmd == "resolve" and out["errors"] > 0:
+        # Lookups that failed are retried next run, but say so (and exit non-zero) so the collector log shows it.
+        # Pending (closed, not yet settled) is normal and is not an error.
+        print(f"WARN kalshi resolve: {out['errors']} lookup error(s); those markets stay unresolved until the next run")
+        return RESOLVE_ERRORS_RC
     return 0
 
 

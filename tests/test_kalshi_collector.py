@@ -63,3 +63,28 @@ def test_resolve_survives_api_errors(tmp_path):
 
 def test_status_on_empty_db(tmp_path):
     assert kc.status(str(tmp_path / "e.db"))["snapshots"] == 0
+
+
+def _main_resolve(monkeypatch, tmp_path, capsys, route):
+    db = str(tmp_path / "k.db")
+    kc.collect(client({"/markets": FakeResp(payload={"markets": [mk("A", close_h=-1)], "cursor": ""})}), db,
+               now=NOW - timedelta(hours=2))
+    monkeypatch.setattr(kc, "KalshiClient", lambda: client({"/markets/A": route}))
+    rc = kc.main(["resolve", "--db", db])
+    return rc, capsys.readouterr().out
+
+
+def test_main_resolve_exits_nonzero_with_warning_on_lookup_errors(monkeypatch, tmp_path, capsys):
+    rc, out = _main_resolve(monkeypatch, tmp_path, capsys, FakeResp(404))
+    assert rc == kc.RESOLVE_ERRORS_RC == 3
+    assert "WARN kalshi resolve: 1 lookup error" in out
+
+
+def test_main_resolve_pending_only_is_not_an_error(monkeypatch, tmp_path, capsys):
+    rc, out = _main_resolve(monkeypatch, tmp_path, capsys, FakeResp(payload={"market": raw("A", result="", status="closed")}))
+    assert rc == 0 and "'pending': 1" in out and "WARN" not in out
+
+
+def test_main_resolve_clean_run_exits_zero(monkeypatch, tmp_path, capsys):
+    rc, out = _main_resolve(monkeypatch, tmp_path, capsys, FakeResp(payload={"market": raw("A", result="yes", status="finalized")}))
+    assert rc == 0 and "'resolved': 1" in out and "WARN" not in out
