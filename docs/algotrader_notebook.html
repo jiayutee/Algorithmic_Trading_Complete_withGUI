@@ -248,7 +248,7 @@
       <h1>AlgoTrader <span>Notebook</span></h1>
       <div class="subtitle">Sprint status + quant lessons — updated as we go, not a one-time snapshot</div>
     </div>
-    <div class="updated" id="updated-at">Last updated: 2026-09-26 — Phase 9.3 re-run (7 days collected data, F FINDING persists)</div>
+    <div class="updated" id="updated-at">Last updated: 2026-10-01 — PRs #31-#34 merged; post-merge validation of main 79eaaa9</div>
   </header>
 
   <nav class="tabs">
@@ -407,6 +407,11 @@
 
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
+    <div class="assess-card">
+      <h3>2026-10-01 — Post-merge validation of main 79eaaa9 (report only)</h3>
+      <p>The owner merged #31 (Phase 9.3 re-run, F FINDING recorded), #33 (Kalshi resolve exit code), #34 (news quality baseline) and #32 (overnight-schedule proposal, docs only). Suite: base 1499 passed, 1 skipped / 3.11 1501 passed, 1 skipped; main CI green. On a scratch copy with lookups forced to fail, Kalshi <code>resolve</code> printed its WARN line and exited 3 (canonical DB hash unchanged). The news baseline re-ran on a scratch copy: 1849 items, numbers within about 2 points of 09-30. No bugs found. The collectors pick up the rc=3 code from the 2026-10-02 07:05 run; Phase 9.4 (any execution) is not started.</p>
+      <p><a href="artifacts/post-merge-validation-79eaaa9-2026-10-01.md">Evidence and limitations</a></p>
+    </div>
     <div class="assess-card">
       <h3>2026-09-26 — Post-merge validation of main 2f9337f (report only)</h3>
       <p>Checked PR #30 (model readings) and PR #19 (options chain) after the merge. Suite: base 1489 passed / 3.11 1491 passed, 4 skipped each. With no Groq key the readings report <code>off</code> and the rule labels are unchanged. Mocked Groq: confidence below 0.6 does not colour an event, rules win when they fire, and a 429 or error leaves the rule labels intact. Live (one call each): the research note parsed fine in 2.3 s with no truncation, and a 5-headline batch returned 5 of 5 readings in 1.4 s. No bugs found. The readings are still untested against later prices.</p>
@@ -669,8 +674,18 @@
         <div class="pill progress">Evidence only</div>
       </div>
       <div class="phase-row">
+        <div class="phase-num">9.x</div>
+        <div><div class="phase-title">Kalshi resolve reports lookup errors</div><div class="phase-sub">2026-09-29 · <code>resolve</code> prints a WARN line and exits 3 when any lookup failed (closed-but-unsettled alone stays 0) · no change to logic/schema/labels · merged 2026-10-01 (PR #33) · collectors run it from 2026-10-02 07:05; live rc=3 only shows on a run with errors</div></div>
+        <div class="pill done">Merged</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">news</div>
+        <div><div class="phase-title">News quality baseline (report only)</div><div class="phase-sub">2026-09-30 · scratch-copy report: web-search sources store fetch time as publication time (duckduckgo 98%, brave 96%) · duckduckgo 58% exact duplicates · 58% of items untagged · batchy ingest · relevance not measured · merged 2026-10-01 (PR #34) · fix slice: proposal only</div></div>
+        <div class="pill done">Merged</div>
+      </div>
+      <div class="phase-row">
         <div class="phase-num">ops</div>
-        <div><div class="phase-title">Overnight outage follow-up: it was Mac sleep</div><div class="phase-sub">2026-09-28 · paper-runner stall 00:07→03:33 = lid closed, waits only count awake seconds · no code defect, no missing timeout · 14 DNS-hit Kalshi markets all resolved, none lost · overnight-schedule proposal (caffeinate + agenda polling + late alert) awaits owner decision</div></div>
+        <div><div class="phase-title">Overnight outage follow-up: it was Mac sleep</div><div class="phase-sub">2026-09-28 · paper-runner stall 00:07→03:33 = lid closed, waits only count awake seconds · no code defect, no missing timeout · 14 DNS-hit Kalshi markets all resolved, none lost · overnight-schedule proposal (caffeinate + agenda polling + late alert) merged 2026-10-01 (PR #32, docs only); no option chosen or applied yet</div></div>
         <div class="pill progress">Proposal</div>
       </div>
     </div>
