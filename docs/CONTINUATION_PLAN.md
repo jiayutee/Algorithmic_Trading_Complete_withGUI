@@ -86,6 +86,9 @@ Owner asked why every event reads unclear. The rule-based label can only be dire
 
 Live check (10 real BTC headlines, two runs): 10 of 10 labelled in about 3 s. Known weakness: the model still reads some price-move headlines ("Bitcoin Surges Past $87,000 ...") as bullish although the prompt tells it not to, i.e. it partly echoes the move that already happened. The labels have not been tested against later price moves; a pre-registered test would need the labels logged going forward (scoring past events with a model trained later can leak outcomes).
 
+## 2026-09-28 — DNS-outage follow-ups and overnight-schedule proposal (Day 93, report + proposal only)
+The paper runner's 09-28 00:07→03:33 heartbeat stall was **Mac sleep, not a defect**. The lid was closed from 09-27 16:54 to 09-28 11:25, and the runner's 300 s poll wait counts only awake seconds, which the 14 short DarkWakes supplied after about 3.4 h of wall time. The heartbeat (wall clock) correctly read about 12 256 s. No missing timeout was found. The 14 Kalshi markets that hit DNS errors on 09-27 all resolved on 09-28 07:13, so no data was lost; `resolve` exiting rc=0 despite errors is recorded as a visibility gap. 18 git worktrees were reported (nothing deleted). Evidence: [dns-outage-followups-2026-09-28.md](artifacts/dns-outage-followups-2026-09-28.md). The overnight misses have the same root cause. [Proposal](proposals/overnight_schedule_resilience.md) recommends a caffeinate window (on AC) + agenda polling in the work-loop + a "running late" Telegram. The owner decides; no schedule, launchd or pmset setting was changed.
+
 ## 2026-09-25 — post-merge validation of main 19f8841 (report only)
 
 Throwaway worktree on main after the owner merged #16, #17, #18, #20, #25 and #26. Full suite: base env 1484 passed, 3.11 env 1486
