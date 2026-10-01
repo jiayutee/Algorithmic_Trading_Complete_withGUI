@@ -1,6 +1,14 @@
-# Claude / Codex handoff — updated 2026-09-24
+# Claude / Codex handoff — updated 2026-10-01
 
-## Latest: first 8-candidate research loop evaluation (2026-09-24)
+## Latest: main 79eaaa9 after PRs #31-#34 (2026-10-01)
+The owner merged #31 (Phase 9.3 re-run, F FINDING), #33 (Kalshi `resolve` exits 3 on lookup errors), #34 (news quality
+baseline, report only) and #32 (overnight-schedule proposal, docs only). Post-merge validation found no bugs:
+[post-merge-validation-79eaaa9-2026-10-01.md](artifacts/post-merge-validation-79eaaa9-2026-10-01.md). The running checkout
+is on 79eaaa9, so collectors use the rc=3 code from 2026-10-02 07:05. Still open: owner picks an overnight-schedule option;
+news-quality fix slice is a proposal only ([news_quality_fix_slice.md](proposals/news_quality_fix_slice.md)); Phase 9.2
+HOLD (~4 weeks of snapshots); Phase 9.4 (execution) not started.
+
+## Previous: first 8-candidate research loop evaluation (2026-09-24)
 Ran the research loop (`python -m core.research_loop run`) against a **scratch copy** of the canonical experiment log (SHA-256 verified unchanged). All 8 candidates remain on trial — 0 promoted, 0 retired. Trend overlay reduces drawdown in all four variants but produces no Sharpe edge, consistent with the Phases 6.7-6.9 pre-registration. EMA Crossover is closest to promotion (all non-CI tests pass; CI lower –0.93 under the 99.375% Bonferroni level). Evidence in [artifacts/research-loop-8cand-2026-09-24.md](artifacts/research-loop-8cand-2026-09-24.md) and its JSON sibling. Canonical promote/retire state untouched; applying decisions is an owner decision.
 
 ## Previous: optional AI research on Market Context
