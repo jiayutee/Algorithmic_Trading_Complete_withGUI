@@ -248,7 +248,7 @@
       <h1>AlgoTrader <span>Notebook</span></h1>
       <div class="subtitle">Sprint status + quant lessons — updated as we go, not a one-time snapshot</div>
     </div>
-    <div class="updated" id="updated-at">Last updated: 2026-09-23 — AI research live smoke: retired Groq default model replaced</div>
+    <div class="updated" id="updated-at">Last updated: 2026-09-26 — Phase 9.3 re-run (7 days collected data, F FINDING persists)</div>
   </header>
 
   <nav class="tabs">
@@ -407,6 +407,22 @@
 
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
+    <div class="assess-card">
+      <h3>2026-09-26 — Post-merge validation of main 2f9337f (report only)</h3>
+      <p>Checked PR #30 (model readings) and PR #19 (options chain) after the merge. Suite: base 1489 passed / 3.11 1491 passed, 4 skipped each. With no Groq key the readings report <code>off</code> and the rule labels are unchanged. Mocked Groq: confidence below 0.6 does not colour an event, rules win when they fire, and a 429 or error leaves the rule labels intact. Live (one call each): the research note parsed fine in 2.3 s with no truncation, and a 5-headline batch returned 5 of 5 readings in 1.4 s. No bugs found. The readings are still untested against later prices.</p>
+    </div>
+    <div class="assess-card">
+      <h3>2026-09-25 — Post-merge validation of main 19f8841 (report only)</h3>
+      <p>Suite: base 1484 passed / 3.11 1486 passed, 1 skipped each; CI green. The scenario-fan figure is deterministic (same sha256 across processes and commits). Phase 13.1 reproduces its committed JSON exactly, but with n=0 directional reads, so its INCONCLUSIVE verdict means "no data yet". No bugs found.</p>
+    </div>
+    <div class="assess-card">
+      <h3>2026-09-26 — Phase 9.3 re-run (7 days of collected data)</h3>
+      <p>Re-ran <code>training_ground/experiments_9_3_collected.py</code> (no protocol change) on the Kalshi collector DB: 1264 snapshots, 962 resolved markets, 2026-09-19 to 2026-09-26. After the two-sided-book filter: 919 markets / 309 events.</p>
+      <p><strong>L (longshots, ask &lt;= 0.10):</strong> n=356 (189 events), CI97.5 [−0.035, +0.030]. Verdict: <strong>no evidence</strong> of overpricing (CI crosses zero, halves opposite sign).</p>
+      <p><strong>F (favorites, ask &gt;= 0.90):</strong> n=123 (71 events, up from 100/54), CI97.5 [+0.019, +0.027]. Verdict: <strong>FINDING</strong> — persists from the 09-23 run. F is 115/123 commodity markets (hourly diesel/gas). P(all 123 YES&nbsp;|&nbsp;fairly priced, independence)&nbsp;= 0.058. <em>Bootstrap CI is degenerate</em> (100% hit rate; reflects only the ask spread, not binomial uncertainty). Interpretation of F is the owner&apos;s call.</p>
+      <p>Analysis only. Phase 9.2 stays on HOLD. No execution path exists or is implied.</p>
+      <p><a href="artifacts/kalshi-9-3-rerun-2026-09-26.md">Evidence and limitations</a></p>
+    </div>
     <div class="assess-card">
       <h3>2026-09-23 — AI research live smoke (Groq key now set)</h3>
       <p>First real call failed: HTTP 404 because Groq no longer serves the default model <code>llama-3.3-70b-versatile</code>, so the keyed feature still showed nothing. The key itself is valid. One verification call with <code>openai/gpt-oss-120b</code> worked (HTTP 200, 1.9 s), and the AI note rendered next to the unchanged deterministic reading. PR changes the default model only.</p>
@@ -639,7 +655,7 @@
       </div>
       <div class="phase-row">
         <div class="phase-num">9</div>
-        <div><div class="phase-title">Kalshi mispricing engine</div><div class="phase-sub">9.0 read-only client + 9.1 arbitrage signals + 9.3a calibration study + snapshot collector shipped 2026-09-19 · no arbitrage found, no longshot mispricing found · 9.2 not built · no order path exists</div></div>
+        <div><div class="phase-title">Kalshi mispricing engine</div><div class="phase-sub">9.0 read-only client + 9.1 arbitrage signals + 9.3a calibration study + snapshot collector shipped 2026-09-19 · no arbitrage found · L: no longshot mispricing · F: FINDING (favorites, 123/123 YES, 7-day re-run 2026-09-26; commodity-dominated, degenerate CI, caveats apply) · 9.2 not built · no order path exists</div></div>
         <div class="pill progress">In progress</div>
       </div>
       <div class="phase-row">

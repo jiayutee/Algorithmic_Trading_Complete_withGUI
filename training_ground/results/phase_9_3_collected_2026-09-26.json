@@ -1,0 +1,178 @@
+{
+  "run_at": "2026-09-26T22:59:52.737416+00:00",
+  "n_markets": 919,
+  "n_events": 309,
+  "window": [
+    "2026-09-20 03:59:00",
+    "2026-09-26 11:00:00"
+  ],
+  "dropped": 0,
+  "dropped_one_sided": 0,
+  "hypotheses": [
+    {
+      "id": "L longshots (ask<=0.10): mean edge < 0",
+      "n_markets": 356,
+      "n_events": 189,
+      "mean_edge": -0.007640449438202255,
+      "mean_net": -0.007640449438202255,
+      "tradable_mean_net": -0.022387640449438185,
+      "tradable_ci": [
+        -0.05952833723653394,
+        0.004647253692676529
+      ],
+      "TRADABLE": false,
+      "mean_ask": 0.04415730337078652,
+      "hit_rate": 0.03651685393258427,
+      "ci": [
+        -0.03513231491377436,
+        0.030014749022164208
+      ],
+      "halves": [
+        0.004263157894736842,
+        -0.021265060240963855
+      ],
+      "criteria": {
+        "1_ci_excludes_zero_in_claimed_direction": false,
+        "2_same_sign_both_halves": false,
+        "3_enough_data": true,
+        "FINDING": false
+      },
+      "underpowered": false,
+      "verdict": "no evidence",
+      "exploratory_calibrated_tail": {
+        "hits": 13,
+        "n": 356,
+        "expected_hits_if_calibrated": 15.720000000000002,
+        "p_at_least_as_extreme": 0.29082022243299577,
+        "note": "exploratory; assumes independent markets (they are event-clustered); not a pre-registered test"
+      }
+    },
+    {
+      "id": "F favorites (ask>=0.90): mean edge > 0",
+      "n_markets": 123,
+      "n_events": 71,
+      "mean_edge": 0.022682926829268302,
+      "mean_net": 0.022682926829268302,
+      "tradable_mean_net": 0.012682926829268302,
+      "tradable_ci": [
+        0.008649622560888776,
+        0.017203693693693706
+      ],
+      "TRADABLE": true,
+      "mean_ask": 0.9773170731707318,
+      "hit_rate": 1.0,
+      "ci": [
+        0.018649622560888774,
+        0.027203693693693704
+      ],
+      "halves": [
+        0.021234567901234583,
+        0.02547619047619049
+      ],
+      "criteria": {
+        "1_ci_excludes_zero_in_claimed_direction": true,
+        "2_same_sign_both_halves": true,
+        "3_enough_data": true,
+        "FINDING": true
+      },
+      "underpowered": false,
+      "verdict": "FINDING",
+      "exploratory_calibrated_tail": {
+        "hits": 123,
+        "n": 123,
+        "expected_hits_if_calibrated": 120.21000000000001,
+        "p_at_least_as_extreme": 0.057737278279990624,
+        "note": "exploratory; assumes independent markets (they are event-clustered); not a pre-registered test"
+      }
+    }
+  ],
+  "calibration": [
+    {
+      "bucket": "(-0.001, 0.1]",
+      "n": 356,
+      "mean_ask": 0.04415730337078652,
+      "hit_rate": 0.03651685393258427
+    },
+    {
+      "bucket": "(0.1, 0.2]",
+      "n": 131,
+      "mean_ask": 0.14824427480916033,
+      "hit_rate": 0.11450381679389313
+    },
+    {
+      "bucket": "(0.2, 0.3]",
+      "n": 71,
+      "mean_ask": 0.25380281690140843,
+      "hit_rate": 0.22535211267605634
+    },
+    {
+      "bucket": "(0.3, 0.4]",
+      "n": 75,
+      "mean_ask": 0.3548,
+      "hit_rate": 0.4666666666666667
+    },
+    {
+      "bucket": "(0.4, 0.5]",
+      "n": 53,
+      "mean_ask": 0.4583018867924528,
+      "hit_rate": 0.39622641509433965
+    },
+    {
+      "bucket": "(0.5, 0.6]",
+      "n": 42,
+      "mean_ask": 0.549047619047619,
+      "hit_rate": 0.5
+    },
+    {
+      "bucket": "(0.6, 0.7]",
+      "n": 23,
+      "mean_ask": 0.6556521739130435,
+      "hit_rate": 0.5652173913043478
+    },
+    {
+      "bucket": "(0.7, 0.8]",
+      "n": 15,
+      "mean_ask": 0.7686666666666667,
+      "hit_rate": 0.8666666666666667
+    },
+    {
+      "bucket": "(0.8, 0.9]",
+      "n": 34,
+      "mean_ask": 0.8573529411764705,
+      "hit_rate": 0.8823529411764706
+    },
+    {
+      "bucket": "(0.9, 1.0]",
+      "n": 119,
+      "mean_ask": 0.9799159663865546,
+      "hit_rate": 1.0
+    }
+  ],
+  "protocol": {
+    "min_volume": 100.0,
+    "min_life_h": 3.0,
+    "sample": 800,
+    "lead_h": 2.0,
+    "longshot": 0.1,
+    "favorite": 0.9,
+    "level": 0.975,
+    "n_boot": 5000,
+    "seed": 0
+  },
+  "source": "core.kalshi_collector snapshots (one per resolved market, last at or before close - 2h)",
+  "resolved_markets": 962,
+  "markets_without_usable_snapshot": 43,
+  "lead_h": {
+    "mean": 32.84790140249063,
+    "min": 5.915,
+    "25%": 12.899166666666666,
+    "50%": 37.91583333333333,
+    "75%": 40.91583333333333,
+    "max": 68.9161111111111
+  },
+  "protocol_deviations": [
+    "lead time is 5.9-68.9h before close (median 37.9h), not ~2h: a longer-lead calibration, not a replica of 9.3a",
+    "no random 800-market sample and no open>=3h filter (open time not stored): all resolved markets used",
+    "one clustered window: markets closing 2026-09-20..21, mostly short-lived sports/commodity markets"
+  ]
+}
