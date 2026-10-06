@@ -6,7 +6,8 @@ without depending on the API's short settled-history window.
 
     python -m core.kalshi_collector collect     # snapshot open, liquid, two-sided markets closing soon
     python -m core.kalshi_collector resolve     # fetch results for snapshotted markets that have settled
-                                                # (exits 3 with a WARN line if any lookup failed)
+                                                # (exits 3 with a WARN line if any lookup failed; stops early
+                                                #  after 3 lookups in a row cannot connect, e.g. no DNS)
     python -m core.kalshi_collector status
 
 Storage: SQLite, default ``training_ground/datasets/kalshi_snapshots.sqlite3`` (env ``KALSHI_DB_PATH``).
@@ -23,6 +24,8 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
+import requests
+
 from core.kalshi_data import KalshiClient, KalshiError, Market
 from core.logger import logger
 
@@ -30,6 +33,7 @@ DEFAULT_DB = os.path.join("training_ground", "datasets", "kalshi_snapshots.sqlit
 MIN_VOLUME = 100.0
 MIN_BID, MAX_SPREAD = 0.01, 0.10        # same real-two-sided-book rule as Phase 9.3a (Amendment 2)
 HORIZON_H = 72                           # only markets closing within this window (cheap, and near-settlement is the interesting part)
+MAX_CONSECUTIVE_CONN_FAILURES = 3        # resolve stops after this many lookups in a row fail to connect (no network/DNS)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots(
@@ -84,29 +88,47 @@ def collect(client: KalshiClient, db_path: Optional[str] = None, *, max_markets:
     return {"scanned": scanned, "stored": kept}
 
 
+def _is_connection_failure(exc: KalshiError) -> bool:
+    """True when the lookup never reached the API (DNS, refused, unreachable), as opposed to an HTTP-level error."""
+    return isinstance(exc.__cause__, requests.ConnectionError)
+
+
 def resolve(client: KalshiClient, db_path: Optional[str] = None, *, max_lookups: int = 500,
-            now: Optional[datetime] = None) -> Dict[str, int]:
-    """For snapshotted markets already past close and without a stored outcome, ask the API for the result."""
+            now: Optional[datetime] = None,
+            max_conn_failures: int = MAX_CONSECUTIVE_CONN_FAILURES) -> Dict[str, int]:
+    """For snapshotted markets already past close and without a stored outcome, ask the API for the result.
+
+    If ``max_conn_failures`` lookups in a row cannot connect at all (e.g. the Mac is in a sleep DarkWake with no DNS),
+    the run stops early instead of grinding through every market; the untried ones are counted as ``skipped`` and,
+    like failed lookups, stay unresolved for the next run.
+    """
     now = now or datetime.now(timezone.utc)
     cutoff = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    resolved = pending = errors = 0
+    resolved = pending = errors = skipped = conn_streak = 0
     with closing(_connect(db_path)) as con:
         rows = con.execute("""SELECT DISTINCT s.ticker FROM snapshots s LEFT JOIN outcomes o ON o.ticker = s.ticker
                               WHERE o.ticker IS NULL AND s.close_time <= ? LIMIT ?""", (cutoff, max_lookups)).fetchall()
-        for (ticker,) in rows:
+        for i, (ticker,) in enumerate(rows):
             try:
                 m = client.get_market(ticker)
             except KalshiError as exc:
                 errors += 1
                 logger.warning("Kalshi resolve: %s (%s)", ticker, exc)
+                conn_streak = conn_streak + 1 if _is_connection_failure(exc) else 0
+                if max_conn_failures and conn_streak >= max_conn_failures:
+                    skipped = len(rows) - i - 1
+                    logger.warning("Kalshi resolve: %d lookups in a row could not connect; stopping early, "
+                                   "%d market(s) not tried this run", conn_streak, skipped)
+                    break
                 continue
+            conn_streak = 0
             if m.result is None:
                 pending += 1                       # closed but not settled yet: try again next run
                 continue
             con.execute("INSERT OR REPLACE INTO outcomes VALUES (?,?,?)", (ticker, int(m.result), cutoff))
             resolved += 1
         con.commit()
-    return {"resolved": resolved, "pending": pending, "errors": errors}
+    return {"resolved": resolved, "pending": pending, "errors": errors, "skipped": skipped}
 
 
 def status(db_path: Optional[str] = None) -> Dict[str, object]:
@@ -136,7 +158,8 @@ def main(argv=None) -> int:
     if args.cmd == "resolve" and out["errors"] > 0:
         # Lookups that failed are retried next run, but say so (and exit non-zero) so the collector log shows it.
         # Pending (closed, not yet settled) is normal and is not an error.
-        print(f"WARN kalshi resolve: {out['errors']} lookup error(s); those markets stay unresolved until the next run")
+        note = f", stopped early ({out['skipped']} not tried: no connection)" if out.get("skipped") else ""
+        print(f"WARN kalshi resolve: {out['errors']} lookup error(s){note}; those markets stay unresolved until the next run")
         return RESOLVE_ERRORS_RC
     return 0
 
