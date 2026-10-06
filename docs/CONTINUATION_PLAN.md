@@ -13,7 +13,7 @@ The live probe delivered five raw items per symbol, all from OpenBB. Brave and D
 
 ## Remaining work, in recommended order
 1. **Provider failure visibility** — *implemented and tested on branch `orchestrator/day85-news-failure-visibility` (PR pending review, not merged/deployed, 2026-09-20):* adapters now classify `ok_empty` / `rate_limited` / `auth_failed` / `parse_error` / `timeout` / `error`, surfaced via the health registry, `source_status()` and the smoke report; offline fixtures added; probe repeated ([evidence](artifacts/news-failure-classification-2026-09-20.md)). **Still open:** the 6 s shared deadline hides the adapter's own cause for the slow sources (brave/rss/gdelt), OpenBB classification is best-effort, and DuckDuckGo CAPTCHA pages read as empty.
-2. **News quality baseline:** measure symbol relevance, duplicate rate, publication freshness, coverage and latency on representative equities/crypto. Compare an explicitly selected paid feed against that baseline before buying or integrating it. No paid feed evaluation has been completed.
+2. **News quality baseline** — *first slice merged 2026-10-01 (PR #34, report only; see the 2026-09-30 entry below); fix slice proposed, not implemented:* measure symbol relevance, duplicate rate, publication freshness, coverage and latency on representative equities/crypto. Compare an explicitly selected paid feed against that baseline before buying or integrating it. No paid feed evaluation has been completed.
 3. **Sentiment and news research:** build labeled evaluation and sufficient point-in-time news history; test incremental out-of-sample value after costs. Current diagnostics neither validate sentiment nor establish a tradable news signal.
 4. **Paper operations:** inspect the existing execution status UI before adding persistent alerts, protective paper stop rules and multi-strategy allocation. Preserve one runner, idempotency, entry blocks that permit exits, and paper-only defaults.
 5. **Research automation:** finish scheduling and reviewed promotion-to-paper linkage from Phase 12; retain holdout/cost gates and full experiment provenance. Existing quant methods and paper execution already exist; profitability remains unproven.
@@ -122,3 +122,25 @@ new output: `training_ground/results/phase_9_3_collected_2026-09-26.json`.
   P(all 123 YES | fairly priced, independence) = 0.058. Bootstrap CI is degenerate (100% hit rate reflects only ask spread).
 - Phase 9.2 stays on HOLD. This is analysis only; no execution path exists or is implied. Interpretation of F is the owner's call.
 - Evidence: `training_ground/results/phase_9_3_collected_2026-09-26.json` and `docs/artifacts/kalshi-9-3-rerun-2026-09-26.md`.
+- **Status (2026-10-01):** merged by the owner (PR #31). Analysis only; Phase 9.4 (any execution) not started.
+
+## 2026-09-29 — Kalshi resolve reports lookup errors (Day 94)
+`python -m core.kalshi_collector resolve` now prints `WARN kalshi resolve: N lookup error(s)` and exits 3 when any market
+lookup failed (closed-but-unsettled markets alone stay rc=0). No change to resolve logic, schema or labels. 3 new tests.
+**Implemented, tested, merged 2026-10-01 (PR #33).** The running checkout is on main, so the 07:05/12:05/17:05 collector
+runs use it from 2026-10-02; a live `END rc=3` will only appear on a run that has errors. Evidence:
+[kalshi-resolve-exit-code-2026-09-29.md](artifacts/kalshi-resolve-exit-code-2026-09-29.md).
+
+## 2026-09-30 — news quality baseline (Day 95, report only)
+`scripts/news_quality_baseline.py` reads a scratch copy of the news store (read-only) and reports duplicates, publication
+freshness, coverage and lag per source and symbol. Findings: web-search sources (duckduckgo 98%, brave 96%) store the
+fetch time as publication time; duckduckgo is 58% exact duplicates; 58% of items have no symbol; ingest is batchy
+(27 of 129 days). Symbol relevance was not measured (needs labels). **Implemented, tested, merged 2026-10-01 (PR #34).**
+Nothing to deploy (report tool). Evidence: [news-quality-baseline-2026-09-30.md](artifacts/news-quality-baseline-2026-09-30.md).
+Next: the fix-slice proposal in `docs/proposals/news_quality_fix_slice.md` (proposal only).
+
+## 2026-10-01 — post-merge validation of main 79eaaa9 (Day 96, report only)
+After the owner merged #31, #32, #33 and #34: base env 1499 passed, 1 skipped; 3.11 env 1501 passed, 1 skipped; main CI 36921635059 success.
+Kalshi resolve on a scratch copy with forced lookup failures printed the WARN line and exited 3 (canonical DB hash
+unchanged). The news baseline re-ran on a scratch copy (1849 items; numbers within ~2 points of 09-30; canonical hash
+unchanged by the run). No bugs found. Evidence: [post-merge-validation-79eaaa9-2026-10-01.md](artifacts/post-merge-validation-79eaaa9-2026-10-01.md).
