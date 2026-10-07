@@ -248,7 +248,7 @@
       <h1>AlgoTrader <span>Notebook</span></h1>
       <div class="subtitle">Sprint status + quant lessons — updated as we go, not a one-time snapshot</div>
     </div>
-    <div class="updated" id="updated-at">Last updated: 2026-10-01 — PRs #31-#34 merged; post-merge validation of main 79eaaa9</div>
+    <div class="updated" id="updated-at">Last updated: 2026-10-07 — PRs #35-#37 merged; Kalshi fail-fast live; post-merge validation of main 47a9ded</div>
   </header>
 
   <nav class="tabs">
@@ -407,6 +407,11 @@
 
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
+    <div class="assess-card">
+      <h3>2026-10-07 — Post-merge validation of main 47a9ded (report only)</h3>
+      <p>The owner merged #35 (79eaaa9 validation evidence and the news-quality fix slice 1 <em>proposal</em>), #36 (Kalshi <code>resolve</code> fail-fast) and #37 (read-only paper execution audit) on 2026-10-06. Base 1503 passed / 3.11 1505 passed (1 skipped each); main CI green. #36 is deployed: on 2026-10-07 the 17:09 resolve stopped early at 18:34:08 (61 markets skipped, rc=3); the 07:11 resolve did not trip (81 min, rc=3) because its failures were not consecutive across sleep. Limits: the 07:05 <code>collect</code> slot is still lost when the Mac sleeps on battery (10-05, 10-06, 10-07); that waits on the owner's overnight/sleep decision. The Day 98 audit fixes and news slice 1 are not implemented.</p>
+      <p><a href="artifacts/kalshi-collector-outage-2026-10-02.md">Kalshi evidence</a> · <a href="artifacts/paper-execution-audit-2026-10-03.md">Paper audit</a></p>
+    </div>
     <div class="assess-card">
       <h3>2026-10-01 — Post-merge validation of main 79eaaa9 (report only)</h3>
       <p>The owner merged #31 (Phase 9.3 re-run, F FINDING recorded), #33 (Kalshi resolve exit code), #34 (news quality baseline) and #32 (overnight-schedule proposal, docs only). Suite: base 1499 passed, 1 skipped / 3.11 1501 passed, 1 skipped; main CI green. On a scratch copy with lookups forced to fail, Kalshi <code>resolve</code> printed its WARN line and exited 3 (canonical DB hash unchanged). The news baseline re-ran on a scratch copy: 1849 items, numbers within about 2 points of 09-30. No bugs found. The collectors pick up the rc=3 code from the 2026-10-02 07:05 run; Phase 9.4 (any execution) is not started.</p>
@@ -671,6 +676,16 @@
       <div class="phase-row">
         <div class="phase-num">12.1</div>
         <div><div class="phase-title">First 8-candidate evaluation (scratch copy)</div><div class="phase-sub">2026-09-24 · 4 base + 4 trend-filtered variants · 0 promoted, 0 retired · trend overlay confirmed drawdown reduction in all variants, no Sharpe edge · EMA Crossover closest (CI lower –0.93 still below zero) · canonical state untouched; applying decisions is owner decision</div></div>
+        <div class="pill progress">Evidence only</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">9.x</div>
+        <div><div class="phase-title">Kalshi resolve fail-fast on connection failures</div><div class="phase-sub">2026-10-02 · cause of the 10-02 loss: clamshell sleep on battery, launchd ran missed jobs in DarkWakes with no DNS · <code>resolve</code> stops after 3 consecutive connection failures, reports <code>skipped</code>, rc=3 kept · merged 2026-10-06 (PR #36), deployed · first live trip 2026-10-07 18:34 (61 skipped) · collect-on-wake loss not fixed (schedule decision)</div></div>
+        <div class="pill done">Merged</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">exec</div>
+        <div><div class="phase-title">Paper execution status audit (read only)</div><div class="phase-sub">2026-10-03 · runner healthy, journal consistent · findings: stale risk baselines (entry limits looser than documented, exits unaffected), no BNBUSDT Yahoo fallback, Binance error text not logged · merged 2026-10-06 (PR #37, docs only) · fixes are owner decisions, not implemented</div></div>
         <div class="pill progress">Evidence only</div>
       </div>
       <div class="phase-row">
