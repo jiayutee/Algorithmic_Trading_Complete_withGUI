@@ -144,3 +144,22 @@ After the owner merged #31, #32, #33 and #34: base env 1499 passed, 1 skipped; 3
 Kalshi resolve on a scratch copy with forced lookup failures printed the WARN line and exited 3 (canonical DB hash
 unchanged). The news baseline re-ran on a scratch copy (1849 items; numbers within ~2 points of 09-30; canonical hash
 unchanged by the run). No bugs found. Evidence: [post-merge-validation-79eaaa9-2026-10-01.md](artifacts/post-merge-validation-79eaaa9-2026-10-01.md).
+
+## 2026-10-02 to 2026-10-07 — Kalshi fail-fast, paper audit, merges (Days 97-102)
+- **Kalshi resolve fail-fast (Day 97, PR #36).** Cause of the 2026-10-02 loss: the Mac was in clamshell sleep on battery,
+  launchd ran the missed jobs in DarkWakes with no DNS, so `collect` failed (rc=1) and `resolve` spent hours asleep between
+  failing lookups. Fix: `resolve` stops after 3 consecutive connection failures and reports a `skipped` count (rc=3 + WARN
+  kept). **Implemented, tested, merged 2026-10-06, deployed** (the running checkout is on main). First live result
+  2026-10-07: the 17:09 resolve stopped early at 18:34:08 (61 markets skipped, rc=3). The 07:11 resolve did not trip
+  (81 min, rc=3) because its failures were not consecutive across sleep. Evidence:
+  [kalshi-collector-outage-2026-10-02.md](artifacts/kalshi-collector-outage-2026-10-02.md).
+- **Paper execution status audit (Day 98, PR #37, read only).** Runner healthy, journal consistent. Findings, none fixed:
+  risk baselines go stale (drawdown and daily-loss entry limits are looser than documented; exits unaffected), BNBUSDT has
+  no Yahoo fallback, and Binance first-fetch errors are logged without the exception text. **Merged 2026-10-06 (docs only).**
+  The fixes are an owner decision. Evidence: [paper-execution-audit-2026-10-03.md](artifacts/paper-execution-audit-2026-10-03.md).
+- **Post-merge validation of main 47a9ded (Day 102, report only).** After #35, #36 and #37 merged: base 1503 passed / 3.11 1505 passed
+  (1 skipped each), main CI success for 47a9ded.
+- **Limitations that remain:** the 07:05 `collect` slot is still lost when the Mac sleeps on battery (10-05, 10-06, 10-07
+  all rc=1 on DNS at wake). #36 only bounds `resolve`; collect-on-wake belongs with the overnight/sleep resilience
+  decision. The fail-fast only catches *consecutive* failures. The news-quality fix slice 1 is merged as a proposal
+  (#35), not implemented.
