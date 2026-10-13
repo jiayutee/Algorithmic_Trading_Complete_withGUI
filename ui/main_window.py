@@ -1576,10 +1576,6 @@ class MainWindow(QMainWindow):
         """Unified backtest entry point called by background thread worker usually."""
         return self._run_unified_backtest()
 
-    def _run_backtest_logic_with_broker(self, broker):
-        """Unified backtest entry point with broker called by background thread worker."""
-        return self._run_unified_backtest(broker=broker)
-
     def _run_unified_backtest(self, broker=None):
         strategy_name = self.strategy_combo.currentText()
         logger.debug("Strategy name: %s", strategy_name)
@@ -1642,32 +1638,11 @@ class MainWindow(QMainWindow):
 
     def run_backtest(self):
         try:
-            backtest_broker = self.broker_manager.get_broker("Simulator")
-
-            if not backtest_broker:
-                self.statusBar().showMessage("Simulator not available")
-                return
-
-            initial_cash = float(self.cash_input.text())
-
-            backtest_broker = self.broker_manager.get_broker("Simulator")
-            backtest_broker.balance = initial_cash
-            backtest_broker.initial_balance = initial_cash
-            backtest_broker.portfolio_value = initial_cash
-            backtest_broker.positions = {}
-            backtest_broker.order_history = []
-            backtest_broker.closed_positions = []
-            backtest_broker.orders = {}
-
-            try:
-                backtest_broker.market_fee = float(self.market_fee_input.text()) / 100.0
-                backtest_broker.limit_fee = float(self.limit_fee_input.text()) / 100.0
-            except ValueError:
-                pass
-
-            logger.debug("Broker reset: Balance=$%.2f, Orders=%d", backtest_broker.balance, len(backtest_broker.order_history))
-
-            results = self._run_backtest_logic_with_broker(backtest_broker)
+            # The backtest runs on backtrader's own in-memory broker (cash/fees come from the inputs), so no app
+            # broker is needed. Never borrow the Simulator here: in the app it is the durable paper account shared
+            # with Dash and the paper execution service, and resetting it would wipe its positions/orders on screen
+            # and leak the backtest fees into the next real paper order.
+            results = self._run_backtest_logic()
             if results is False:
                 return
 
@@ -1707,12 +1682,7 @@ class MainWindow(QMainWindow):
             self.plot_signals(results.get('signals', []))
             self._show_equity_curve(results.get('total_asset_value', []))
 
-            if 'Final Value' in summary:
-                 backtest_broker.balance = float(summary['Final Value'])
-                 backtest_broker.portfolio_value = float(summary['Final Value'])
-
-            self.current_broker = backtest_broker
-            self.refresh_account_info()
+            self.refresh_account_info()   # Account panel stays on the selected broker
 
             logger.info("BACKTEST RESULTS: %s", summary)
 

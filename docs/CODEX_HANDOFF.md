@@ -1,6 +1,17 @@
-# Claude / Codex handoff — updated 2026-10-01
+# Claude / Codex handoff — updated 2026-10-14
 
-## Latest: main 79eaaa9 after PRs #31-#34 (2026-10-01)
+## Latest: desktop backtest isolated from the paper account (2026-10-14, PR open)
+Branch `claude/elastic-kalam-772fd4` from main `47a9ded`. `MainWindow.run_backtest()` no longer borrows and overwrites
+the durable paper Simulator, and it no longer switches the Account panel to it. Reproduced first on a scratch
+`PAPER_ACCOUNT_PATH`: in memory the positions and orders were wiped and the balance showed the backtest's Final Value; the
+sqlite file kept its positions and orders. The backtest fee, though, was charged on the next paper order and persisted.
+Regression test `tests/test_backtest_paper_isolation.py` (PyQt5 offscreen; skips in CI). Base suite 1505 passed,
+1 skipped. Implemented and tested; not merged, not deployed. Evidence:
+[desktop-backtest-paper-isolation-2026-10-14.md](artifacts/desktop-backtest-paper-isolation-2026-10-14.md).
+Follow-ups (not done): reload fees in `SimulatedBroker._load_from_store_locked`; look at the intermittent
+`test_two_processes_share_one_account` failure.
+
+## Previous: main 79eaaa9 after PRs #31-#34 (2026-10-01)
 The owner merged #31 (Phase 9.3 re-run, F FINDING), #33 (Kalshi `resolve` exits 3 on lookup errors), #34 (news quality
 baseline, report only) and #32 (overnight-schedule proposal, docs only). Post-merge validation found no bugs:
 [post-merge-validation-79eaaa9-2026-10-01.md](artifacts/post-merge-validation-79eaaa9-2026-10-01.md). The running checkout
