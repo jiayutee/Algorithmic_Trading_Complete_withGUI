@@ -408,6 +408,11 @@
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
     <div class="assess-card">
+      <h3>2026-10-13 — Design slice 1: safety and clarity (PR pending review)</h3>
+      <p>From the design review of both apps. The desktop and Dash headers now say which account an order hits (PAPER, DRY-RUN, LIVE, LIVE BLOCKED, NOT CONNECTED) and carry a one-click kill switch that both apps and scripts honour. The order ticket shows how old the price is, and BUY/SELL open a review with notional, fee, cash after and warnings before anything is sent. Positions became a table with a Close action. UI text moved from monospace to a sans font, with mono kept for numbers. Fixed along the way: the desktop broker selector did not change where orders went. 1530 passed, 1 skipped. The desktop was checked offscreen only; Dash was checked in a browser against a scratch account. Not merged, not deployed.</p>
+      <p><a href="artifacts/design-slice1-safety-clarity-2026-10-13.md">Evidence and limitations</a></p>
+    </div>
+    <div class="assess-card">
       <h3>2026-10-01 — Post-merge validation of main 79eaaa9 (report only)</h3>
       <p>The owner merged #31 (Phase 9.3 re-run, F FINDING recorded), #33 (Kalshi resolve exit code), #34 (news quality baseline) and #32 (overnight-schedule proposal, docs only). Suite: base 1499 passed, 1 skipped / 3.11 1501 passed, 1 skipped; main CI green. On a scratch copy with lookups forced to fail, Kalshi <code>resolve</code> printed its WARN line and exited 3 (canonical DB hash unchanged). The news baseline re-ran on a scratch copy: 1849 items, numbers within about 2 points of 09-30. No bugs found. The collectors pick up the rc=3 code from the 2026-10-02 07:05 run; Phase 9.4 (any execution) is not started.</p>
       <p><a href="artifacts/post-merge-validation-79eaaa9-2026-10-01.md">Evidence and limitations</a></p>
@@ -687,6 +692,11 @@
         <div class="phase-num">ops</div>
         <div><div class="phase-title">Overnight outage follow-up: it was Mac sleep</div><div class="phase-sub">2026-09-28 · paper-runner stall 00:07→03:33 = lid closed, waits only count awake seconds · no code defect, no missing timeout · 14 DNS-hit Kalshi markets all resolved, none lost · overnight-schedule proposal (caffeinate + agenda polling + late alert) merged 2026-10-01 (PR #32, docs only); no option chosen or applied yet</div></div>
         <div class="pill progress">Proposal</div>
+      </div>
+      <div class="phase-row">
+        <div class="phase-num">ui</div>
+        <div><div class="phase-title">Design slice 1: safety and clarity</div><div class="phase-sub">2026-10-13 · account-mode pill + kill switch in both headers · price age · review before every manual order · Positions table with Close · sans UI / mono numbers · desktop broker-selector fix · branch design/slice1-safety-clarity, PR pending review</div></div>
+        <div class="pill progress">In review</div>
       </div>
     </div>
 

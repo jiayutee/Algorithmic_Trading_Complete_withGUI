@@ -30,6 +30,7 @@ Design notes
 """
 
 import threading
+import time
 from typing import Callable, Dict, List, Optional
 
 from core.data_loader import DataLoader
@@ -84,6 +85,7 @@ class LivePriceService:
         self._loaders: Dict[str, object] = {}
         # symbol -> latest float price (None if no message received yet)
         self._price_cache: Dict[str, Optional[float]] = {}
+        self._price_time: Dict[str, float] = {}   # monotonic time of the last cached update, per symbol
         # symbol -> optional user callback (receives raw order-book dict)
         self._callbacks: Dict[str, Optional[Callable]] = {}
 
@@ -136,6 +138,7 @@ class LivePriceService:
                         # Only update if the symbol is still subscribed
                         if symbol in self._price_cache:
                             self._price_cache[symbol] = mid
+                            self._price_time[symbol] = time.monotonic()
                 except (IndexError, ValueError, TypeError):
                     pass
             user_cb = self._callbacks.get(symbol)
@@ -163,6 +166,7 @@ class LivePriceService:
                 if self._loaders.get(symbol) is _PENDING:
                     self._loaders.pop(symbol, None)
                     self._price_cache.pop(symbol, None)
+                    self._price_time.pop(symbol, None)
                     self._callbacks.pop(symbol, None)
             raise
 
@@ -181,6 +185,7 @@ class LivePriceService:
         with self._lock:
             loader = self._loaders.pop(symbol, None)
             self._price_cache.pop(symbol, None)
+            self._price_time.pop(symbol, None)
             self._callbacks.pop(symbol, None)
 
         if loader is None:
@@ -210,6 +215,12 @@ class LivePriceService:
         """
         with self._lock:
             return self._price_cache.get(symbol)
+
+    def get_price_age(self, symbol: str) -> Optional[float]:
+        """Seconds since *symbol*'s cached price last updated, or ``None`` if no price has arrived yet."""
+        with self._lock:
+            t = self._price_time.get(symbol)
+        return None if t is None else time.monotonic() - t
 
     def subscribed_symbols(self) -> List[str]:
         """Return a snapshot list of currently subscribed symbols."""

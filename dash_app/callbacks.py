@@ -40,10 +40,11 @@ import calendar as calendar_mod
 import os
 import datetime as dt_mod
 import threading
+import time
 from typing import Optional
 
 import pandas as pd
-from dash import Input, Output, Patch, State, html, no_update
+from dash import ALL, Input, Output, Patch, State, html, no_update
 import dash
 
 from core.chart_builder import (
@@ -53,7 +54,7 @@ from core.chart_builder import (
     is_crypto_symbol,
     overlay_signals,
 )
-from core import ui_options
+from core import trading_status, ui_options
 from core.logger import logger
 from core.trade_rationale import format_rationale, manual_rationale, submit_with_rationale
 
@@ -103,10 +104,17 @@ _broker: Optional[object] = None
 _options_bm: Optional[object] = None
 
 
+_broker_lock = threading.Lock()
+
+
 def _get_broker():
-    """Return the module-level SimulatedBroker, creating it on first call."""
+    """Return the module-level SimulatedBroker, creating it on first call (once, even when callbacks race)."""
     global _broker
-    if _broker is None:
+    if _broker is not None:
+        return _broker
+    with _broker_lock:
+        if _broker is not None:
+            return _broker
         from brokers.simulatedbroker import SimulatedBroker
         path = os.environ.get("PAPER_ACCOUNT_PATH")      # set by dash_app/app.py when run as the app (unset in tests)
         _broker = SimulatedBroker(persist_path=path, strict_prices=path is not None,
@@ -414,50 +422,41 @@ def _build_pnl_card(broker) -> tuple:
     return _money(total), style, breakdown, f"${balance:,.2f}"
 
 
-def _build_position_row(symbol: str, pos) -> html.Div:
-    """Build one row in the positions panel for a single open position.
+def _fmt_num(v: Optional[float], spec: str = ",.2f") -> str:
+    return "—" if v is None else format(v, spec)
 
-    Mirrors the per-symbol block in ``update_positions_display()``
-    (ui/main_window.py lines 1538-1545) — same data fields, adapted for Dash.
-    """
-    pnl = pos.pnl
-    sign = "+" if pnl >= 0 else ""
-    pnl_color = THEME["green"] if pnl >= 0 else THEME["red"]
-    return html.Div(
-        style={
-            "display": "flex",
-            "justifyContent": "space-between",
-            "alignItems": "center",
-            "padding": "4px 6px",
-            "borderRadius": "4px",
-            "backgroundColor": THEME["bg_dark"],
-            "marginBottom": "4px",
-            "fontSize": "11px",
-        },
-        children=[
-            html.Div([
-                html.Span(symbol, style={"color": THEME["text_main"], "fontWeight": "600"}),
-                html.Span(
-                    f"  {pos.qty:+.4f} @ ${pos.avg_price:.2f}",
-                    style={"color": THEME["text_muted"]},
-                ),
-            ]),
-            html.Span(f"{sign}${pnl:,.2f}", style={"color": pnl_color, "fontWeight": "600"}),
-        ],
-    )
+
+def _pnl_cell(v: Optional[float], pct: Optional[float] = None) -> html.Td:
+    if v is None:
+        return html.Td("—", className="num")
+    text = ("▲ +" if v >= 0 else "▼ −") + f"{abs(v):,.2f}" + ("" if pct is None else f"  {pct:+.2f}%")
+    return html.Td(text, className="num", style={"color": THEME["green"] if v >= 0 else "#ff7b72"})
+
+
+def _build_position_row(row: dict) -> html.Tr:
+    """One blotter row (from ``trading_status.position_rows``) with a Close action that opens the review step."""
+    return html.Tr([
+        html.Td(row["symbol"], className="left", style={"fontWeight": "600"}),
+        html.Td(("▲ " if row["side"] == "Long" else "▼ ") + row["side"], className="left"),
+        html.Td(f"{abs(row['qty']):g}", className="num"),
+        html.Td(_fmt_num(row["avg"]), className="num"),
+        html.Td(_fmt_num(row["last"]), className="num"),
+        html.Td(_fmt_num(row["value"]), className="num"),
+        _pnl_cell(row["upnl"], row["upnl_pct"]),
+        html.Td(html.Button("Close", id={"type": "close-position-btn", "symbol": row["symbol"]}, n_clicks=0,
+                            title=f"Close {row['symbol']} with a market order (you review it first)")),
+    ])
 
 
 def _build_positions_content(broker) -> list:
-    """Build the ``children`` list for the ``positions-content`` Div.
+    """Build the ``children`` list for the ``positions-content`` Div: a blotter table, or the empty-state message.
 
-    Returns a list of Dash components: one row per open position, or a
-    single muted "No active positions" span when the portfolio is flat.
     Safe to call with ``broker=None`` (returns the empty-state message).
     """
     _no_positions = [
         html.Span(
             "No active positions",
-            style={"color": THEME["text_muted"], "fontSize": "11px"},
+            style={"color": THEME["text_muted"], "fontSize": "12px"},
         )
     ]
 
@@ -465,18 +464,20 @@ def _build_positions_content(broker) -> list:
         return _no_positions
 
     try:
-        rows = []
-        if hasattr(broker, "positions"):
-            for symbol, pos in broker.positions.items():
-                if pos.qty != 0:
-                    rows.append(_build_position_row(symbol, pos))
-        return rows if rows else _no_positions
+        rows = trading_status.position_rows(getattr(broker, "positions", {}), getattr(broker, "market_data", None))
+        if not rows:
+            return _no_positions
+        header = html.Tr([html.Th("Symbol", className="left"), html.Th("Side", className="left"), html.Th("Qty"),
+                          html.Th("Avg price"), html.Th("Last"), html.Th("Market value"), html.Th("Unrealized P&L"),
+                          html.Th("")])
+        return [html.Table(className="positions-table",
+                           children=[html.Thead(header), html.Tbody([_build_position_row(r) for r in rows])])]
     except Exception as exc:  # noqa: BLE001
         logger.error("[Dash] positions display error: %s", exc)
         return [
             html.Span(
                 f"Error loading positions: {exc}",
-                style={"color": THEME["red"], "fontSize": "11px"},
+                style={"color": THEME["red"], "fontSize": "12px"},
             )
         ]
 
@@ -783,6 +784,7 @@ _EQUITY_POLL_EVERY_N_TICKS: int = 7
 
 _equity_tick_count: int = 0          # counts ticks since last REST fetch
 _equity_last_price: Optional[float] = None  # cached REST price
+_equity_last_price_at: Optional[float] = None  # time.monotonic() of that fetch (price-age display)
 
 
 # ---------------------------------------------------------------------------
@@ -876,6 +878,18 @@ def _latest_price(symbol: Optional[str]) -> Optional[float]:
         return None
 
 
+def _price_age(symbol: Optional[str]) -> Optional[float]:
+    """Seconds since the price ``_latest_price`` returns was obtained; None when unknown. Never raises."""
+    if not symbol:
+        return None
+    try:
+        if is_crypto_symbol(symbol):
+            return _get_live_svc().get_price_age(symbol)
+        return None if _equity_last_price_at is None else time.monotonic() - _equity_last_price_at
+    except Exception:  # noqa: BLE001
+        return None
+
+
 _held_marker = None
 
 
@@ -919,6 +933,61 @@ def _sync_broker_price(broker, symbol: Optional[str], price: Optional[float]) ->
                 broker.market_data[symbol] = float(price)
     except Exception as exc:  # noqa: BLE001
         logger.debug("[Dash] broker price sync failed for %s: %s", symbol, exc)
+
+
+_REVIEW_BOX_STYLE: dict = {
+    "display": "block",
+    "marginTop": "8px",
+    "padding": "10px",
+    "borderRadius": "6px",
+    "border": f"1px solid {THEME['border']}",
+    "backgroundColor": THEME["bg_dark"],
+}
+
+
+def _order_preview(broker, side: str, qty, order_type: str, price, symbol: Optional[str],
+                   market_price: Optional[float], price_age_s: Optional[float]) -> "trading_status.OrderPreview":
+    """Estimate an order for the review step (pure: reads the broker, never submits). Never raises."""
+    cash = position_qty = None
+    if broker is not None:
+        try:
+            cash = broker.get_account_info().get("cash")
+        except Exception:  # noqa: BLE001
+            cash = None
+        pos = (getattr(broker, "positions", {}) or {}).get(symbol)
+        position_qty = getattr(pos, "qty", 0.0) if pos is not None else 0.0
+    return trading_status.preview_order(
+        side, qty, symbol or "", order_type or "market", last_price=market_price, order_price=price,
+        fee_rate=trading_status.broker_fee_rate(broker, order_type), cash=cash, position_qty=position_qty,
+        price_age_s=price_age_s, mode=trading_status.account_mode(trading_status.SIMULATOR_NAME, broker))
+
+
+def _order_review_body(preview: "trading_status.OrderPreview") -> list:
+    """Children for ``order-review-body``: title, cost rows, then warnings (amber) and blocking problems (red)."""
+    rows = []
+    for line in preview.lines():
+        label, _, value = line.partition(": ")
+        rows.append(html.Div(style={"display": "flex", "justifyContent": "space-between", "gap": "8px"}, children=[
+            html.Span(label, style={"color": THEME["text_muted"]}),
+            html.Span(value, className="num"),
+        ]))
+    out = [html.Div(preview.title, style={"fontWeight": "600", "marginBottom": "6px"}),
+           html.Div(rows, style={"display": "flex", "flexDirection": "column", "gap": "3px", "fontSize": "12px"})]
+    for w in preview.warnings:
+        out.append(html.Div("⚠ " + w, style={"color": "#e3b341", "fontSize": "12px", "marginTop": "6px"}))
+    for b in preview.blocking:
+        out.append(html.Div("✕ " + b, style={"color": "#ff7b72", "fontSize": "12px", "marginTop": "6px"}))
+    return out
+
+
+def _price_for(symbol: Optional[str], active_symbol: Optional[str], broker) -> tuple:
+    """(price, age_s) for an order on *symbol*: the live feed for the charted symbol, else the position's last mark."""
+    if symbol and symbol == active_symbol:
+        return _latest_price(symbol), _price_age(symbol)
+    pos = (getattr(broker, "positions", {}) or {}).get(symbol) if broker is not None else None
+    price = (getattr(pos, "last_price", None) or (getattr(broker, "market_data", {}) or {}).get(symbol)) if pos else None
+    age = broker.price_age(symbol) if (price and hasattr(broker, "price_age")) else None
+    return price, age
 
 
 def _validate_and_submit_order(
@@ -1067,6 +1136,35 @@ def _build_equity_curve_figure(total_asset_value: list):
 # Callback registration
 # ---------------------------------------------------------------------------
 
+def _safety_header_view(broker, symbol: Optional[str]) -> tuple:
+    """Values for the header safety strip and the ticket's price-age line (pure; see refresh_safety_header)."""
+    mode = trading_status.account_mode(trading_status.SIMULATOR_NAME, broker)
+    bg, fg, border = trading_status.MODE_COLORS[mode.mode]
+    pill_style = {"backgroundColor": bg, "color": fg, "border": f"1px solid {border}", "borderRadius": "14px",
+                  "padding": "4px 12px", "fontSize": "12px", "fontWeight": "700", "letterSpacing": "0.05em",
+                  "whiteSpace": "nowrap"}
+    btn_base = {"borderRadius": "6px", "padding": "5px 12px", "fontSize": "12px", "cursor": "pointer",
+                "whiteSpace": "nowrap"}
+    if trading_status.kill_switch_engaged():
+        kill = ("Kill switch ON · Release", "All LIVE orders are blocked (desktop, Dash and scripts). Click to release.",
+                {**btn_base, "backgroundColor": "#da3633", "color": "#ffffff", "border": "1px solid #ff7b72",
+                 "fontWeight": "700"})
+    else:
+        kill = ("Kill switch", "Block every LIVE order at once, across the desktop app, Dash and scripts, until released. "
+                               "The paper account is not affected (use Halt in the Execution tab).",
+                {**btn_base, "backgroundColor": "#2d1111", "color": "#ffa198", "border": "1px solid #da3633",
+                 "fontWeight": "600"})
+    price = _latest_price(symbol)
+    if symbol and price:
+        fresh = trading_status.price_freshness(_price_age(symbol))
+        age_text = f"Last {symbol}: {price:,.2f} · {fresh.label}"
+        color = trading_status.FRESHNESS_COLORS[fresh.state]
+    else:
+        age_text, color = ("Waiting for a price for " + symbol) if symbol else "No price yet: load a chart", THEME["text_muted"]
+    return (mode.label, mode.detail, pill_style, *kill, age_text,
+            {"color": color, "fontSize": "12px", "marginTop": "8px"})
+
+
 def register_callbacks(app: dash.Dash) -> None:
     """Attach all callbacks to *app*.
 
@@ -1103,7 +1201,7 @@ def register_callbacks(app: dash.Dash) -> None:
         * Appends the empty live-tick scatter trace (``data[-1]``) so the
           interval callback can Patch it without touching the candlestick.
         """
-        global _equity_tick_count, _equity_last_price
+        global _equity_tick_count, _equity_last_price, _equity_last_price_at
 
         if not n_clicks:
             return no_update, no_update, no_update, no_update, no_update, no_update
@@ -1119,6 +1217,7 @@ def register_callbacks(app: dash.Dash) -> None:
 
         _equity_tick_count = 0
         _equity_last_price = None
+        _equity_last_price_at = None
 
         if is_crypto_symbol(symbol):
             # Subscribe in background — get_price() returns None until
@@ -1186,7 +1285,7 @@ def register_callbacks(app: dash.Dash) -> None:
           ``_EQUITY_POLL_EVERY_N_TICKS`` ticks; between fetches the cached
           price from the last successful call is re-used.
         """
-        global _equity_tick_count, _equity_last_price
+        global _equity_tick_count, _equity_last_price, _equity_last_price_at
 
         if not symbol:
             return no_update, no_update
@@ -1205,6 +1304,8 @@ def register_callbacks(app: dash.Dash) -> None:
                 try:
                     price = _get_equity_loader().get_latest_price(symbol)
                     _equity_last_price = price
+                    if price:
+                        _equity_last_price_at = time.monotonic()
                     logger.debug("[Dash] equity REST price for %s = %s", symbol, price)
                 except Exception as exc:
                     logger.debug("[Dash] equity REST fetch failed for %s: %s", symbol, exc)
@@ -1258,44 +1359,118 @@ def register_callbacks(app: dash.Dash) -> None:
     @app.callback(
         Output("order-status", "children"),
         Output("order-status", "style"),
+        Output("order-review", "style"),
+        Output("order-review-body", "children"),
+        Output("order-draft-store", "data"),
+        Output("order-confirm-btn", "disabled"),
+        Output("order-confirm-btn", "children"),
         Input("buy-btn", "n_clicks"),
         Input("sell-btn", "n_clicks"),
+        Input({"type": "close-position-btn", "symbol": ALL}, "n_clicks"),
+        Input("order-confirm-btn", "n_clicks"),
+        Input("order-cancel-btn", "n_clicks"),
         State("order-qty-input", "value"),
         State("order-type-dropdown", "value"),
         State("order-price-input", "value"),
         State("active-symbol-store", "data"),
+        State("order-review-toggle", "value"),
+        State("order-draft-store", "data"),
         prevent_initial_call=True,
     )
-    def submit_order_callback(
-        buy_clicks: Optional[int],
-        sell_clicks: Optional[int],
-        qty: Optional[float],
-        order_type: str,
-        price: Optional[float],
-        symbol: Optional[str],
-    ):
-        """Submit a buy or sell order to the SimulatedBroker.
+    def submit_order_callback(buy_clicks, sell_clicks, close_clicks, confirm_clicks, cancel_clicks,
+                              qty, order_type, price, symbol, review_toggle, draft):
+        """Order ticket: Buy / Sell / Close build a draft and show its review; Confirm submits it, Back cancels.
 
-        Mirrors ``place_order()`` in ui/main_window.py, adapted for Dash.
-        ``ctx.triggered_id`` identifies which button was clicked — both
-        buy-btn and sell-btn feed this single callback output.
+        Paper orders with no warnings skip the review when "Review before sending" is off. Mirrors the desktop
+        ``place_order`` -> ``_confirm_order`` flow; both use core.trading_status.preview_order.
         """
         ctx = dash.callback_context
         if not ctx.triggered:
-            return no_update, no_update
+            return (no_update,) * 7
+        trig = ctx.triggered_id
+        hidden = {"display": "none"}
+        skip = (no_update, no_update)
 
-        triggered_id = ctx.triggered_id  # "buy-btn" or "sell-btn"
-        side = "buy" if triggered_id == "buy-btn" else "sell"
+        if trig == "order-cancel-btn":
+            return ("Order not sent.", {**_ORDER_STATUS_BASE_STYLE, "color": THEME["text_muted"]},
+                    hidden, [], None, False, "Confirm")
 
-        return _validate_and_submit_order(
-            broker=_get_broker(),
-            side=side,
-            qty=qty,
-            order_type=order_type,
-            price=price,
-            symbol=symbol,
-            market_price=_latest_price(symbol),
-        )
+        broker = _get_broker()
+
+        if trig == "order-confirm-btn":
+            if not draft:
+                return (no_update,) * 7
+            mkt, age = _price_for(draft["symbol"], symbol, broker)
+            preview = _order_preview(broker, draft["side"], draft["qty"], draft["type"], draft.get("price"),
+                                     draft["symbol"], mkt, age)
+            if not preview.ok:            # something changed since the review (e.g. the position closed)
+                return (*skip, _REVIEW_BOX_STYLE, _order_review_body(preview), draft, True, "Confirm")
+            text, style = _validate_and_submit_order(broker, draft["side"], draft["qty"], draft["type"],
+                                                     draft.get("price"), draft["symbol"], market_price=mkt)
+            return text, style, hidden, [], None, False, "Confirm"
+
+        # Build a draft: Buy / Sell from the ticket, or Close from a positions row.
+        if isinstance(trig, dict):
+            if not (ctx.triggered[0].get("value")):            # the table re-rendered; nobody clicked
+                return (no_update,) * 7
+            close_symbol = trig.get("symbol")
+            pos = (getattr(broker, "positions", {}) or {}).get(close_symbol)
+            if pos is None or not getattr(pos, "qty", 0):
+                return (f"No open {close_symbol} position.", {**_ORDER_STATUS_BASE_STYLE, "color": THEME["text_muted"]},
+                        hidden, [], None, False, "Confirm")
+            draft = {"side": "sell" if pos.qty > 0 else "buy", "qty": abs(pos.qty), "type": "market", "price": None,
+                     "symbol": close_symbol}
+        else:
+            draft = {"side": "buy" if trig == "buy-btn" else "sell", "qty": qty, "type": order_type or "market",
+                     "price": price, "symbol": symbol}
+
+        mkt, age = _price_for(draft["symbol"], symbol, broker)
+        preview = _order_preview(broker, draft["side"], draft["qty"], draft["type"], draft.get("price"),
+                                 draft["symbol"], mkt, age)
+        if preview.ok and not preview.warnings and "on" not in (review_toggle or []):
+            text, style = _validate_and_submit_order(broker, draft["side"], draft["qty"], draft["type"],
+                                                     draft.get("price"), draft["symbol"], market_price=mkt)
+            return text, style, hidden, [], None, False, "Confirm"
+        label = f"Confirm {draft['side']}" if preview.ok else "Fix the problems above"
+        return (*skip, _REVIEW_BOX_STYLE, _order_review_body(preview), draft, not preview.ok, label)
+
+    # ------------------------------------------------------------------
+    # Header safety state: account mode pill, kill switch, price age
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("mode-pill", "children"),
+        Output("mode-pill", "title"),
+        Output("mode-pill", "style"),
+        Output("kill-switch-btn", "children"),
+        Output("kill-switch-btn", "title"),
+        Output("kill-switch-btn", "style"),
+        Output("price-age", "children"),
+        Output("price-age", "style"),
+        Input("safety-interval", "n_intervals"),
+        Input("kill-switch-store", "data"),
+        State("active-symbol-store", "data"),
+    )
+    def refresh_safety_header(_n, _kill_version, symbol):
+        return _safety_header_view(None, symbol)       # Dash trades the Simulator only: the mode needs no broker
+
+    @app.callback(
+        Output("kill-release-confirm", "displayed"),
+        Output("kill-switch-store", "data"),
+        Input("kill-switch-btn", "n_clicks"),
+        Input("kill-release-confirm", "submit_n_clicks"),
+        State("kill-switch-store", "data"),
+        prevent_initial_call=True,
+    )
+    def kill_switch(_clicks, _release, version):
+        """Engaging is one click; releasing asks first (ConfirmDialog)."""
+        trig = dash.callback_context.triggered_id
+        if trig == "kill-release-confirm":
+            trading_status.release_kill_switch()
+            return False, (version or 0) + 1
+        if trading_status.kill_switch_engaged():
+            return True, no_update
+        trading_status.engage_kill_switch("engaged from the Dash app")
+        return False, (version or 0) + 1
 
     # ------------------------------------------------------------------
     # Phase 1.4: PnL Calendar month navigation → update pnl-calendar-store

@@ -1,6 +1,14 @@
-# Claude / Codex handoff — updated 2026-10-01
+# Claude / Codex handoff — updated 2026-10-13
 
-## Latest: main 79eaaa9 after PRs #31-#34 (2026-10-01)
+## Latest: design slice 1 — safety and clarity (2026-10-13, PR pending review)
+Branch `design/slice1-safety-clarity` from main 47a9ded (worktree `/private/tmp/algotrader-design-slice1`). Both front
+ends now show the account mode and a kill switch in the header, the age of the price on screen, a review step before
+every manual order, and a Positions table with Close; shared logic in `core/trading_status.py`. Also fixes the desktop
+broker selector not changing the order destination. 1530 passed, 1 skipped. Desktop checked offscreen only, so look at
+the real window before merging. Evidence and limits:
+[design-slice1-safety-clarity-2026-10-13.md](artifacts/design-slice1-safety-clarity-2026-10-13.md). Not merged, not deployed.
+
+## Previous: main 79eaaa9 after PRs #31-#34 (2026-10-01)
 The owner merged #31 (Phase 9.3 re-run, F FINDING), #33 (Kalshi `resolve` exits 3 on lookup errors), #34 (news quality
 baseline, report only) and #32 (overnight-schedule proposal, docs only). Post-merge validation found no bugs:
 [post-merge-validation-79eaaa9-2026-10-01.md](artifacts/post-merge-validation-79eaaa9-2026-10-01.md). The running checkout

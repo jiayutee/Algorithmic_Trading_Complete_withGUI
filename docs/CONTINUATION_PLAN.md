@@ -144,3 +144,16 @@ After the owner merged #31, #32, #33 and #34: base env 1499 passed, 1 skipped; 3
 Kalshi resolve on a scratch copy with forced lookup failures printed the WARN line and exited 3 (canonical DB hash
 unchanged). The news baseline re-ran on a scratch copy (1849 items; numbers within ~2 points of 09-30; canonical hash
 unchanged by the run). No bugs found. Evidence: [post-merge-validation-79eaaa9-2026-10-01.md](artifacts/post-merge-validation-79eaaa9-2026-10-01.md).
+
+## 2026-10-13 — design slice 1: safety and clarity (both front ends)
+From the owner-requested design review (canvas "AlgoTrader Design Review", roadmap slice 1). New `core/trading_status.py`
+(account mode, price freshness, order preview, position rows, kill-switch file) drives both apps: a header pill showing
+which account an order hits plus a one-click kill switch, the price age next to the last price, a Review → Confirm
+step for every manual order (paper may skip it unless there are warnings), a Positions table with Close actions, and
+sans UI text with mono numbers. Fixed on the way: the desktop broker selector did not change where orders went; desktop
+streaming orders used the last loaded bar; Dash broker creation had no lock. **Implemented and tested on branch
+`design/slice1-safety-clarity` (PR pending review; not merged, not deployed).** 1530 passed, 1 skipped; desktop
+verified offscreen only; Dash verified in a browser against a scratch account. Evidence and limits:
+[design-slice1-safety-clarity-2026-10-13.md](artifacts/design-slice1-safety-clarity-2026-10-13.md).
+Open: desktop Backtest resets the shared Simulator account in memory (separate fix); slice 2 (tokens file, workspaces,
+watchlist, risk panel, journal, bracket orders) not started.

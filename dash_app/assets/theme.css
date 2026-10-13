@@ -1,0 +1,15 @@
+/* Design language v2 (see core/trading_status.py for the shared font and mode colors).
+   UI text is sans; numbers opt into mono with tabular figures so columns line up. */
+.num {
+  font-family: 'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.positions-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.positions-table th { color: #8b949e; font-weight: 500; font-size: 12px; padding: 6px 10px; text-align: right; }
+.positions-table td { padding: 6px 10px; text-align: right; border-top: 1px solid #21262d; }
+.positions-table th.left, .positions-table td.left { text-align: left; }
+.positions-table button {
+  background: transparent; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px;
+  padding: 4px 12px; font-size: 12px; cursor: pointer;
+}
+.positions-table button:hover { border-color: #58a6ff; }
