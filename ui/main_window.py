@@ -5,11 +5,11 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QComboBox, QPushButton, QLabel, QGroupBox, QLineEdit,
                              QTextEdit, QTabWidget, QSplitter, QTableWidget,
                              QTableWidgetItem, QHeaderView, QApplication, QFormLayout,
-                             QFrame, QSizePolicy, QGridLayout, QCheckBox)
+                             QFrame, QSizePolicy, QGridLayout, QCheckBox, QButtonGroup)
 from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor, QFont
 from core.paper_marking import HeldPriceMarker
 from core import ui_options
-from core import trading_status
+from core import design_tokens, risk_view, trading_status, watchlist
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView
@@ -143,49 +143,8 @@ class MainWindow(QMainWindow):
             ui_font.setFamily(trading_status.UI_FONT_FAMILIES[0])
         self.setFont(ui_font)
 
-        # Global dark stylesheet
-        self.setStyleSheet("""
-            QMainWindow, QWidget { background: #0d1117; color: #e6edf3; }
-            QGroupBox { border: 1px solid #30363d; border-radius: 6px; margin-top: 8px;
-                        font-size: 12px; font-weight: 600; color: #8b949e; padding: 6px 4px 4px 4px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
-            QComboBox { background: #161b22; border: 1px solid #30363d; border-radius: 4px;
-                        padding: 3px 6px; color: #e6edf3; font-size: 12px; min-height: 22px; }
-            QCheckBox { color: #e6edf3; font-size: 12px; spacing: 6px; }
-            QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #8b949e; border-radius: 3px; background: #161b22; }
-            QCheckBox::indicator:hover { border-color: #58a6ff; }
-            QCheckBox::indicator:checked { background: #1f6feb; border-color: #58a6ff; }
-            QComboBox::drop-down { border: none; width: 18px; }
-            QComboBox QAbstractItemView { background: #161b22; border: 1px solid #30363d; color: #e6edf3; }
-            QLineEdit { background: #161b22; border: 1px solid #30363d; border-radius: 4px;
-                        padding: 3px 6px; color: #e6edf3; font-size: 12px; min-height: 22px; }
-            QLineEdit:focus { border-color: #58a6ff; }
-            QPushButton { background: #21262d; border: 1px solid #30363d; border-radius: 4px;
-                          padding: 4px 10px; color: #e6edf3; font-size: 12px; min-height: 24px; }
-            QPushButton:hover { background: #30363d; border-color: #58a6ff; }
-            QPushButton:pressed { background: #161b22; }
-            QPushButton:disabled { color: #6e7681; border-color: #21262d; }
-            QTabWidget::pane { border: 1px solid #30363d; border-radius: 4px; }
-            QTabBar::tab { background: #161b22; border: 1px solid #30363d; padding: 5px 12px;
-                           color: #8b949e; font-size: 12px; border-bottom: none; border-radius: 4px 4px 0 0; }
-            QTabBar::tab:selected { background: #0d1117; color: #e6edf3; border-bottom: 2px solid #58a6ff; }
-            QTableWidget { background: #0d1117; alternate-background-color: #1a2130;
-                           gridline-color: #21262d; color: #e6edf3;
-                           border: none; font-size: 12px; }
-            QTableWidget::item:selected { background: #1f3d6b; color: #ffffff; }
-            QHeaderView::section { background: #161b22; color: #8b949e; border: none;
-                                   border-bottom: 1px solid #30363d; padding: 4px 6px; font-size: 12px;
-                                   font-weight: 600; }
-            QTextEdit { background: #161b22; border: 1px solid #30363d; border-radius: 4px;
-                        color: #e6edf3; font-family: 'SF Mono', 'Consolas', monospace; font-size: 12px; }
-            QScrollBar:vertical { background: #0d1117; width: 8px; }
-            QScrollBar::handle:vertical { background: #30363d; border-radius: 4px; min-height: 20px; }
-            QSplitter::handle { background: #30363d; width: 1px; height: 1px; }
-            QStatusBar { background: #161b22; border-top: 1px solid #30363d; color: #8b949e; font-size: 12px; }
-            QLabel { color: #e6edf3; font-size: 12px; }
-            QPushButton#liveBtn { background: #1a4731; border-color: #2ea043; color: #3fb950; font-weight: 600; }
-            QPushButton#liveBtn:hover { background: #1f5e3a; }
-        """)
+        # Global dark stylesheet, generated from core/design_tokens.py (shared with Dash and the charts)
+        self.setStyleSheet(design_tokens.qt_stylesheet())
 
         # Broker state
         self.current_broker = None
@@ -267,6 +226,15 @@ class MainWindow(QMainWindow):
         self.sell_btn.clicked.connect(lambda: self.place_order("sell"))
         self.broker_combo.currentTextChanged.connect(self._on_broker_changed)
         self.kill_btn.clicked.connect(self._toggle_kill_switch)
+        for _name, _btn in self._workspace_buttons.items():
+            _btn.clicked.connect(lambda _=False, n=_name: self._set_workspace(n))
+        self._set_workspace("Trade")
+
+        # Watchlist quotes: fetched off the UI thread by the quote book, painted every 3 s
+        self._watch_timer = QTimer(self)
+        self._watch_timer.timeout.connect(self._refresh_watchlist)
+        self._watch_timer.start(3000)
+        QTimer.singleShot(0, self._refresh_watchlist)
 
         # Header safety state + price age: refreshed every second (cheap: a file check and a subtraction)
         self._price_as_of = None          # time.time() when the price on screen was obtained
@@ -344,6 +312,24 @@ class MainWindow(QMainWindow):
         sep.setFrameShape(QFrame.VLine)
         sep.setStyleSheet("color: #30363d;")
         layout.addWidget(sep)
+
+        # Workspaces: Trade / Research / Automate / Markets (each shows only its tabs, panels and actions)
+        self._workspace_group = QButtonGroup(self)
+        self._workspace_group.setExclusive(True)
+        self._workspace_buttons = {}
+        for name in ui_options.WORKSPACES:
+            btn = QPushButton(name)
+            btn.setObjectName("workspaceBtn")
+            btn.setCheckable(True)
+            btn.setToolTip(ui_options.WORKSPACE_TIPS[name])
+            self._workspace_group.addButton(btn)
+            self._workspace_buttons[name] = btn
+            layout.addWidget(btn)
+        self._workspace = "Trade"
+        sep_ws = QFrame()
+        sep_ws.setFrameShape(QFrame.VLine)
+        sep_ws.setStyleSheet(f"color: {design_tokens.COLOR['border']};")
+        layout.addWidget(sep_ws)
 
         # Symbol
         layout.addWidget(self._muted_label("Symbol"))
@@ -470,8 +456,12 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        # Parameters group
-        params_group = QGroupBox("Parameters")
+        # Watchlist (shared with Dash via core/watchlist.py); click a row to chart that symbol
+        layout.addWidget(self._build_watchlist_group())
+
+        # Parameters group (backtest settings: shown in the Research workspace only)
+        params_group = QGroupBox("Backtest parameters")
+        self._params_group = params_group
         form = QFormLayout()
         form.setSpacing(4)
 
@@ -586,8 +576,17 @@ class MainWindow(QMainWindow):
         pnl_group.setLayout(pnl_layout)
         layout.addWidget(pnl_group)
 
-        # Backtest Results group
+        # Risk group: the paper account against the paper runner's limits (core/risk_view.py)
+        self._risk_group = QGroupBox("Risk · paper runner limits")
+        self._risk_layout = QFormLayout()
+        self._risk_layout.setSpacing(4)
+        self._risk_group.setLayout(self._risk_layout)
+        self._risk_group.setToolTip("Limits gate the paper runner's entries; manual orders are not gated by them.")
+        layout.addWidget(self._risk_group)
+
+        # Backtest Results group (Research workspace only)
         results_group = QGroupBox("Backtest Results")
+        self._results_group = results_group
         results_layout = QFormLayout()
         results_layout.setSpacing(4)
 
@@ -650,6 +649,152 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Orders tab
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Workspaces (Trade / Research / Automate / Markets)
+    # ------------------------------------------------------------------
+
+    def _set_workspace(self, name):
+        """Show only the tabs, panels and top-bar actions of one workspace (core/ui_options.TAB_WORKSPACE)."""
+        self._workspace = name
+        self._workspace_buttons[name].setChecked(True)
+        research, automate = name == "Research", name == "Automate"
+        self._params_group.setVisible(research)
+        self._results_group.setVisible(research)
+        self._risk_group.setVisible(not research)
+        self.backtest_btn.setVisible(research)
+        self.simulate_btn.setVisible(automate)
+        self.trade_btn.setVisible(automate)
+        sim_ready = automate and getattr(self, "simulation_data", None) is not None
+        self.play_btn.setVisible(sim_ready)
+        self.pause_btn.setVisible(sim_ready)
+        self._apply_workspace_tabs()
+
+    def _apply_workspace_tabs(self):
+        tabs = self.bottom_tabs
+        first_visible = None
+        for i in range(tabs.count()):
+            title = tabs.tabText(i)
+            visible = title.startswith("⚠") or ui_options.workspace_for(title) == self._workspace
+            tabs.setTabVisible(i, visible)
+            if visible and first_visible is None:
+                first_visible = i
+        if first_visible is not None and not tabs.isTabVisible(tabs.currentIndex()):
+            tabs.setCurrentIndex(first_visible)
+
+    def _show_tab(self, title):
+        """Bring a bottom tab forward, switching to its workspace if needed."""
+        for i in range(self.bottom_tabs.count()):
+            if self.bottom_tabs.tabText(i).replace("&&", "&") == title:
+                ws = ui_options.workspace_for(title)
+                if ws != self._workspace:
+                    self._set_workspace(ws)
+                self.bottom_tabs.setCurrentIndex(i)
+                return
+
+    # ------------------------------------------------------------------
+    # Watchlist
+    # ------------------------------------------------------------------
+
+    def _build_watchlist_group(self):
+        group = QGroupBox("Watchlist")
+        box = QVBoxLayout()
+        box.setSpacing(4)
+        self._watch_symbols = watchlist.load()
+        self._quote_book = watchlist.QuoteBook()
+        self._watch_table = self._make_table(["Symbol", "Last", "Chg"])
+        self._watch_table.setToolTip("Click a row to chart it. Crypto: Binance 24h. Others: Yahoo daily close (delayed).")
+        self._watch_table.setMinimumHeight(150)
+        self._watch_table.cellClicked.connect(self._on_watchlist_clicked)
+        box.addWidget(self._watch_table)
+        row = QHBoxLayout()
+        self._watch_input = QLineEdit()
+        self._watch_input.setPlaceholderText("Add symbol")
+        self._watch_input.returnPressed.connect(self._watchlist_add)
+        row.addWidget(self._watch_input)
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self._watchlist_add)
+        row.addWidget(add_btn)
+        rm_btn = QPushButton("Remove")
+        rm_btn.setToolTip("Remove the selected row")
+        rm_btn.clicked.connect(self._watchlist_remove)
+        row.addWidget(rm_btn)
+        box.addLayout(row)
+        group.setLayout(box)
+        return group
+
+    def _refresh_watchlist(self):
+        try:
+            self._quote_book.refresh_async(self._watch_symbols)
+            rows = self._quote_book.snapshot(self._watch_symbols)
+            c = design_tokens.COLOR
+            table = self._watch_table
+            table.setRowCount(len(rows))
+            for r, row in enumerate(rows):
+                sym_item = QTableWidgetItem(row["symbol"])
+                if row["error"]:
+                    sym_item.setToolTip(f"Last fetch failed: {row['error']}")
+                table.setItem(r, 0, sym_item)
+                table.setItem(r, 1, self._num_item(watchlist.format_price(row["last"])))
+                pct = row["change_pct"]
+                color = None if pct is None or pct == 0 else (c["up"] if pct > 0 else c["down"])
+                chg = self._num_item(watchlist.format_change(pct), color)
+                if row["source"]:
+                    chg.setToolTip(row["source"])
+                table.setItem(r, 2, chg)
+        except Exception as exc:  # a quote problem must never break the window
+            logger.debug("watchlist refresh failed: %s", exc)
+
+    def _on_watchlist_clicked(self, row, _col):
+        item = self._watch_table.item(row, 0)
+        if item and item.text() != self.symbol_combo.currentText():
+            self.symbol_combo.setCurrentText(item.text())      # loads the chart (currentTextChanged -> load_data)
+
+    def _watchlist_add(self):
+        sym = self._watch_input.text().strip().upper()
+        if not sym:
+            return
+        self._watch_symbols = watchlist.add(sym)
+        self._watch_input.clear()
+        self._refresh_watchlist()
+
+    def _watchlist_remove(self):
+        row = self._watch_table.currentRow()
+        item = self._watch_table.item(row, 0) if row >= 0 else None
+        if item is None:
+            self.statusBar().showMessage("Select a watchlist row to remove.")
+            return
+        self._watch_symbols = watchlist.remove(item.text())
+        self._refresh_watchlist()
+
+    # ------------------------------------------------------------------
+    # Risk panel
+    # ------------------------------------------------------------------
+
+    def _refresh_risk_panel(self):
+        try:
+            snap = risk_view.risk_snapshot(self.current_broker)
+            c = design_tokens.COLOR
+            colors = {"ok": c["text_primary"], "warn": c["warn"], "breach": c["down"], "unknown": c["text_muted"]}
+            while self._risk_layout.rowCount():
+                self._risk_layout.removeRow(0)
+            for row in snap["rows"]:
+                value = QLabel(f"{row['value_text']} / {row['limit_text']}")
+                value.setFont(_mono_font())
+                value.setStyleSheet(f"color: {colors[row['state']]};")
+                if row["state"] == "breach":
+                    value.setText(value.text() + "  at limit")
+                label = QLabel(row["label"])
+                label.setStyleSheet(f"color: {c['text_muted']};")
+                self._risk_layout.addRow(label, value)
+            if snap.get("halted"):
+                halted = QLabel(f"Runner halted: {snap['halted'].get('reason', '')}")
+                halted.setStyleSheet(f"color: {c['warn']};")
+                halted.setWordWrap(True)
+                self._risk_layout.addRow(halted)
+            self._risk_group.setToolTip(f"{snap['note']} Limits: {snap['limits_source']}.")
+        except Exception as exc:
+            logger.debug("risk panel refresh failed: %s", exc)
 
     def _make_table(self, headers):
         table = QTableWidget(0, len(headers))
@@ -939,8 +1084,8 @@ class MainWindow(QMainWindow):
         )
         self._orders_status_label.setText(f"Orders: {count} total, {filled} filled")
 
-        # Switch to Orders tab so the user sees the result immediately
-        self.bottom_tabs.setCurrentIndex(0)
+        # Switch to the Orders tab so the user sees the result immediately
+        self._show_tab("Orders")
 
     def _clear_orders_tab(self):
         """Clear the orders display (does NOT cancel broker orders)."""
@@ -1376,6 +1521,10 @@ class MainWindow(QMainWindow):
             self._exec_timer.stop()
         if self._supervisor:
             self._supervisor.stop()
+        if hasattr(self, "_watch_timer"):
+            self._watch_timer.stop()
+        if hasattr(self, "_quote_book"):
+            self._quote_book.close()
         if self.is_streaming:
             self.stop_realtime_stream()
         self.broker_timer.stop()
@@ -1879,6 +2028,7 @@ class MainWindow(QMainWindow):
 
                 self.update_positions_display()
                 self._refresh_pnl_calendar()
+                self._refresh_risk_panel()
 
         except Exception as e:
             logger.warning("Error refreshing account: %s", e)

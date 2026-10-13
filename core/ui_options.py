@@ -22,3 +22,24 @@ TREND_OVERLAY_TIP = (
     "Evidence (Phases 6.7-6.9): reduced the worst drawdown in 3 tests; did NOT show higher return.\n"
     "Also stops the strategy from shorting. Validated on daily bars, crypto only."
 )
+
+# ---------------------------------------------------------------------------------------------------- workspaces
+# Both front ends group their tabs into four workspaces (design slice 2). A tab not listed here shows in "Trade".
+WORKSPACES = ["Trade", "Research", "Automate", "Markets"]
+WORKSPACE_TIPS = {
+    "Trade": "Act on a market now: chart, order ticket, positions, orders, risk",
+    "Research": "Test an idea before trusting it: backtest, equity curve, Research Lab, Research Loop",
+    "Automate": "Let a rule trade and watch it: paper runner, replay, agents",
+    "Markets": "Understand what is moving: news, market context, options",
+}
+TAB_WORKSPACE = {
+    "Positions": "Trade", "Orders": "Trade", "PnL Calendar": "Trade",
+    "Equity Curve": "Research", "Research Lab": "Research", "Research Loop": "Research",
+    "Execution": "Automate", "Agent Monitor": "Automate",
+    "News": "Markets", "Market Context": "Markets", "News & Earnings": "Markets", "Options Chain": "Markets",
+}
+
+
+def workspace_for(tab_title: str) -> str:
+    """Workspace a tab belongs to (by its visible title; '&&' is Qt's escaped '&')."""
+    return TAB_WORKSPACE.get(str(tab_title).replace("&&", "&").strip(), "Trade")

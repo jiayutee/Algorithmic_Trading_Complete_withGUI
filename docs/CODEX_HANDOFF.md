@@ -1,6 +1,13 @@
-# Claude / Codex handoff — updated 2026-10-13
+# Claude / Codex handoff — updated 2026-10-14
 
-## Latest: design slice 1 — safety and clarity (2026-10-13, PR pending review)
+## Latest: design slice 2 — structure (2026-10-14, PR pending review, stacked on slice 1)
+Branch `design/slice2-structure` (worktree `/private/tmp/algotrader-design-slice2`) is based on slice 1's branch, so merge PR #39
+first. Adds shared design tokens (`core/design_tokens.py`), four workspaces in both apps, a watchlist with live quotes
+(`core/watchlist.py`) and a read-only risk panel (`core/risk_view.py`). 1546 passed, 1 skipped. Journal tab and bracket
+orders were deliberately not built (see evidence). Evidence and limits:
+[design-slice2-structure-2026-10-14.md](artifacts/design-slice2-structure-2026-10-14.md). Not merged, not deployed.
+
+## Previous: design slice 1 — safety and clarity (2026-10-13, PR #39 pending review)
 Branch `design/slice1-safety-clarity` from main 47a9ded (worktree `/private/tmp/algotrader-design-slice1`). Both front
 ends now show the account mode and a kill switch in the header, the age of the price on screen, a review step before
 every manual order, and a Positions table with Close; shared logic in `core/trading_status.py`. Also fixes the desktop

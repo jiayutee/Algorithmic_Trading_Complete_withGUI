@@ -54,7 +54,7 @@ from core.chart_builder import (
     is_crypto_symbol,
     overlay_signals,
 )
-from core import trading_status, ui_options
+from core import risk_view, trading_status, ui_options, watchlist
 from core.logger import logger
 from core.trade_rationale import format_rationale, manual_rationale, submit_with_rationale
 
@@ -1165,6 +1165,78 @@ def _safety_header_view(broker, symbol: Optional[str]) -> tuple:
             {"color": color, "fontSize": "12px", "marginTop": "8px"})
 
 
+# ---------------------------------------------------------------------------
+# Design slice 2: workspaces, watchlist, risk panel (pure helpers)
+# ---------------------------------------------------------------------------
+
+_quote_book = None
+_quote_book_lock = threading.Lock()
+
+
+def _get_quote_book():
+    global _quote_book
+    with _quote_book_lock:
+        if _quote_book is None:
+            _quote_book = watchlist.QuoteBook()
+        return _quote_book
+
+
+def _workspace_view(workspace: str, current_tab: Optional[str], specs: list) -> tuple:
+    """(tab header styles in spec order, bottom-tabs value, backtest-panel style, risk-panel style) for a workspace."""
+    from dash_app.layout import _TAB_STYLE, _PANEL_STYLE, _tab_hidden_style
+    workspace = workspace if workspace in ui_options.WORKSPACES else "Trade"
+    styles, visible = [], []
+    for _hid, _label, value, ws in specs:
+        show = ws == workspace
+        styles.append(_TAB_STYLE if show else _tab_hidden_style())
+        if show:
+            visible.append(value)
+    value = current_tab if current_tab in visible else (visible[0] if visible else no_update)
+    research = workspace == "Research"
+    panel = {**_PANEL_STYLE, "marginBottom": "10px"}
+    return (styles, value, panel if research else {**panel, "display": "none"},
+            {**panel, "display": "none"} if research else panel)
+
+
+def _watchlist_body(rows: list) -> list:
+    """The watchlist table: a clickable symbol (charts it), last, change, and a remove button per row."""
+    if not rows:
+        return [html.Span("Empty: add a symbol below.", style={"color": THEME["text_muted"], "fontSize": "12px"})]
+    body = []
+    for row in rows:
+        pct = row["change_pct"]
+        color = THEME["text_muted"] if pct in (None, 0) else (THEME["green"] if pct > 0 else "#ff7b72")
+        title = row["source"] + (f" · last fetch failed: {row['error']}" if row["error"] else "")
+        body.append(html.Tr([
+            html.Td(html.Button(row["symbol"], id={"type": "watch-symbol", "symbol": row["symbol"]}, n_clicks=0,
+                                className="watch-symbol", title=f"Chart {row['symbol']}"), className="left"),
+            html.Td(watchlist.format_price(row["last"]), className="num", title=title),
+            html.Td(watchlist.format_change(pct), className="num", style={"color": color}),
+            html.Td(html.Button("×", id={"type": "watch-remove", "symbol": row["symbol"]}, n_clicks=0,
+                                className="watch-remove", title=f"Remove {row['symbol']}",
+                                **{"aria-label": f"Remove {row['symbol']}"})),
+        ]))
+    header = html.Tr([html.Th("Symbol", className="left"), html.Th("Last"), html.Th("Chg"), html.Th("")])
+    return [html.Table(className="watch-table", children=[html.Thead(header), html.Tbody(body)])]
+
+
+def _risk_body(snap: dict) -> list:
+    colors = {"ok": THEME["text_main"], "warn": "#e3b341", "breach": "#ff7b72", "unknown": THEME["text_muted"]}
+    out = []
+    for row in snap["rows"]:
+        text = f"{row['value_text']} / {row['limit_text']}" + ("  at limit" if row["state"] == "breach" else "")
+        out.append(html.Div(className="risk-row", children=[
+            html.Span(row["label"], style={"color": THEME["text_muted"]}),
+            html.Span(text, className="num", style={"color": colors[row["state"]]}),
+        ]))
+    if snap.get("halted"):
+        out.append(html.Div(f"Runner halted: {snap['halted'].get('reason', '')}",
+                            style={"color": "#e3b341", "fontSize": "12px", "marginTop": "4px"}))
+    out.append(html.Div(f"{snap['note']} Limits: {snap['limits_source']}.",
+                        style={"color": THEME["text_muted"], "fontSize": "12px", "marginTop": "6px"}))
+    return out
+
+
 def register_callbacks(app: dash.Dash) -> None:
     """Attach all callbacks to *app*.
 
@@ -1471,6 +1543,89 @@ def register_callbacks(app: dash.Dash) -> None:
             return True, no_update
         trading_status.engage_kill_switch("engaged from the Dash app")
         return False, (version or 0) + 1
+
+    # ------------------------------------------------------------------
+    # Design slice 2: workspace switch
+    # ------------------------------------------------------------------
+    from dash_app.layout import bottom_tab_specs
+    _specs = bottom_tab_specs()
+
+    @app.callback(
+        [Output(hid, "style") for hid, *_ in _specs]
+        + [Output("bottom-tabs", "value"), Output("backtest-panel", "style"), Output("risk-panel", "style")],
+        Input("workspace-select", "value"),
+        State("bottom-tabs", "value"),
+    )
+    def switch_workspace(workspace, current_tab):
+        styles, value, backtest_style, risk_style = _workspace_view(workspace, current_tab, _specs)
+        return [*styles, value, backtest_style, risk_style]
+
+    # ------------------------------------------------------------------
+    # Design slice 2: watchlist
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("watchlist-body", "children"),
+        Input("watchlist-interval", "n_intervals"),
+        Input("watchlist-version", "data"),
+    )
+    def render_watchlist(_n, _version):
+        symbols = watchlist.load()
+        book = _get_quote_book()
+        book.refresh_async(symbols)
+        return _watchlist_body(book.snapshot(symbols))
+
+    @app.callback(
+        Output("watchlist-version", "data"),
+        Output("watchlist-input", "value"),
+        Input("watchlist-add-btn", "n_clicks"),
+        Input("watchlist-input", "n_submit"),
+        Input({"type": "watch-remove", "symbol": ALL}, "n_clicks"),
+        State("watchlist-input", "value"),
+        State("watchlist-version", "data"),
+        prevent_initial_call=True,
+    )
+    def edit_watchlist(_add, _submit, _removes, text, version):
+        ctx = dash.callback_context
+        trig = ctx.triggered_id
+        if isinstance(trig, dict):
+            if not ctx.triggered[0].get("value"):            # rows re-rendered; nobody clicked
+                return no_update, no_update
+            watchlist.remove(trig["symbol"])
+            return (version or 0) + 1, no_update
+        if not (text or "").strip():
+            return no_update, no_update
+        watchlist.add(text)
+        return (version or 0) + 1, ""
+
+    @app.callback(
+        Output("symbol-dropdown", "value"),
+        Output("custom-symbol-input", "value"),
+        Output("load-btn", "n_clicks"),
+        Input({"type": "watch-symbol", "symbol": ALL}, "n_clicks"),
+        State("load-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def chart_from_watchlist(_clicks, load_clicks):
+        """Clicking a watchlist symbol charts it (sets the symbol and presses Load Chart)."""
+        ctx = dash.callback_context
+        trig = ctx.triggered_id
+        if not isinstance(trig, dict) or not ctx.triggered[0].get("value"):
+            return no_update, no_update, no_update
+        sym = trig["symbol"]
+        if sym in ui_options.SYMBOLS:
+            return sym, "", (load_clicks or 0) + 1
+        return no_update, sym, (load_clicks or 0) + 1       # typed symbols go through the custom box (it wins on Load)
+
+    # ------------------------------------------------------------------
+    # Design slice 2: risk panel
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("risk-panel-body", "children"),
+        Input("safety-interval", "n_intervals"),
+        Input("order-status", "children"),
+    )
+    def refresh_risk_panel(_n, _status):
+        return _risk_body(risk_view.risk_snapshot(_broker_or_none()))
 
     # ------------------------------------------------------------------
     # Phase 1.4: PnL Calendar month navigation → update pnl-calendar-store

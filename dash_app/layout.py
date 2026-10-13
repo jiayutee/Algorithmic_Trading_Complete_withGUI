@@ -34,6 +34,7 @@ _PAGE_STYLE = {
     "backgroundColor": THEME["bg_dark"],
     "color": THEME["text_main"],
     "minHeight": "100vh",
+    "overflowX": "hidden",       # bootstrap row gutters overhang the fluid container by a few px
     "fontFamily": _UI_FONT,
     "fontSize": "13px",
 }
@@ -133,6 +134,14 @@ def _topbar() -> html.Div:
         children=[
             html.Span("AlgoTrader", style={**_BRAND_STYLE, "fontSize": "14px", "paddingRight": "8px",
                                            "borderRight": f"1px solid {THEME['border']}"}),
+            dcc.RadioItems(
+                id="workspace-select",
+                className="workspace-select",
+                options=[{"label": html.Span(w, title=ui_options.WORKSPACE_TIPS[w]), "value": w}
+                         for w in ui_options.WORKSPACES],
+                value="Trade",
+                inline=True,
+            ),
 
             _muted("Symbol"),
             dcc.Dropdown(
@@ -262,6 +271,30 @@ def _chart_panel() -> dbc.Col:
             ),
         ],
         width=9,
+    )
+
+
+def _watchlist_panel() -> html.Div:
+    """Watchlist card: rows are filled by the watchlist callbacks (click a symbol to chart it)."""
+    return html.Div(
+        style={**_PANEL_STYLE, "marginBottom": "10px"},
+        children=[
+            html.P("Watchlist", style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "6px"},
+                   title="Crypto: Binance 24h. Others: Yahoo daily close (delayed). Click a symbol to chart it."),
+            html.Div(id="watchlist-body", children=html.Span("Loading quotes…", style=_LABEL_MUTED)),
+            html.Div(
+                style={"display": "flex", "gap": "6px", "marginTop": "6px"},
+                children=[
+                    dcc.Input(id="watchlist-input", type="text", placeholder="Add symbol", debounce=False, n_submit=0,
+                              style={"flex": "1", "minWidth": "0", "backgroundColor": THEME["bg_dark"],
+                                     "color": THEME["text_main"], "border": f"1px solid {THEME['border']}",
+                                     "borderRadius": "4px", "padding": "4px 6px", "fontSize": "12px"}),
+                    html.Button("Add", id="watchlist-add-btn", n_clicks=0, className="at-btn"),
+                ],
+            ),
+            dcc.Interval(id="watchlist-interval", interval=3000, n_intervals=0),
+            dcc.Store(id="watchlist-version", data=0),
+        ],
     )
 
 
@@ -430,8 +463,20 @@ def _metrics_panel() -> dbc.Col:
                     html.P("$100,000.00", id="account-balance", style=_METRIC_VALUE_STYLE),
                 ],
             ),
+            # Watchlist card (core/watchlist.py, shared with the desktop app)
+            _watchlist_panel(),
             # Order Entry card
             _order_entry_panel(),
+            # Risk card (core/risk_view.py)
+            html.Div(
+                id="risk-panel",
+                style={**_PANEL_STYLE, "marginBottom": "10px"},
+                title="Limits gate the paper runner's entries; manual orders are not gated by them.",
+                children=[
+                    html.P("Risk · paper runner limits", style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "6px"}),
+                    html.Div(id="risk-panel-body", children="—"),
+                ],
+            ),
             # P&L card
             html.Div(
                 style={**_PANEL_STYLE, "marginBottom": "10px"},
@@ -454,8 +499,9 @@ def _metrics_panel() -> dbc.Col:
                     ),
                 ],
             ),
-            # Backtest results card (Phase 1.5)
+            # Backtest results card (Phase 1.5) -- Research workspace only
             html.Div(
+                id="backtest-panel",
                 style={**_PANEL_STYLE, "marginBottom": "10px"},
                 children=[
                     html.P("Backtest Results", style={**_LABEL_MUTED, "fontWeight": "600", "marginBottom": "6px"}),
@@ -986,7 +1032,7 @@ def _bottom_tabs_panel() -> html.Div:
     the calendar display callback.  Both tabs also refresh after every order
     placement because they listen to order-status children changes.
     """
-    return html.Div(
+    panel = html.Div(
         style={"marginTop": "10px"},
         children=[
             dcc.Tabs(
@@ -1495,6 +1541,23 @@ def _bottom_tabs_panel() -> html.Div:
             ),
         ],
     )
+    for tab in panel.children[0].children:          # header ids for the workspace switch (callbacks.py)
+        tab.id = tab_header_id(tab.value)
+    return panel
+
+
+def tab_header_id(tab_value: str) -> str:
+    return f"tabhdr-{tab_value}"
+
+
+def bottom_tab_specs() -> list:
+    """[(header_id, label, value, workspace)] for every bottom tab, in order (used to register the workspace callback)."""
+    tabs = _bottom_tabs_panel().children[0].children
+    return [(tab.id, tab.label, tab.value, ui_options.workspace_for(tab.label)) for tab in tabs]
+
+
+def _tab_hidden_style() -> dict:
+    return {**_TAB_STYLE, "display": "none"}
 
 
 def _agent_table() -> "dash_table.DataTable":
