@@ -210,7 +210,8 @@ class DataLoader:
                 time.sleep(self.binance_public.rateLimit / 1000) # Respect rate limits
                 
             except Exception as e:
-                logger.warning(f"Failed to fetch batch from Binance (will retry/fallback): {e}")
+                logger.warning(f"Failed to fetch batch from Binance for {symbol} (will retry/fallback): "
+                               f"{type(e).__name__}: {str(e)[:200]}")
                 break
                 
         if not all_ohlcv:
@@ -250,14 +251,17 @@ class DataLoader:
 
     def _get_yahoo_crypto_historical(self, symbol, days, interval):
         """Fallback to Yahoo Finance for crypto (converts BTCUSDT to BTC-USD)"""
-        symbol_map = {
-            'BTCUSDT': 'BTC-USD',
-            'ETHUSDT': 'ETH-USD',
-            'SOLUSDT': 'SOL-USD',
-            'ADAUSDT': 'ADA-USD'
-        }
-        yahoo_symbol = symbol_map.get(symbol, symbol)
+        yahoo_symbol = self._yahoo_crypto_symbol(symbol)
         return self._get_yahoo_historical(yahoo_symbol, days, interval)
+
+    @staticmethod
+    def _yahoo_crypto_symbol(symbol):
+        """BTCUSDT -> BTC-USD for any <BASE>USDT pair. The old four-entry map left BNBUSDT (and the other collected
+        coins) without a fallback, so a Binance failure for them ended in an empty download."""
+        sym = str(symbol or "")
+        if sym.upper().endswith("USDT") and len(sym) > 4:
+            return sym[:-4].upper() + "-USD"
+        return sym
 
     def _get_openbb_historical(self, symbol: str, days: int, interval: str = "1d") -> pd.DataFrame:
         """Fetch OHLCV data via OpenBB Platform (provider: yfinance by default).

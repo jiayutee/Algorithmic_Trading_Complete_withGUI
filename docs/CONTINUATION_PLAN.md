@@ -144,3 +144,6 @@ After the owner merged #31, #32, #33 and #34: base env 1499 passed, 1 skipped; 3
 Kalshi resolve on a scratch copy with forced lookup failures printed the WARN line and exited 3 (canonical DB hash
 unchanged). The news baseline re-ran on a scratch copy (1849 items; numbers within ~2 points of 09-30; canonical hash
 unchanged by the run). No bugs found. Evidence: [post-merge-validation-79eaaa9-2026-10-01.md](artifacts/post-merge-validation-79eaaa9-2026-10-01.md).
+
+## 2026-10-14 — paper runner audit findings fixed (PR pending review)
+The three findings of the 10-03 paper-execution audit and three paper-account follow-ups are fixed on `fix/paper-runner-audit-findings`: risk baselines (peak equity, day start) now refresh on every poll instead of only before an order; Yahoo fallback for any `<BASE>USDT` (BNB had none); Binance failures log the exception; saved fees win in `SimulatedBroker`; `reset()` uses the file's starting balance; order ids no longer collide within a millisecond. Not live until the paper runner is restarted on a checkout containing the branch. See [evidence](artifacts/paper-runner-audit-fixes-2026-10-14.md). Alerts and protective stop rules remain proposals (`docs/PAPER_OPERATIONS_AUDIT.md`).

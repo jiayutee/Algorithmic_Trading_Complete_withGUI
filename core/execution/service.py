@@ -208,6 +208,7 @@ class ExecutionService:
             self._publish_status(running=False, note="another runner holds the lease")
             return {"skipped": "lease held elsewhere"}
         self._resolve_ambiguous(now)
+        self._refresh_baselines(now)
         for sym in self.cfg.symbols:
             try:
                 self._per_symbol[sym] = self._process_symbol(sym, now)
@@ -227,6 +228,23 @@ class ExecutionService:
         except Exception as exc:  # noqa: BLE001
             logger.debug("latest price failed for %s: %s", symbol, exc)
         return fallback
+
+    def _refresh_baselines(self, now: float) -> None:
+        """Keep peak equity and the day's starting equity current on EVERY poll, not only when an order is about to be sent.
+
+        They used to move only inside risk approval, so after weeks of holds the journal still had the first day's 100,000
+        and the drawdown / daily-loss entry limits were measured from stale numbers (looser than documented). Positions are
+        marked to a fresh price first; if any held symbol has no fresh price this poll the baselines are left alone, because
+        an equity built from cost-basis values would be wrong in either direction. Never raises and never blocks anything."""
+        try:
+            for sym in list(self.broker.positions):
+                price = self._price(sym, fallback=None)
+                if price is None:
+                    return
+                self.broker.update_price(sym, price)
+            self._baselines(float(self.broker.get_account_info()["portfolio_value"]), now)
+        except Exception as exc:  # noqa: BLE001 -- bookkeeping must never stop the loop
+            logger.warning("execution: could not refresh risk baselines: %s", exc)
 
     def _baselines(self, equity: float, now: float) -> tuple:
         day = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%d")
