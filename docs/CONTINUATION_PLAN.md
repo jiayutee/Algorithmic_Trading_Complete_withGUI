@@ -192,3 +192,6 @@ The three findings of the 10-03 paper-execution audit and three paper-account fo
   all rc=1 on DNS at wake). #36 only bounds `resolve`; collect-on-wake belongs with the overnight/sleep resilience
   decision. The fail-fast only catches *consecutive* failures. The news-quality fix slice 1 is merged as a proposal
   (#35), not implemented.
+
+## 2026-10-14 — desktop GUI tests repaired after design slice 1
+`test_gui.py` is excluded from CI, so merging design slice 1 (order review dialog, positions tables) left it broken in two ways that nothing flagged: `TestOrderEntryWiring` hung forever because an order with no on-screen price now opens a modal "Order not sent" dialog (offscreen there is nobody to click it), and three tests read the removed `positions_text` box. Fixed in the test file only: the order tests give the window a fresh price and switch the paper review off; the positions tests read the new tables; an autouse guard turns any unexpected modal dialog into a failure instead of a hang; and one new test covers "no price -> nothing sent, user told why". `test_gui.py` now runs in about 11 s (62 passed). Production code unchanged. Lesson: run `QT_QPA_PLATFORM=offscreen pytest test_gui.py` before merging any change to `ui/main_window.py`.
