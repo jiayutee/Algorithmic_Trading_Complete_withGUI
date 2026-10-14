@@ -42,6 +42,9 @@ core/
   trend_overlay.py        # Trend-filter rule (28-bar, weekly): drawdown reduction, NOT alpha (Phases 6.7-6.9)
   risk_sizing.py          # Volatility-targeting helpers (Phase 6.6; result: did not help)
   trading_status.py       # Account mode (PAPER/DRY-RUN/LIVE/BLOCKED), kill-switch file, price age, order preview -- used by BOTH front ends
+  design_tokens.py        # Colors/fonts/sizes for BOTH front ends: qt_stylesheet() (desktop), css_root() (Dash), chart THEME
+  watchlist.py            # Shared watchlist (training_ground/paper/watchlist.json, WATCHLIST_PATH) + background QuoteBook
+  risk_view.py            # Read-only risk rows: paper account vs the paper runner's limits (never creates the journal)
   news_health.py          # Per-source circuit breaker so one rate-limited news source can't stall a refresh
   news_context.py         # Read-only chart-linked news snapshots for the Dash "Market Context" tab (no sentiment/store writes)
   news_interpretation.py  # Deterministic rule-based event reading (conditional bias, mechanism, counterargument) -- not a forecast

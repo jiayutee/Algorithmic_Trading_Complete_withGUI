@@ -20,19 +20,21 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # ---------------------------------------------------------------------------
-# Color palette — identical to the hex values in ui/main_window.py stylesheet
+# Color palette — read from core/design_tokens.py (shared with both front ends)
 # ---------------------------------------------------------------------------
+from core.design_tokens import COLOR as _C
+
 THEME: Dict[str, str] = {
-    "bg_dark":    "#0d1117",  # main window / page background
-    "bg_card":    "#161b22",  # panel / card background
-    "border":     "#30363d",
-    "border_dim": "#21262d",
-    "text_main":  "#e6edf3",
-    "text_muted": "#8b949e",
-    "accent":     "#58a6ff",  # blue highlight
-    "green":      "#3fb950",  # profit / buy
-    "red":        "#f85149",  # loss / sell
-    "orange":     "#f0883e",  # warning / pending
+    "bg_dark":    _C["surface_base"],   # main window / page background
+    "bg_card":    _C["surface_panel"],  # panel / card background
+    "border":     _C["border"],
+    "border_dim": _C["border_dim"],
+    "text_main":  _C["text_primary"],
+    "text_muted": _C["text_muted"],
+    "accent":     _C["accent"],         # blue highlight
+    "green":      _C["up"],             # profit / buy
+    "red":        _C["down_strong"],    # loss / sell
+    "orange":     _C["pending"],        # warning / pending
 }
 
 _BASE_TEMPLATE = "plotly_dark"

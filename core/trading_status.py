@@ -38,16 +38,18 @@ SIMULATOR_NAME = "Simulator"
 
 # Presentation colors shared by both front ends (design language v2). Each mode differs in lightness as well as hue,
 # and the label text always names the mode, so color is never the only cue.
+from core.design_tokens import COLOR as _C, FONT_MONO as _FONT_MONO, FONT_UI as _FONT_UI
+
 MODE_COLORS = {          # mode -> (background, foreground, border)
-    MODE_PAPER:       ("#0f3d3a", "#56d4c9", "#0f3d3a"),
-    MODE_DRY_RUN:     ("#3d2e00", "#e3b341", "#3d2e00"),
-    MODE_LIVE:        ("#b62324", "#ffffff", "#ff7b72"),
-    MODE_BLOCKED:     ("#21262d", "#e6edf3", "#ff7b72"),
-    MODE_UNAVAILABLE: ("#21262d", "#8b949e", "#30363d"),
+    MODE_PAPER:       (_C["mode_paper_bg"], _C["mode_paper_fg"], _C["mode_paper_bg"]),
+    MODE_DRY_RUN:     (_C["warn_bg"], _C["warn"], _C["warn_bg"]),
+    MODE_LIVE:        (_C["mode_live_bg"], _C["text_on_fill"], _C["down"]),
+    MODE_BLOCKED:     (_C["surface_raised"], _C["text_primary"], _C["down"]),
+    MODE_UNAVAILABLE: (_C["surface_raised"], _C["text_muted"], _C["border"]),
 }
-FRESHNESS_COLORS = {"fresh": "#8b949e", "aging": "#e3b341", "stale": "#ff7b72", "unknown": "#8b949e"}
-UI_FONT_FAMILIES = ["IBM Plex Sans", "SF Pro Text", "Helvetica Neue", "Segoe UI", "Arial", "sans-serif"]
-MONO_FONT_FAMILIES = ["IBM Plex Mono", "SF Mono", "Menlo", "Consolas", "monospace"]
+FRESHNESS_COLORS = {"fresh": _C["text_muted"], "aging": _C["warn"], "stale": _C["down"], "unknown": _C["text_muted"]}
+UI_FONT_FAMILIES = _FONT_UI
+MONO_FONT_FAMILIES = _FONT_MONO
 
 
 @dataclass(frozen=True)

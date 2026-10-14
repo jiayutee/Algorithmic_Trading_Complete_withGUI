@@ -51,6 +51,10 @@ app = dash.Dash(
 
 app.layout = build_layout()
 
+# Design tokens as CSS variables (core/design_tokens.py), read by assets/theme.css -- one palette for both front ends.
+from core.design_tokens import css_root as _css_root
+app.index_string = app.index_string.replace("{%css%}", "{%css%}\n        <style>" + _css_root() + "</style>", 1)
+
 register_callbacks(app)
 from dash_app.news_context import register_context_callbacks
 register_context_callbacks(app)

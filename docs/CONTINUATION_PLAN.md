@@ -158,6 +158,16 @@ verified offscreen only; Dash verified in a browser against a scratch account. E
 Open: desktop Backtest resets the shared Simulator account in memory (separate fix); slice 2 (tokens file, workspaces,
 watchlist, risk panel, journal, bracket orders) not started.
 
+## 2026-10-14 — design slice 2: structure (both front ends)
+`core/design_tokens.py` now drives the desktop's global Qt stylesheet, the web CSS variables, the chart theme and the
+account-mode colors. Both apps group their tabs into Trade / Research / Automate / Markets (one map in
+`core/ui_options.py`), show a watchlist with live quotes (`core/watchlist.py`, shared list) and a risk panel against
+the paper runner's limits (`core/risk_view.py`, read-only). The desktop "switch to Orders" after an order was fixed. Dropped:
+a journal tab (rationale is already shown in Orders "Why" and the Execution tab; the review's claim was wrong) and
+bracket orders / time in force (broker change, own slice). **Implemented and tested on branch `design/slice2-structure`
+(stacked on slice 1; PR pending review; not merged, not deployed).** 1546 passed, 1 skipped; desktop checked offscreen
+only; web checked in a browser against scratch data. Evidence: [design-slice2-structure-2026-10-14.md](artifacts/design-slice2-structure-2026-10-14.md).
+
 ## 2026-10-14 — desktop backtest no longer touches the paper account
 `MainWindow.run_backtest()` borrowed the app's Simulator (the durable paper account), wiped its positions/orders/balance
 in memory, set its fees from the backtest inputs and then made it the Account panel's broker showing the backtest's Final

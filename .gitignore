@@ -46,3 +46,6 @@ logs/
 
 # linter cache
 .ruff_cache/
+
+# Watchlist shared by desktop + Dash (core/watchlist.py)
+training_ground/paper/watchlist.json

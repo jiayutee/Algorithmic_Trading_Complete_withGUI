@@ -1,15 +1,51 @@
-/* Design language v2 (see core/trading_status.py for the shared font and mode colors).
-   UI text is sans; numbers opt into mono with tabular figures so columns line up. */
+/* Design language v2. Colors, fonts and sizes are CSS variables injected from core/design_tokens.py
+   (dash_app/app.py adds the :root block), so this file names roles, not hex values. */
 .num {
-  font-family: 'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
-.positions-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.positions-table th { color: #8b949e; font-weight: 500; font-size: 12px; padding: 6px 10px; text-align: right; }
-.positions-table td { padding: 6px 10px; text-align: right; border-top: 1px solid #21262d; }
-.positions-table th.left, .positions-table td.left { text-align: left; }
-.positions-table button {
-  background: transparent; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px;
-  padding: 4px 12px; font-size: 12px; cursor: pointer;
+
+/* Workspace switch in the header: a segmented control built on dcc.RadioItems */
+.workspace-select { display: inline-flex; gap: 2px; }
+.workspace-select label { margin: 0; cursor: pointer; }
+.workspace-select input[type=radio] { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.workspace-select label > span {
+  display: inline-block; padding: 5px 12px; border-radius: var(--radius-control);
+  color: var(--color-text-secondary); font-size: var(--size-body);
 }
-.positions-table button:hover { border-color: #58a6ff; }
+.workspace-select label:hover > span { background: var(--color-surface-hover); }
+.workspace-select input[type=radio]:checked + span {
+  background: var(--color-surface-selected); color: var(--color-text-on-fill); font-weight: 600;
+}
+.workspace-select input[type=radio]:focus-visible + span { outline: 2px solid var(--color-accent); }
+
+.at-btn {
+  background: var(--color-surface-raised); color: var(--color-text-primary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-control); padding: 4px 10px; font-size: var(--size-caption); cursor: pointer;
+}
+.at-btn:hover { border-color: var(--color-accent); }
+
+.positions-table, .watch-table { width: 100%; border-collapse: collapse; font-size: var(--size-body); }
+.positions-table th, .watch-table th {
+  color: var(--color-text-muted); font-weight: 500; font-size: var(--size-caption); padding: 6px 10px; text-align: right;
+}
+.positions-table td { padding: 6px 10px; text-align: right; border-top: 1px solid var(--color-border-dim); }
+.watch-table td { padding: 2px 4px; text-align: right; border-top: 1px solid var(--color-border-dim); }
+.watch-table th { padding: 2px 4px; }
+.positions-table th.left, .positions-table td.left, .watch-table th.left, .watch-table td.left { text-align: left; }
+.positions-table button {
+  background: transparent; color: var(--color-text-primary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-control); padding: 4px 12px; font-size: var(--size-caption); cursor: pointer;
+}
+.positions-table button:hover { border-color: var(--color-accent); }
+.watch-table button.watch-symbol {
+  background: none; border: none; padding: 4px 0; color: var(--color-text-primary); font-weight: 600;
+  cursor: pointer; font-size: var(--size-body);
+}
+.watch-table button.watch-symbol:hover { color: var(--color-accent); text-decoration: underline; }
+.watch-table button.watch-remove {
+  background: none; border: none; color: var(--color-text-muted); cursor: pointer; padding: 2px 4px;
+  font-size: var(--size-caption);
+}
+.watch-table button.watch-remove:hover { color: var(--color-down); }
+.risk-row { display: flex; justify-content: space-between; gap: 8px; font-size: var(--size-caption); padding: 2px 0; }
