@@ -1,6 +1,18 @@
-# Claude / Codex handoff — updated 2026-10-01
+# Claude / Codex handoff — updated 2026-10-07
 
-## Latest: main 79eaaa9 after PRs #31-#34 (2026-10-01)
+## Latest: main 47a9ded after PRs #35-#37 (2026-10-06/07)
+The owner merged #35 (post-merge validation of 79eaaa9 + news-quality fix slice 1 *proposal*), #36 (Kalshi `resolve`
+stops after 3 consecutive connection failures) and #37 (read-only paper execution audit) on 2026-10-06 23:29. The
+running checkout is on 47a9ded, so #36 is **deployed**. First live result 2026-10-07: the 17:09 resolve stopped early at
+18:34:08 (61 skipped, rc=3); the 07:11 resolve did not trip (81 min, rc=3) because its failures were not consecutive
+across sleep. Post-merge validation of 47a9ded (2026-10-07): base 1503 passed / 3.11 1505 passed (1 skipped each), main CI success.
+Still open: the 07:05 Kalshi `collect` slot is lost when the Mac sleeps on battery (10-05/06/07, DNS at wake) and needs
+the owner's overnight/sleep schedule decision; news-quality slice 1, the paper risk-baseline fix and the other two Day 98
+candidate fixes are not implemented (owner decisions); Phase 9.2 HOLD (day 18 of ~28); Phase 9.4 not started.
+Evidence: [kalshi-collector-outage-2026-10-02.md](artifacts/kalshi-collector-outage-2026-10-02.md),
+[paper-execution-audit-2026-10-03.md](artifacts/paper-execution-audit-2026-10-03.md).
+
+## Previous: main 79eaaa9 after PRs #31-#34 (2026-10-01)
 The owner merged #31 (Phase 9.3 re-run, F FINDING), #33 (Kalshi `resolve` exits 3 on lookup errors), #34 (news quality
 baseline, report only) and #32 (overnight-schedule proposal, docs only). Post-merge validation found no bugs:
 [post-merge-validation-79eaaa9-2026-10-01.md](artifacts/post-merge-validation-79eaaa9-2026-10-01.md). The running checkout
