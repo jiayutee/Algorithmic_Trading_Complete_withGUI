@@ -158,6 +158,19 @@ verified offscreen only; Dash verified in a browser against a scratch account. E
 Open: desktop Backtest resets the shared Simulator account in memory (separate fix); slice 2 (tokens file, workspaces,
 watchlist, risk panel, journal, bracket orders) not started.
 
+## 2026-10-14 — desktop backtest no longer touches the paper account
+`MainWindow.run_backtest()` borrowed the app's Simulator (the durable paper account), wiped its positions/orders/balance
+in memory, set its fees from the backtest inputs and then made it the Account panel's broker showing the backtest's Final
+Value. Reproduced against a scratch account: positions and orders came back from sqlite on the next account operation, but
+the backtest fee did not (`_load_from_store_locked` doesn't reload fees). It was charged on the next real paper order and
+written to the account file. The real account still shows the default fees (checked read-only). Fix: the backtest now uses
+no app broker (backtrader brings its own) and leaves `current_broker` alone. Regression test
+`tests/test_backtest_paper_isolation.py` fails on the old code and passes now. Base suite 1505 passed, 1 skipped; one earlier
+run hit an intermittent failure in `test_paper_account.py`. **Implemented and tested; PR open, not merged, not deployed.**
+Still open: `SimulatedBroker` doesn't reload fees from the store, and a no-argument `reset()` uses the in-memory
+`initial_balance`. Neither is reachable from the UI after this fix.
+Evidence: [desktop-backtest-paper-isolation-2026-10-14.md](artifacts/desktop-backtest-paper-isolation-2026-10-14.md).
+
 ## 2026-10-02 to 2026-10-07 — Kalshi fail-fast, paper audit, merges (Days 97-102)
 - **Kalshi resolve fail-fast (Day 97, PR #36).** Cause of the 2026-10-02 loss: the Mac was in clamshell sleep on battery,
   launchd ran the missed jobs in DarkWakes with no DNS, so `collect` failed (rc=1) and `resolve` spent hours asleep between
