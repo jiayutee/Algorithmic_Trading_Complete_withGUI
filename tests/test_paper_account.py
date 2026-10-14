@@ -189,3 +189,65 @@ def test_in_memory_mode_is_unchanged_when_no_path_is_given():
     assert b._store is None
     b.market_data["X"] = 100.0
     assert b.submit_order("X", 1, "buy").status == OrderStatus.FILLED
+
+
+# ------------------------------------------------------------------ follow-ups from the desktop-backtest isolation work
+
+def test_order_ids_do_not_collide_for_orders_in_the_same_millisecond(tmp_path, monkeypatch):
+    """Two processes share one file; an id clash used to overwrite the first order silently (suspected cause of a rare
+    flake in test_two_processes_share_one_account)."""
+    import brokers.simulatedbroker as sb
+    monkeypatch.setattr(sb.time, "time", lambda: 1_700_000_000.123)         # every order lands in the same millisecond
+    monkeypatch.setattr(sb.random, "randint", lambda a, b: 1234)            # and the old random suffix would also match
+    path = str(tmp_path / "acct.sqlite3")
+    a = make(persist_path=path, strict_prices=True)
+    b = make(persist_path=path, strict_prices=True)
+    a.market_data["AAPL"] = b.market_data["AAPL"] = 100.0
+    a._price_time["AAPL"] = b._price_time["AAPL"] = 1_700_000_000.123
+    ids = {a.submit_order("AAPL", 1, "buy").id, b.submit_order("AAPL", 1, "buy").id, a.submit_order("AAPL", 1, "buy").id}
+    assert len(ids) == 3 and all(i.startswith("simorder_1700000000123_") for i in ids)
+    assert len(a.get_orders()) == len(b.get_orders()) == 3                 # none was overwritten in the store
+    a.close(); b.close()
+
+
+def test_saved_fees_win_over_constructor_fees_and_survive_a_second_instance(tmp_path):
+    path = str(tmp_path / "acct.sqlite3")
+    a = make(persist_path=path, strict_prices=True)                          # default fees: 0.1% market, 0.05% limit
+    a.update_price("AAPL", 100.0)
+    a.submit_order("AAPL", 1, "buy")
+    a.close()
+    odd = SimulatedBroker(market_fee=0.05, limit_fee=0.05, strict_prices=True, persist_path=path)      # a differently configured instance
+    odd.update_price("AAPL", 100.0)
+    before = odd.balance
+    order = odd.submit_order("AAPL", 1, "buy")
+    assert odd.market_fee == pytest.approx(0.001) and odd.limit_fee == pytest.approx(0.0005)             # the file's fees, not 5%
+    assert before - odd.balance == pytest.approx(100.0 * (1 + 0.001))
+    odd.close()
+    again = SimulatedBroker(strict_prices=True, persist_path=path)
+    assert again.market_fee == pytest.approx(0.001)                         # and the 5% never leaked into the file
+    again.close()
+
+
+def test_reset_without_an_amount_uses_the_files_starting_balance_not_this_instances(tmp_path):
+    path = str(tmp_path / "acct.sqlite3")
+    stale = SimulatedBroker(initial_balance=50_000.0, strict_prices=True, persist_path=path)       # opened when the account started at 50,000
+    other = SimulatedBroker(strict_prices=True, persist_path=path)
+    other.reset(30_000.0)                                                   # the account is restarted at 30,000 elsewhere (e.g. the other app)
+    assert stale.initial_balance == 50_000.0                               # `stale` has not looked at the file since
+    stale.reset()                                                           # "back to the account's own starting balance"
+    assert stale.initial_balance == 30_000.0 and stale.balance == 30_000.0
+    stale.close(); other.close()
+    check = SimulatedBroker(strict_prices=True, persist_path=path)
+    assert check.balance == 30_000.0 and check.initial_balance == 30_000.0
+    check.close()
+
+
+def test_reset_with_an_explicit_amount_still_wins_and_in_memory_reset_is_unchanged(tmp_path):
+    path = str(tmp_path / "acct.sqlite3")
+    b = SimulatedBroker(strict_prices=True, persist_path=path)
+    b.reset(25_000.0)
+    assert b.balance == 25_000.0
+    b.close()
+    mem = SimulatedBroker(initial_balance=10_000.0)
+    mem.reset()
+    assert mem.balance == 10_000.0
