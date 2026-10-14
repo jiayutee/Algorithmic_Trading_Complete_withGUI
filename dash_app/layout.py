@@ -19,7 +19,7 @@ import datetime
 import dash_bootstrap_components as dbc
 from dash import dcc, html, dash_table
 
-from core import ui_options
+from core import trading_status, ui_options
 from core.chart_builder import THEME, build_candlestick_figure
 from dash_app.news_context import context_panel
 from core.strategy_manager import backtrader_strategies
@@ -27,22 +27,26 @@ from core.strategy_manager import backtrader_strategies
 # ---------------------------------------------------------------------------
 # Inline CSS that matches the PyQt5 stylesheet hex palette
 # ---------------------------------------------------------------------------
+# Design language v2: proportional sans for UI text; numbers opt into mono via the "num" class (assets/theme.css).
+_UI_FONT = ", ".join(f"'{f}'" if " " in f else f for f in trading_status.UI_FONT_FAMILIES)
+
 _PAGE_STYLE = {
     "backgroundColor": THEME["bg_dark"],
     "color": THEME["text_main"],
     "minHeight": "100vh",
-    "fontFamily": "'SF Mono', 'Consolas', 'Menlo', monospace",
-    "fontSize": "12px",
+    "fontFamily": _UI_FONT,
+    "fontSize": "13px",
 }
 
 _TOPBAR_STYLE = {
     "backgroundColor": THEME["bg_card"],
     "borderBottom": f"1px solid {THEME['border']}",
-    "padding": "0 12px",
-    "height": "44px",
+    "padding": "6px 12px",
+    "minHeight": "44px",
     "display": "flex",
+    "flexWrap": "wrap",       # narrow windows: controls wrap instead of pushing the safety strip off-screen
     "alignItems": "center",
-    "gap": "12px",
+    "gap": "8px 12px",
 }
 
 _BRAND_STYLE = {
@@ -54,7 +58,7 @@ _BRAND_STYLE = {
 
 _LABEL_MUTED = {
     "color": THEME["text_muted"],
-    "fontSize": "11px",
+    "fontSize": "12px",
     "marginBottom": "0",
 }
 
@@ -97,7 +101,7 @@ _TAB_STYLE = {
     "backgroundColor": THEME["bg_dark"],
     "color": THEME["text_muted"],
     "borderColor": THEME["border"],
-    "fontFamily": "'SF Mono', 'Consolas', 'Menlo', monospace",
+    "fontFamily": _UI_FONT,
     "fontSize": "12px",
     "padding": "6px 14px",
 }
@@ -127,8 +131,8 @@ def _topbar() -> html.Div:
     return html.Div(
         style=_TOPBAR_STYLE,
         children=[
-            html.Span("◈ AlgoTrader", style=_BRAND_STYLE),
-            html.Span("|", style={"color": THEME["border"], "fontSize": "16px"}),
+            html.Span("AlgoTrader", style={**_BRAND_STYLE, "fontSize": "14px", "paddingRight": "8px",
+                                           "borderRight": f"1px solid {THEME['border']}"}),
 
             _muted("Symbol"),
             dcc.Dropdown(
@@ -208,6 +212,13 @@ def _topbar() -> html.Div:
                     "fontSize": "12px",
                 },
             ),
+
+            # Safety strip: which account an order hits, and the live kill switch (both refreshed by safety-interval).
+            html.Span(id="mode-pill", title="", style={"display": "none"}),
+            html.Button("Kill switch", id="kill-switch-btn", n_clicks=0, style={"display": "none"}),
+            dcc.ConfirmDialog(id="kill-release-confirm",
+                              message="Release the kill switch and allow live orders again? They still need "
+                                      "LIVE_TRADING_ENABLED and must pass the order limits."),
         ],
     )
 
@@ -317,17 +328,30 @@ def _order_entry_panel() -> html.Div:
                     ),
                 ],
             ),
+            # --- Last price and its age (market orders fill at this price) ----
+            html.Div(id="price-age",
+                     style={"color": THEME["text_muted"], "fontSize": "12px", "marginTop": "8px"},
+                     children="No price yet: load a chart"),
+            html.Div(
+                title="Show cost, fee and warnings before each order. Orders with warnings are always reviewed.",
+                children=dcc.Checklist(
+                    id="order-review-toggle",
+                    options=[{"label": " Review before sending", "value": "on"}],
+                    value=["on"],
+                    style={"color": THEME["text_muted"], "fontSize": "12px", "marginTop": "4px"},
+                ),
+            ),
             # --- Buy / Sell buttons --------------------------------------------
             html.Div(
                 style={"display": "flex", "gap": "4%", "marginTop": "8px"},
                 children=[
                     html.Button(
-                        "Buy",
+                        "▲ Buy",
                         id="buy-btn",
                         n_clicks=0,
                         style={
-                            "backgroundColor": THEME["green"],
-                            "color": "#0d1117",
+                            "backgroundColor": "#238636",
+                            "color": "#ffffff",
                             "border": "none",
                             "borderRadius": "4px",
                             "padding": "6px 0",
@@ -338,11 +362,11 @@ def _order_entry_panel() -> html.Div:
                         },
                     ),
                     html.Button(
-                        "Sell",
+                        "▼ Sell",
                         id="sell-btn",
                         n_clicks=0,
                         style={
-                            "backgroundColor": THEME["red"],
+                            "backgroundColor": "#da3633",
                             "color": "#ffffff",
                             "border": "none",
                             "borderRadius": "4px",
@@ -352,6 +376,28 @@ def _order_entry_panel() -> html.Div:
                             "fontWeight": "bold",
                             "width": "48%",
                         },
+                    ),
+                ],
+            ),
+            # --- Review step (filled by the order_ticket callback; hidden until Buy/Sell/Close) ----
+            dcc.Store(id="order-draft-store", data=None),
+            html.Div(
+                id="order-review",
+                style={"display": "none"},
+                children=[
+                    html.Div(id="order-review-body"),
+                    html.Div(
+                        style={"display": "flex", "gap": "4%", "marginTop": "8px"},
+                        children=[
+                            html.Button("Back to edit", id="order-cancel-btn", n_clicks=0, style={
+                                "width": "48%", "padding": "8px 0", "borderRadius": "4px", "cursor": "pointer",
+                                "backgroundColor": "transparent", "color": THEME["text_main"],
+                                "border": f"1px solid {THEME['border']}", "fontSize": "12px"}),
+                            html.Button("Confirm", id="order-confirm-btn", n_clicks=0, style={
+                                "width": "48%", "padding": "8px 0", "borderRadius": "4px", "cursor": "pointer",
+                                "backgroundColor": THEME["accent"], "color": "#0d1117", "border": "none",
+                                "fontSize": "12px", "fontWeight": "bold"}),
+                        ],
                     ),
                 ],
             ),
@@ -1807,7 +1853,7 @@ def _status_bar() -> html.Div:
             "backgroundColor": THEME["bg_card"],
             "borderTop": f"1px solid {THEME['border']}",
             "color": THEME["text_muted"],
-            "fontSize": "11px",
+            "fontSize": "12px",
             "padding": "4px 12px",
         },
     )
@@ -1856,6 +1902,10 @@ def build_layout() -> html.Div:
                 n_intervals=0,
                 disabled=True,
             ),
+
+            # Header safety state (account mode, kill switch, price age). Always on: it is cheap (a file check).
+            dcc.Interval(id="safety-interval", interval=2000, n_intervals=0),
+            dcc.Store(id="kill-switch-store", data=0),
 
             # Top navigation bar
             _topbar(),

@@ -6,9 +6,10 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QTextEdit, QTabWidget, QSplitter, QTableWidget,
                              QTableWidgetItem, QHeaderView, QApplication, QFormLayout,
                              QFrame, QSizePolicy, QGridLayout, QCheckBox)
-from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor
+from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor, QFont
 from core.paper_marking import HeldPriceMarker
 from core import ui_options
+from core import trading_status
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView
@@ -49,6 +50,17 @@ from core.trade_rationale import (
     format_rationale, format_rationale_detail, manual_rationale, submit_with_rationale,
 )
 from core.chart_builder import build_candlestick_figure, overlay_signals
+
+
+def _mono_font():
+    """Fixed-width font with tabular digits for prices, quantities and P&L (design language v2)."""
+    font = QFont()
+    if hasattr(font, "setFamilies"):
+        font.setFamilies(trading_status.MONO_FONT_FAMILIES)
+    else:
+        font.setFamily(trading_status.MONO_FONT_FAMILIES[0])
+    font.setStyleHint(QFont.Monospace)
+    return font
 
 
 class NewsWorker(QThread):
@@ -123,11 +135,19 @@ class MainWindow(QMainWindow):
         self.resize(w, h)
         self.move(screen.center() - self.rect().center())
 
+        # UI text in a proportional sans; numbers use the mono font (see _mono_css). Design language v2.
+        ui_font = QFont()
+        if hasattr(ui_font, "setFamilies"):
+            ui_font.setFamilies(trading_status.UI_FONT_FAMILIES)
+        else:
+            ui_font.setFamily(trading_status.UI_FONT_FAMILIES[0])
+        self.setFont(ui_font)
+
         # Global dark stylesheet
         self.setStyleSheet("""
             QMainWindow, QWidget { background: #0d1117; color: #e6edf3; }
             QGroupBox { border: 1px solid #30363d; border-radius: 6px; margin-top: 8px;
-                        font-size: 11px; font-weight: 600; color: #8b949e; padding: 6px 4px 4px 4px; }
+                        font-size: 12px; font-weight: 600; color: #8b949e; padding: 6px 4px 4px 4px; }
             QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
             QComboBox { background: #161b22; border: 1px solid #30363d; border-radius: 4px;
                         padding: 3px 6px; color: #e6edf3; font-size: 12px; min-height: 22px; }
@@ -144,24 +164,24 @@ class MainWindow(QMainWindow):
                           padding: 4px 10px; color: #e6edf3; font-size: 12px; min-height: 24px; }
             QPushButton:hover { background: #30363d; border-color: #58a6ff; }
             QPushButton:pressed { background: #161b22; }
-            QPushButton:disabled { color: #484f58; border-color: #21262d; }
+            QPushButton:disabled { color: #6e7681; border-color: #21262d; }
             QTabWidget::pane { border: 1px solid #30363d; border-radius: 4px; }
             QTabBar::tab { background: #161b22; border: 1px solid #30363d; padding: 5px 12px;
-                           color: #8b949e; font-size: 11px; border-bottom: none; border-radius: 4px 4px 0 0; }
+                           color: #8b949e; font-size: 12px; border-bottom: none; border-radius: 4px 4px 0 0; }
             QTabBar::tab:selected { background: #0d1117; color: #e6edf3; border-bottom: 2px solid #58a6ff; }
             QTableWidget { background: #0d1117; alternate-background-color: #1a2130;
                            gridline-color: #21262d; color: #e6edf3;
-                           border: none; font-size: 11px; }
+                           border: none; font-size: 12px; }
             QTableWidget::item:selected { background: #1f3d6b; color: #ffffff; }
             QHeaderView::section { background: #161b22; color: #8b949e; border: none;
-                                   border-bottom: 1px solid #30363d; padding: 4px 6px; font-size: 10px;
-                                   font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+                                   border-bottom: 1px solid #30363d; padding: 4px 6px; font-size: 12px;
+                                   font-weight: 600; }
             QTextEdit { background: #161b22; border: 1px solid #30363d; border-radius: 4px;
-                        color: #e6edf3; font-family: 'SF Mono', 'Consolas', monospace; font-size: 11px; }
+                        color: #e6edf3; font-family: 'SF Mono', 'Consolas', monospace; font-size: 12px; }
             QScrollBar:vertical { background: #0d1117; width: 8px; }
             QScrollBar::handle:vertical { background: #30363d; border-radius: 4px; min-height: 20px; }
             QSplitter::handle { background: #30363d; width: 1px; height: 1px; }
-            QStatusBar { background: #161b22; border-top: 1px solid #30363d; color: #8b949e; font-size: 11px; }
+            QStatusBar { background: #161b22; border-top: 1px solid #30363d; color: #8b949e; font-size: 12px; }
             QLabel { color: #e6edf3; font-size: 12px; }
             QPushButton#liveBtn { background: #1a4731; border-color: #2ea043; color: #3fb950; font-weight: 600; }
             QPushButton#liveBtn:hover { background: #1f5e3a; }
@@ -245,12 +265,25 @@ class MainWindow(QMainWindow):
         self.refresh_account_btn.clicked.connect(self.refresh_account_info)
         self.buy_btn.clicked.connect(lambda: self.place_order("buy"))
         self.sell_btn.clicked.connect(lambda: self.place_order("sell"))
+        self.broker_combo.currentTextChanged.connect(self._on_broker_changed)
+        self.kill_btn.clicked.connect(self._toggle_kill_switch)
+
+        # Header safety state + price age: refreshed every second (cheap: a file check and a subtraction)
+        self._price_as_of = None          # time.time() when the price on screen was obtained
+        self._price_symbol = None
+        self._refresh_safety_header()
+        self._safety_timer = QTimer(self)
+        self._safety_timer.timeout.connect(self._refresh_safety_header)
+        self._safety_timer.start(1000)
 
         # Initial order type UI state
         self.on_order_type_changed("Market")
 
         # Broker monitoring timer
         self.broker_timer.start(5000)
+
+        # Show the selected account (balance, positions, mode) from the start, not only after the first order
+        QTimer.singleShot(0, lambda: self._on_broker_changed(self.broker_combo.currentText()))
 
         # Defer initial data load and news fetch
         QTimer.singleShot(200, self.load_data)
@@ -302,8 +335,8 @@ class MainWindow(QMainWindow):
         layout.setSpacing(6)
 
         # Brand label
-        brand = QLabel("◈ AlgoTrader")
-        brand.setStyleSheet("color: #58a6ff; font-size: 13px; font-weight: bold;")
+        brand = QLabel("AlgoTrader")
+        brand.setStyleSheet("color: #58a6ff; font-size: 14px; font-weight: bold;")
         layout.addWidget(brand)
 
         # Separator
@@ -395,14 +428,15 @@ class MainWindow(QMainWindow):
         self.load_btn = QPushButton("Load")
         self.backtest_btn = QPushButton("Backtest")
         self.simulate_btn = QPushButton("Simulate")
-        self.play_btn = QPushButton("▶")
-        self.pause_btn = QPushButton("⏸")
+        self.play_btn = QPushButton("▶ Play")
+        self.play_btn.setToolTip("Play the simulation replay")
+        self.pause_btn = QPushButton("⏸ Pause")
+        self.pause_btn.setToolTip("Pause the simulation replay")
         self.trade_btn = QPushButton("Start Paper")
         self.trade_btn.setToolTip("Run the selected strategy automatically on the paper account (no real orders are possible).")
         self.trade_btn.setObjectName("liveBtn")
-        self.reset_btn = QPushButton("↺")
-        self.reset_btn.setToolTip("Reset zoom")
-        self.reset_btn.setFixedWidth(28)
+        self.reset_btn = QPushButton("Reset zoom")
+        self.reset_btn.setToolTip("Reset the chart zoom")
 
         self.play_btn.hide()
         self.pause_btn.hide()
@@ -411,11 +445,22 @@ class MainWindow(QMainWindow):
                     self.play_btn, self.pause_btn, self.trade_btn, self.reset_btn]:
             layout.addWidget(btn)
 
+        # Safety strip: which account an order hits right now, and the live kill switch. Always visible.
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setStyleSheet("color: #30363d;")
+        layout.addWidget(sep2)
+        self.mode_pill = QLabel("")
+        self.mode_pill.setAccessibleName("Account mode")
+        layout.addWidget(self.mode_pill)
+        self.kill_btn = QPushButton("Kill switch")
+        layout.addWidget(self.kill_btn)
+
         return bar
 
     def _muted_label(self, text):
         lbl = QLabel(text)
-        lbl.setStyleSheet("color: #8b949e; font-size: 11px;")
+        lbl.setStyleSheet("color: #8b949e; font-size: 12px;")
         return lbl
 
     def _build_left_panel(self):
@@ -471,16 +516,30 @@ class MainWindow(QMainWindow):
         self.limit_price_input.hide()
         order_layout.addWidget(self.limit_price_input)
 
+        # Last price and how old it is: market orders fill at this price, so its age must be visible before sending.
+        self.last_price_label = QLabel("Last: —")
+        self.last_price_label.setFont(_mono_font())
+        order_layout.addWidget(self.last_price_label)
+        self.price_age_label = QLabel("no price yet")
+        self.price_age_label.setStyleSheet("color: #8b949e; font-size: 12px;")
+        order_layout.addWidget(self.price_age_label)
+
+        self.confirm_orders_check = QCheckBox("Review before sending")
+        self.confirm_orders_check.setChecked(True)
+        self.confirm_orders_check.setToolTip("Show cost, fee and warnings before each order. Live and dry-run "
+                                             "accounts always ask; this only lets the paper account skip it.")
+        order_layout.addWidget(self.confirm_orders_check)
+
         trade_row = QHBoxLayout()
         self.buy_btn = QPushButton("▲ BUY")
         self.buy_btn.setStyleSheet(
-            "QPushButton { background: #1a4731; border: 1px solid #2ea043; color: #3fb950; font-weight: bold; }"
-            "QPushButton:hover { background: #1f5e3a; }"
+            "QPushButton { background: #238636; border: 1px solid #2ea043; color: #ffffff; font-weight: bold; min-height: 32px; }"
+            "QPushButton:hover { background: #2ea043; }"
         )
         self.sell_btn = QPushButton("▼ SELL")
         self.sell_btn.setStyleSheet(
-            "QPushButton { background: #3d1a1a; border: 1px solid #da3633; color: #f85149; font-weight: bold; }"
-            "QPushButton:hover { background: #4d2020; }"
+            "QPushButton { background: #da3633; border: 1px solid #f85149; color: #ffffff; font-weight: bold; min-height: 32px; }"
+            "QPushButton:hover { background: #f85149; }"
         )
         trade_row.addWidget(self.buy_btn)
         trade_row.addWidget(self.sell_btn)
@@ -559,9 +618,9 @@ class MainWindow(QMainWindow):
         positions_group = QGroupBox("Positions")
         positions_layout = QVBoxLayout()
 
-        self.positions_text = QTextEdit()
-        self.positions_text.setReadOnly(True)
-        positions_layout.addWidget(self.positions_text)
+        # Compact glance (symbol, qty, unrealized P&L); the full blotter with Close actions is the Positions tab.
+        self.positions_compact = self._make_table(["Symbol", "Qty", "uP&L"])
+        positions_layout.addWidget(self.positions_compact)
 
         positions_group.setLayout(positions_layout)
         layout.addWidget(positions_group, stretch=1)
@@ -573,6 +632,7 @@ class MainWindow(QMainWindow):
         self.bottom_tabs.setMinimumHeight(220)
         self.bottom_tabs.setMaximumHeight(320)
 
+        self._setup_positions_tab()
         self._setup_orders_tab()
         self._setup_pnl_calendar_tab()
         self._setup_news_tab()
@@ -590,6 +650,50 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Orders tab
     # ------------------------------------------------------------------
+
+    def _make_table(self, headers):
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        table.setSortingEnabled(False)
+        return table
+
+    # ------------------------------------------------------------------
+    # Positions tab (blotter with row actions)
+    # ------------------------------------------------------------------
+
+    _POSITION_HEADERS = ["Symbol", "Side", "Qty", "Avg price", "Last", "Market value", "Unrealized P&L", ""]
+
+    def _setup_positions_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+        toolbar = QHBoxLayout()
+        self._positions_status_label = QLabel("Positions: none")
+        self._positions_status_label.setStyleSheet("color: #8b949e; font-size: 12px;")
+        toolbar.addWidget(self._positions_status_label)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+        self._positions_table = self._make_table(self._POSITION_HEADERS)
+        self._positions_table.horizontalHeader().setStretchLastSection(False)
+        layout.addWidget(self._positions_table)
+        self.bottom_tabs.addTab(tab, "Positions")
+
+    @staticmethod
+    def _num_item(text, color=None, align_right=True):
+        item = QTableWidgetItem(text)
+        item.setFont(_mono_font())
+        if align_right:
+            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        if color:
+            item.setForeground(QColor(color))
+        return item
 
     def _setup_orders_tab(self):
         """Build the Orders tab showing all submitted orders for the session."""
@@ -1557,6 +1661,7 @@ class MainWindow(QMainWindow):
             # Compute indicators so simulation/strategy-signal checks never hit a KeyError
             self.calculate_technical_indicators()
             self.plot_candles()
+            self._set_price_context(symbol)
             self.statusBar().showMessage(f"Loaded {len(self.df)} candles for {symbol}")
 
             # Forward data snapshot to Research Lab panel (does not trigger reanalysis)
@@ -1575,10 +1680,6 @@ class MainWindow(QMainWindow):
     def _run_backtest_logic(self):
         """Unified backtest entry point called by background thread worker usually."""
         return self._run_unified_backtest()
-
-    def _run_backtest_logic_with_broker(self, broker):
-        """Unified backtest entry point with broker called by background thread worker."""
-        return self._run_unified_backtest(broker=broker)
 
     def _run_unified_backtest(self, broker=None):
         strategy_name = self.strategy_combo.currentText()
@@ -1642,32 +1743,11 @@ class MainWindow(QMainWindow):
 
     def run_backtest(self):
         try:
-            backtest_broker = self.broker_manager.get_broker("Simulator")
-
-            if not backtest_broker:
-                self.statusBar().showMessage("Simulator not available")
-                return
-
-            initial_cash = float(self.cash_input.text())
-
-            backtest_broker = self.broker_manager.get_broker("Simulator")
-            backtest_broker.balance = initial_cash
-            backtest_broker.initial_balance = initial_cash
-            backtest_broker.portfolio_value = initial_cash
-            backtest_broker.positions = {}
-            backtest_broker.order_history = []
-            backtest_broker.closed_positions = []
-            backtest_broker.orders = {}
-
-            try:
-                backtest_broker.market_fee = float(self.market_fee_input.text()) / 100.0
-                backtest_broker.limit_fee = float(self.limit_fee_input.text()) / 100.0
-            except ValueError:
-                pass
-
-            logger.debug("Broker reset: Balance=$%.2f, Orders=%d", backtest_broker.balance, len(backtest_broker.order_history))
-
-            results = self._run_backtest_logic_with_broker(backtest_broker)
+            # The backtest runs on backtrader's own in-memory broker (cash/fees come from the inputs), so no app
+            # broker is needed. Never borrow the Simulator here: in the app it is the durable paper account shared
+            # with Dash and the paper execution service, and resetting it would wipe its positions/orders on screen
+            # and leak the backtest fees into the next real paper order.
+            results = self._run_backtest_logic()
             if results is False:
                 return
 
@@ -1707,12 +1787,7 @@ class MainWindow(QMainWindow):
             self.plot_signals(results.get('signals', []))
             self._show_equity_curve(results.get('total_asset_value', []))
 
-            if 'Final Value' in summary:
-                 backtest_broker.balance = float(summary['Final Value'])
-                 backtest_broker.portfolio_value = float(summary['Final Value'])
-
-            self.current_broker = backtest_broker
-            self.refresh_account_info()
+            self.refresh_account_info()   # Account panel stays on the selected broker
 
             logger.info("BACKTEST RESULTS: %s", summary)
 
@@ -1779,74 +1854,254 @@ class MainWindow(QMainWindow):
             logger.warning("Error refreshing account: %s", e)
 
     def update_positions_display(self):
-        """Update positions display"""
+        """Fill the Positions blotter (bottom tab) and the compact right-panel table from the current broker."""
         if not self.current_broker:
             return
-
         try:
-            positions_text = "CURRENT POSITIONS:\n"
-            positions_text += "-" * 30 + "\n"
-
-            has_positions = False
-            if hasattr(self.current_broker, 'positions'):
-                for symbol, position in self.current_broker.positions.items():
-                    if position.qty != 0:
-                        has_positions = True
-                        sign = "+" if position.pnl >= 0 else ""
-                        positions_text += (
-                            f"{symbol}: {position.qty:+.2f} @ ${position.avg_price:.2f}\n"
-                            f"  PnL: {sign}${position.pnl:,.2f}\n"
-                        )
-
-            if not has_positions:
-                positions_text += "No active positions\n"
-
-            self.positions_text.setPlainText(positions_text)
-
+            rows = trading_status.position_rows(getattr(self.current_broker, "positions", {}),
+                                                getattr(self.current_broker, "market_data", None))
         except Exception as e:
-            self.positions_text.setPlainText(f"Error loading positions: {str(e)}")
+            self._positions_status_label.setText(f"Error loading positions: {e}")
+            return
+
+        def fmt(v, spec=",.2f"):
+            return "—" if v is None else format(v, spec)
+
+        def pnl_text(v):
+            return "—" if v is None else ("▲ +" if v >= 0 else "▼ −") + f"{abs(v):,.2f}"
+
+        def pnl_color(v):
+            return None if v is None else ("#3fb950" if v >= 0 else "#ff7b72")
+
+        table = self._positions_table
+        table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            table.setItem(r, 0, QTableWidgetItem(row["symbol"]))
+            table.setItem(r, 1, QTableWidgetItem(("▲ " if row["side"] == "Long" else "▼ ") + row["side"]))
+            table.setItem(r, 2, self._num_item(f"{abs(row['qty']):g}"))
+            table.setItem(r, 3, self._num_item(fmt(row["avg"])))
+            table.setItem(r, 4, self._num_item(fmt(row["last"])))
+            table.setItem(r, 5, self._num_item(fmt(row["value"])))
+            pct = "" if row["upnl_pct"] is None else f"  {row['upnl_pct']:+.2f}%"
+            table.setItem(r, 6, self._num_item(pnl_text(row["upnl"]) + pct, pnl_color(row["upnl"])))
+            close_btn = QPushButton("Close")
+            close_btn.setToolTip(f"Send a market order that closes {row['symbol']} (you review it first)")
+            close_btn.clicked.connect(lambda _=False, sym=row["symbol"]: self._close_position(sym))
+            table.setCellWidget(r, 7, close_btn)
+        total = sum(row["upnl"] or 0.0 for row in rows)
+        self._positions_status_label.setText(
+            f"Positions: {len(rows)} open · unrealized {pnl_text(total)}" if rows else "Positions: none open")
+
+        compact = self.positions_compact
+        compact.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            compact.setItem(r, 0, QTableWidgetItem(row["symbol"]))
+            compact.setItem(r, 1, self._num_item(f"{row['qty']:+g}"))
+            compact.setItem(r, 2, self._num_item(pnl_text(row["upnl"]), pnl_color(row["upnl"])))
+
+    # ------------------------------------------------------------------
+    # Safety header: account mode, kill switch, price age
+    # ------------------------------------------------------------------
+
+    def _broker_for_selection(self):
+        """The connector the broker selector points at, or None when it is not configured (no keys / library)."""
+        try:
+            return self.broker_manager.get_broker(self.broker_combo.currentText())
+        except Exception:
+            return None
+
+    def _on_broker_changed(self, name):
+        # Orders go to the selected broker from now on (previously the first broker used stayed active even after the
+        # selector changed, so the label and the destination could disagree).
+        self.current_broker = self._broker_for_selection()
+        self.current_broker_name = name
+        self._refresh_safety_header()
+        if self.current_broker is not None:
+            self.refresh_account_info()
+        else:
+            self.account_label.setText(f"{name}\nnot connected")
+            self.account_label.setStyleSheet("color: #8b949e;")
+            self.statusBar().showMessage(f"{name} is not configured (missing API keys or library). Orders are disabled.")
+
+    def _current_mode(self):
+        broker = self.current_broker if self.current_broker is not None else self._broker_for_selection()
+        return trading_status.account_mode(self.broker_combo.currentText(), broker)
+
+    def _refresh_safety_header(self):
+        try:
+            mode = self._current_mode()
+            bg, fg, border = trading_status.MODE_COLORS[mode.mode]
+            self.mode_pill.setText(f"  {mode.label}  ")
+            self.mode_pill.setToolTip(mode.detail)
+            self.mode_pill.setStyleSheet(f"background: {bg}; color: {fg}; border: 1px solid {border}; border-radius: 12px; "
+                                         f"padding: 3px 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.5px;")
+            engaged = trading_status.kill_switch_engaged()
+            if engaged:
+                self.kill_btn.setText("Kill switch ON · Release")
+                self.kill_btn.setStyleSheet("QPushButton { background: #da3633; border: 1px solid #ff7b72; color: #ffffff; "
+                                            "font-weight: 700; }")
+                self.kill_btn.setToolTip("All LIVE orders are blocked (desktop, Dash and scripts). Click to release.")
+            else:
+                self.kill_btn.setText("Kill switch")
+                self.kill_btn.setStyleSheet("QPushButton { background: #2d1111; border: 1px solid #da3633; color: #ffa198; "
+                                            "font-weight: 600; } QPushButton:hover { background: #3d1515; }")
+                self.kill_btn.setToolTip("Block every LIVE order at once, across the desktop app, Dash and scripts, until "
+                                         "released. The paper account is not affected (use Halt in the Execution tab).")
+            self._refresh_price_age()
+        except Exception as exc:  # the header must never take the window down
+            logger.debug("safety header refresh failed: %s", exc)
+
+    def _toggle_kill_switch(self):
+        from PyQt5.QtWidgets import QMessageBox
+        if trading_status.kill_switch_engaged():
+            if QMessageBox.question(self, "Release kill switch",
+                                    "Allow live orders again? They still need LIVE_TRADING_ENABLED and pass the order "
+                                    "limits.", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+            trading_status.release_kill_switch()
+            self.statusBar().showMessage("Kill switch released.")
+        else:
+            path = trading_status.engage_kill_switch("engaged from the desktop app")
+            self.statusBar().showMessage(f"Kill switch ON: all live orders are blocked ({path}).")
+        self._refresh_safety_header()
+
+    def _set_price_context(self, symbol, as_of=None):
+        """Record when the on-screen price for *symbol* was obtained (a data load or a streaming tick)."""
+        import time as _time
+        self._price_symbol = symbol
+        self._price_as_of = _time.time() if as_of is None else as_of
+        self._refresh_price_age()
+
+    def _price_age_s(self, symbol):
+        import time as _time
+        if self._price_as_of is None or symbol != self._price_symbol:
+            return None
+        return _time.time() - self._price_as_of
+
+    def _last_price(self):
+        try:
+            if self.is_streaming and not self.realtime_df.empty:     # a streaming tick is newer than the loaded bars
+                return float(self.realtime_df["Close"].iloc[-1])
+            if hasattr(self, "df") and self.df is not None and not self.df.empty:
+                return float(self.df["Close"].iloc[-1])
+        except Exception:
+            pass
+        return None
+
+    def _refresh_price_age(self):
+        symbol = self.symbol_combo.currentText()
+        price = self._last_price() if symbol == self._price_symbol else None
+        fresh = trading_status.price_freshness(self._price_age_s(symbol))
+        self.last_price_label.setText(f"Last {symbol}: {price:,.2f}" if price else f"Last {symbol}: —")
+        self.price_age_label.setText(f"Price {fresh.label}" if price else "No price yet: load data")
+        self.price_age_label.setStyleSheet(f"color: {trading_status.FRESHNESS_COLORS[fresh.state]}; font-size: 12px;")
+
+    # ------------------------------------------------------------------
+    # Orders: preview -> confirm -> submit
+    # ------------------------------------------------------------------
+
+    def _confirm_order(self, preview, always_ask):
+        """Show the preview. Returns True to send. Blocking problems are shown and never sent."""
+        from PyQt5.QtWidgets import QMessageBox
+        if not preview.ok:
+            QMessageBox.warning(self, "Order not sent", preview.title + "\n\n" + "\n".join(preview.blocking))
+            return False
+        if not (always_ask or preview.warnings or self.confirm_orders_check.isChecked()):
+            return True
+        text = "\n".join(preview.lines())
+        if preview.warnings:
+            text += "\n\n" + "\n".join("⚠ " + w for w in preview.warnings)
+        box = QMessageBox(self)
+        box.setWindowTitle("Review order")
+        box.setIcon(QMessageBox.Warning if preview.warnings else QMessageBox.Question)
+        box.setText(preview.title)
+        box.setInformativeText(text)
+        send = box.addButton("Confirm " + preview.side, QMessageBox.AcceptRole)
+        cancel = box.addButton("Back to edit", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel if preview.warnings else send)
+        box.setEscapeButton(cancel)
+        box.exec_()
+        return box.clickedButton() is send
+
+    def _close_position(self, symbol):
+        pos = (getattr(self.current_broker, "positions", {}) or {}).get(symbol)
+        if pos is None or not pos.qty:
+            self.statusBar().showMessage(f"No open {symbol} position.")
+            return
+        charted = symbol == self.symbol_combo.currentText()
+        price = self._last_price() if charted else (
+            pos.last_price or (getattr(self.current_broker, "market_data", {}) or {}).get(symbol))
+        age = self._price_age_s(symbol) if charted else (
+            self.current_broker.price_age(symbol) if hasattr(self.current_broker, "price_age") else None)
+        self._submit_manual_order("sell" if pos.qty > 0 else "buy", symbol, abs(pos.qty), "market",
+                                  market_price=price, price_age_s=age, origin="desktop Positions tab (Close)")
 
     def place_order(self, side):
-        """Place an order through the current broker"""
+        """Order Entry panel BUY/SELL: build the order from the panel, preview it, then submit."""
         try:
-            symbol = self.symbol_combo.currentText()
-            qty = float(self.order_qty_input.text())
-            order_type = self.order_type_combo.currentText().lower()
-
-            limit_price = None
-            stop_price = None
-
-            if order_type == "limit" and self.limit_price_input.text():
-                limit_price = float(self.limit_price_input.text())
-            elif order_type == "stop" and self.limit_price_input.text():
-                stop_price = float(self.limit_price_input.text())
-
-            if not self.current_broker:
-                self.current_broker = self.broker_manager.get_broker(self.broker_combo.currentText())
-
-            # Real price for the paper broker: the last loaded candle's close.
-            # (Without this SimulatedBroker falls back to its fake $100 default.)
-            market_price = None
+            qty_text = self.order_qty_input.text().strip()
+            qty = float(qty_text) if qty_text else None
+        except ValueError:
+            qty = None
+        order_type = self.order_type_combo.currentText().lower()
+        order_price = None
+        if order_type in ("limit", "stop") and self.limit_price_input.text().strip():
             try:
-                if hasattr(self, 'df') and not self.df.empty:
-                    market_price = float(self.df['Close'].iloc[-1])
-            except Exception:  # price is context only; never block the order
-                market_price = None
-            if market_price and hasattr(self.current_broker, 'market_data'):
-                with self.current_broker._lock:
-                    if hasattr(self.current_broker, 'update_price'):
-                        self.current_broker.update_price(symbol, market_price)   # timestamps it and re-checks pending orders
+                order_price = float(self.limit_price_input.text())
+            except ValueError:
+                order_price = None
+        symbol = self.symbol_combo.currentText()
+        self._submit_manual_order(side, symbol, qty, order_type, order_price=order_price,
+                                  market_price=self._last_price(), price_age_s=self._price_age_s(symbol),
+                                  origin="desktop Order Entry panel")
+
+    def _submit_manual_order(self, side, symbol, qty, order_type, order_price=None, market_price=None,
+                             price_age_s=None, origin="desktop"):
+        """Preview -> confirm -> submit one manual order to the broker the selector points at."""
+        try:
+            if self.current_broker is None:
+                self.current_broker = self._broker_for_selection()
+            broker = self.current_broker
+            mode = self._current_mode()
+
+            cash = position_qty = None
+            if broker is not None:
+                try:
+                    cash = broker.get_account_info().get("cash")
+                except Exception:
+                    cash = None
+                pos = (getattr(broker, "positions", {}) or {}).get(symbol)
+                position_qty = pos.qty if pos is not None else 0.0
+            preview = trading_status.preview_order(
+                side, qty, symbol, order_type, last_price=market_price, order_price=order_price,
+                fee_rate=trading_status.broker_fee_rate(broker, order_type), cash=cash, position_qty=position_qty,
+                price_age_s=price_age_s, mode=mode)
+            if broker is None and preview.ok:
+                preview.blocking.append(f"{self.broker_combo.currentText()} is not connected.")
+            if not self._confirm_order(preview, always_ask=mode.mode != trading_status.MODE_PAPER):
+                self.statusBar().showMessage("Order not sent.")
+                return
+
+            limit_price = order_price if order_type == "limit" else None
+            stop_price = order_price if order_type == "stop" else None
+
+            # Real price for the paper broker: the price on screen. (Without this SimulatedBroker falls back to its
+            # fake $100 default.)
+            if market_price and hasattr(broker, 'market_data'):
+                with broker._lock:
+                    if hasattr(broker, 'update_price'):
+                        broker.update_price(symbol, market_price)   # timestamps it and re-checks pending orders
                     else:
-                        self.current_broker.market_data[symbol] = market_price
+                        broker.market_data[symbol] = market_price
             decision_price = limit_price or stop_price or market_price
             extra = {}
-            if market_price and order_type == "market" and hasattr(self.current_broker, 'market_data'):
+            if market_price and order_type == "market" and hasattr(broker, 'market_data'):
                 extra["execution_price"] = market_price
             order = submit_with_rationale(
-                self.current_broker,
-                manual_rationale(side, symbol, order_type, price=decision_price, origin="desktop Order Entry panel"),
+                broker,
+                manual_rationale(side, symbol, order_type, price=decision_price, origin=origin),
                 symbol=symbol,
-                qty=qty,
+                qty=preview.qty,
                 side=side,
                 order_type=order_type,
                 limit_price=limit_price,
@@ -1854,18 +2109,15 @@ class MainWindow(QMainWindow):
                 **extra,
             )
 
-            if order.status.value == "filled":
+            status = order.status.value
+            if status == "filled":
                 self.statusBar().showMessage(
-                    f"{side.upper()} order filled for {qty} {symbol} @ ${order.filled_avg_price:.2f}"
-                )
-            elif order.status.value == "pending":
-                self.statusBar().showMessage(
-                    f"{side.upper()} order pending for {qty} {symbol}"
-                )
+                    f"{side.upper()} order filled for {order.qty:g} {symbol} @ ${order.filled_avg_price:,.2f}")
+            elif status == "pending":
+                self.statusBar().showMessage(f"{side.upper()} order working for {preview.qty:g} {symbol}")
             else:
-                self.statusBar().showMessage(
-                    f"Order {order.status.value}: {qty} {symbol}"
-                )
+                reason = getattr(order, "reject_reason", None)
+                self.statusBar().showMessage(f"Order {status}: {preview.qty:g} {symbol}" + (f" ({reason})" if reason else ""))
 
             self.refresh_account_info()
             self._refresh_orders_tab()
@@ -1987,6 +2239,7 @@ class MainWindow(QMainWindow):
                 if len(self.realtime_df) > self.max_candles:
                     self.realtime_df = self.realtime_df.iloc[-self.max_candles:]
 
+        self._set_price_context(self.symbol_combo.currentText())
         self.update_realtime_chart()
 
     def update_realtime_chart(self):

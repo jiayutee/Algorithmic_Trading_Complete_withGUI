@@ -1,3 +1,26 @@
+# Claude / Codex handoff — updated 2026-10-13
+
+## Latest: design slice 1 — safety and clarity (2026-10-13, PR pending review)
+Branch `design/slice1-safety-clarity` from main 47a9ded (worktree `/private/tmp/algotrader-design-slice1`). Both front
+ends now show the account mode and a kill switch in the header, the age of the price on screen, a review step before
+every manual order, and a Positions table with Close; shared logic in `core/trading_status.py`. Also fixes the desktop
+broker selector not changing the order destination. 1530 passed, 1 skipped. Desktop checked offscreen only, so look at
+the real window before merging. Evidence and limits:
+[design-slice1-safety-clarity-2026-10-13.md](artifacts/design-slice1-safety-clarity-2026-10-13.md). Not merged, not deployed.
+
+# Claude / Codex handoff — updated 2026-10-14
+
+## Latest: desktop backtest isolated from the paper account (2026-10-14, PR open)
+Branch `claude/elastic-kalam-772fd4` from main `47a9ded`. `MainWindow.run_backtest()` no longer borrows and overwrites
+the durable paper Simulator, and it no longer switches the Account panel to it. Reproduced first on a scratch
+`PAPER_ACCOUNT_PATH`: in memory the positions and orders were wiped and the balance showed the backtest's Final Value; the
+sqlite file kept its positions and orders. The backtest fee, though, was charged on the next paper order and persisted.
+Regression test `tests/test_backtest_paper_isolation.py` (PyQt5 offscreen; skips in CI). Base suite 1505 passed,
+1 skipped. Implemented and tested; not merged, not deployed. Evidence:
+[desktop-backtest-paper-isolation-2026-10-14.md](artifacts/desktop-backtest-paper-isolation-2026-10-14.md).
+Follow-ups (not done): reload fees in `SimulatedBroker._load_from_store_locked`; look at the intermittent
+`test_two_processes_share_one_account` failure.
+
 # Claude / Codex handoff — updated 2026-10-07
 
 ## Latest: main 47a9ded after PRs #35-#37 (2026-10-06/07)

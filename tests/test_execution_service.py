@@ -449,3 +449,80 @@ def test_instruments_that_cannot_really_be_bought_are_refused_up_front(tmp_path,
 def test_stocks_etfs_and_any_crypto_pair_are_accepted(tmp_path):
     svc, *_ = make(tmp_path, symbols=("AAPL", "SPY", "PEPEUSDT"))
     assert svc.cfg.symbols == ["AAPL", "SPY", "PEPEUSDT"]
+
+
+# ------------------------------------------------------------------ risk baselines stay current (audit 2026-10-03, finding 1)
+
+def _hold_ticks_with_price(tmp_path, price):
+    """Take the one entry, then keep ticking on later polls while the market price moves to ``price``."""
+    df = frame("updown")
+    svc, broker, loader, clock, journal = make(tmp_path, df)
+    step_through(svc, loader, clock, df, first=60)
+    return svc, broker, loader, clock, journal, df
+
+
+def test_baselines_follow_equity_on_polls_that_place_no_order(tmp_path):
+    svc, broker, loader, clock, journal = make(tmp_path)[:5]
+    loader.k = 75                                            # an early bar of the up-leg; signal turns on and the entry is taken
+    clock.t = _ts(loader.df.index[75]) + DAY + 60
+    svc.tick()
+    assert broker.positions, "precondition: the service is in a position"
+    sym = svc.cfg.symbols[0]
+    journal.set("peak_equity", 100_000.0)                    # the stale value the audit found
+    journal.set("day_baseline", {"day": "2023-01-01", "equity": 100_000.0})
+    loader.price = float(loader.df["Close"].iloc[loader.k]) * 1.10       # the market moves up; same bar, so this poll is a hold
+    clock.t += 600
+    res = svc.tick()[sym]
+    assert res["state"] == "up_to_date"                      # no order, no new decision
+    equity = float(broker.get_account_info()["portfolio_value"])
+    assert equity > 100_000.0
+    assert journal.get("peak_equity") == pytest.approx(equity)
+    day = datetime.fromtimestamp(clock.t, tz=timezone.utc).strftime("%Y-%m-%d")
+    assert journal.get("day_baseline") == {"day": day, "equity": pytest.approx(equity)}      # a new UTC day starts a new baseline
+
+
+def test_peak_never_falls_and_the_day_baseline_is_kept_within_a_day(tmp_path):
+    svc, broker, loader, clock, journal = make(tmp_path)[:5]
+    loader.k = 75
+    clock.t = _ts(loader.df.index[75]) + DAY + 60
+    svc.tick()
+    loader.price = float(loader.df["Close"].iloc[loader.k]) * 1.10
+    clock.t += 600
+    svc.tick()
+    peak, base = journal.get("peak_equity"), journal.get("day_baseline")
+    loader.price = float(loader.df["Close"].iloc[loader.k]) * 0.90      # drawdown from the peak
+    clock.t += 600
+    svc.tick()
+    assert journal.get("peak_equity") == pytest.approx(peak)            # the peak does not follow equity down
+    assert journal.get("day_baseline") == base                           # same UTC day: the baseline stays
+
+
+def test_baselines_are_left_alone_when_a_held_symbol_has_no_fresh_price(tmp_path):
+    svc, broker, loader, clock, journal = make(tmp_path)[:5]
+    loader.k = 75
+    clock.t = _ts(loader.df.index[75]) + DAY + 60
+    svc.tick()
+    assert broker.positions
+    journal.set("peak_equity", 123_456.0)
+    loader.price = "error"                                              # the price lookup raises
+    clock.t += 600
+    svc.tick()                                                          # must not raise, must not invent an equity
+    assert journal.get("peak_equity") == 123_456.0
+
+
+def test_refreshing_baselines_never_blocks_a_poll(tmp_path, monkeypatch):
+    svc, broker, loader, clock, journal = make(tmp_path)[:5]
+    real, calls = svc._baselines, []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:                                             # the refresh at the start of the poll fails ...
+            raise RuntimeError("journal locked")
+        return real(*a, **k)                                            # ... the risk-approval call still works
+
+    monkeypatch.setattr(svc, "_baselines", flaky)
+    loader.k = 75
+    clock.t = _ts(loader.df.index[75]) + DAY + 60
+    svc.tick()
+    assert len(calls) >= 1
+    assert svc.cfg.symbols[0] in svc.tick()                             # the poll completed normally, no exception escaped

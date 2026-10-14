@@ -41,6 +41,7 @@ core/
   ui_options.py           # Shared symbol/interval/default lists for BOTH front ends (keeps desktop and Dash in sync)
   trend_overlay.py        # Trend-filter rule (28-bar, weekly): drawdown reduction, NOT alpha (Phases 6.7-6.9)
   risk_sizing.py          # Volatility-targeting helpers (Phase 6.6; result: did not help)
+  trading_status.py       # Account mode (PAPER/DRY-RUN/LIVE/BLOCKED), kill-switch file, price age, order preview -- used by BOTH front ends
   news_health.py          # Per-source circuit breaker so one rate-limited news source can't stall a refresh
   news_context.py         # Read-only chart-linked news snapshots for the Dash "Market Context" tab (no sentiment/store writes)
   news_interpretation.py  # Deterministic rule-based event reading (conditional bias, mechanism, counterargument) -- not a forecast

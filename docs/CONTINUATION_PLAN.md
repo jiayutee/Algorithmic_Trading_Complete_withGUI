@@ -145,6 +145,35 @@ Kalshi resolve on a scratch copy with forced lookup failures printed the WARN li
 unchanged). The news baseline re-ran on a scratch copy (1849 items; numbers within ~2 points of 09-30; canonical hash
 unchanged by the run). No bugs found. Evidence: [post-merge-validation-79eaaa9-2026-10-01.md](artifacts/post-merge-validation-79eaaa9-2026-10-01.md).
 
+## 2026-10-13 — design slice 1: safety and clarity (both front ends)
+From the owner-requested design review (canvas "AlgoTrader Design Review", roadmap slice 1). New `core/trading_status.py`
+(account mode, price freshness, order preview, position rows, kill-switch file) drives both apps: a header pill showing
+which account an order hits plus a one-click kill switch, the price age next to the last price, a Review → Confirm
+step for every manual order (paper may skip it unless there are warnings), a Positions table with Close actions, and
+sans UI text with mono numbers. Fixed on the way: the desktop broker selector did not change where orders went; desktop
+streaming orders used the last loaded bar; Dash broker creation had no lock. **Implemented and tested on branch
+`design/slice1-safety-clarity` (PR pending review; not merged, not deployed).** 1530 passed, 1 skipped; desktop
+verified offscreen only; Dash verified in a browser against a scratch account. Evidence and limits:
+[design-slice1-safety-clarity-2026-10-13.md](artifacts/design-slice1-safety-clarity-2026-10-13.md).
+Open: desktop Backtest resets the shared Simulator account in memory (separate fix); slice 2 (tokens file, workspaces,
+watchlist, risk panel, journal, bracket orders) not started.
+
+## 2026-10-14 — desktop backtest no longer touches the paper account
+`MainWindow.run_backtest()` borrowed the app's Simulator (the durable paper account), wiped its positions/orders/balance
+in memory, set its fees from the backtest inputs and then made it the Account panel's broker showing the backtest's Final
+Value. Reproduced against a scratch account: positions and orders came back from sqlite on the next account operation, but
+the backtest fee did not (`_load_from_store_locked` doesn't reload fees). It was charged on the next real paper order and
+written to the account file. The real account still shows the default fees (checked read-only). Fix: the backtest now uses
+no app broker (backtrader brings its own) and leaves `current_broker` alone. Regression test
+`tests/test_backtest_paper_isolation.py` fails on the old code and passes now. Base suite 1505 passed, 1 skipped; one earlier
+run hit an intermittent failure in `test_paper_account.py`. **Implemented and tested; PR open, not merged, not deployed.**
+Still open: `SimulatedBroker` doesn't reload fees from the store, and a no-argument `reset()` uses the in-memory
+`initial_balance`. Neither is reachable from the UI after this fix.
+Evidence: [desktop-backtest-paper-isolation-2026-10-14.md](artifacts/desktop-backtest-paper-isolation-2026-10-14.md).
+
+## 2026-10-14 — paper runner audit findings fixed (PR pending review)
+The three findings of the 10-03 paper-execution audit and three paper-account follow-ups are fixed on `fix/paper-runner-audit-findings`: risk baselines (peak equity, day start) now refresh on every poll instead of only before an order; Yahoo fallback for any `<BASE>USDT` (BNB had none); Binance failures log the exception; saved fees win in `SimulatedBroker`; `reset()` uses the file's starting balance; order ids no longer collide within a millisecond. Not live until the paper runner is restarted on a checkout containing the branch. See [evidence](artifacts/paper-runner-audit-fixes-2026-10-14.md). Alerts and protective stop rules remain proposals (`docs/PAPER_OPERATIONS_AUDIT.md`).
+
 ## 2026-10-02 to 2026-10-07 — Kalshi fail-fast, paper audit, merges (Days 97-102)
 - **Kalshi resolve fail-fast (Day 97, PR #36).** Cause of the 2026-10-02 loss: the Mac was in clamshell sleep on battery,
   launchd ran the missed jobs in DarkWakes with no DNS, so `collect` failed (rc=1) and `resolve` spent hours asleep between
