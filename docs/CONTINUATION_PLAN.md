@@ -171,6 +171,9 @@ Still open: `SimulatedBroker` doesn't reload fees from the store, and a no-argum
 `initial_balance`. Neither is reachable from the UI after this fix.
 Evidence: [desktop-backtest-paper-isolation-2026-10-14.md](artifacts/desktop-backtest-paper-isolation-2026-10-14.md).
 
+## 2026-10-14 — paper runner audit findings fixed (PR pending review)
+The three findings of the 10-03 paper-execution audit and three paper-account follow-ups are fixed on `fix/paper-runner-audit-findings`: risk baselines (peak equity, day start) now refresh on every poll instead of only before an order; Yahoo fallback for any `<BASE>USDT` (BNB had none); Binance failures log the exception; saved fees win in `SimulatedBroker`; `reset()` uses the file's starting balance; order ids no longer collide within a millisecond. Not live until the paper runner is restarted on a checkout containing the branch. See [evidence](artifacts/paper-runner-audit-fixes-2026-10-14.md). Alerts and protective stop rules remain proposals (`docs/PAPER_OPERATIONS_AUDIT.md`).
+
 ## 2026-10-02 to 2026-10-07 — Kalshi fail-fast, paper audit, merges (Days 97-102)
 - **Kalshi resolve fail-fast (Day 97, PR #36).** Cause of the 2026-10-02 loss: the Mac was in clamshell sleep on battery,
   launchd ran the missed jobs in DarkWakes with no DNS, so `collect` failed (rc=1) and `resolve` spent hours asleep between

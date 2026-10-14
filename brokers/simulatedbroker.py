@@ -1,4 +1,5 @@
 import time
+import uuid
 from datetime import datetime, date as date_cls
 from typing import Dict, List, Optional, Union
 from dataclasses import dataclass, field
@@ -146,6 +147,10 @@ class SimulatedBroker:
         m = state["meta"]
         self.balance = float(m.get("balance", self.balance))
         self.initial_balance = float(m.get("initial_balance", self.initial_balance))
+        # Fees are part of the saved account, like the starting balance: the file wins over constructor arguments, so a
+        # second process (or a differently configured instance) can neither charge other fees nor overwrite the saved ones.
+        self.market_fee = float(m.get("market_fee", self.market_fee))
+        self.limit_fee = float(m.get("limit_fee", self.limit_fee))
         self.realized_pnl = float(m.get("realized_pnl", 0.0))
         self.positions = {p["symbol"]: Position(symbol=p["symbol"], qty=p["qty"], avg_price=p["avg_price"], leverage=p["leverage"],
                                                 last_price=self.market_data.get(p["symbol"], 0) if p["symbol"] in self.market_data else 0)
@@ -176,6 +181,8 @@ class SimulatedBroker:
         with self._lock:
             if initial_balance is not None:
                 self.initial_balance = float(initial_balance)
+            elif self._store is not None:
+                self._load_from_store_locked()        # "reset to the account's own starting balance" means the FILE's, not this instance's
             self.balance = self.initial_balance
             self.positions, self.orders, self.order_history = {}, {}, []
             self.realized_pnl = 0.0
@@ -260,8 +267,12 @@ class SimulatedBroker:
         self.portfolio_value = self.balance + total_positions_value
 
     def _generate_order_id(self) -> str:
-        """Generate unique order ID"""
-        return f"simorder_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
+        """Generate a unique order ID.
+
+        Two processes share one account file, and the old ``<ms>_<4 random digits>`` form collides when two orders land in
+        the same millisecond with the same digits (about 1 in 9,000 such pairs): the second order then silently overwrote
+        the first in the store. The suffix is now 48 random bits (collision odds negligible); the prefix keeps ids sortable."""
+        return f"simorder_{int(time.time() * 1000)}_{uuid.uuid4().hex[:12]}"
 
     def _get_market_price(self, symbol: str) -> Optional[float]:
         """Current price for ``symbol``.
