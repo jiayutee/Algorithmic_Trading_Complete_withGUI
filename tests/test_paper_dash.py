@@ -76,3 +76,37 @@ def test_positions_panel_refreshes_on_the_price_tick_too():
             assert {"order-status", "price-interval"} <= {i["id"] for i in c["inputs"]}
             return
     pytest.fail("positions-content callback not found")
+
+
+# ------------------------------------------------------------------ held positions are marked before any chart is loaded
+
+def _live_price_callback():
+    import dash_app.app as m
+    for key, c in m.app.callback_map.items():
+        if key.startswith("..main-chart.figure") and "live-badge" in key and "price-interval" in str(c["inputs"]):
+            return c["callback"].__wrapped__ if hasattr(c["callback"], "__wrapped__") else c["callback"]
+    pytest.fail("update_live_price callback not found")
+
+
+def test_no_chart_loaded_still_marks_open_positions_to_real_prices(monkeypatch):
+    import dash_app.callbacks as cb
+    from brokers.simulatedbroker import SimulatedBroker
+    broker = SimulatedBroker(strict_prices=True)
+    broker.update_price("BTCUSDT", 100.0)
+    broker.submit_order("BTCUSDT", 1, "buy")
+    broker.market_data.pop("BTCUSDT")                      # a fresh process: positions loaded from the file, no price known
+    seen = []
+    monkeypatch.setattr(cb, "_broker_or_none", lambda: broker)
+    monkeypatch.setattr(cb, "_mark_other_holdings", lambda b, active: seen.append((b, active)))
+    fn = cb.register_callbacks and _live_price_callback()
+    out = fn(1, None)                                       # no active symbol: nothing loaded yet
+    assert seen == [(broker, None)]                         # it asked for the held positions to be marked
+    assert all(v is cb.no_update for v in out)              # and touched nothing in the UI
+    broker.close()
+
+
+def test_marking_with_no_symbol_never_raises_without_a_broker(monkeypatch):
+    import dash_app.callbacks as cb
+    monkeypatch.setattr(cb, "_broker_or_none", lambda: None)
+    out = _live_price_callback()(1, None)
+    assert all(v is cb.no_update for v in out)

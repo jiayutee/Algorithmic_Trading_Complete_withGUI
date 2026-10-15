@@ -166,8 +166,9 @@ class TestLayoutStructure:
             children = [children]
         assert len(children) >= 4
 
-    def test_price_interval_starts_disabled(self, all_ids):
-        """price-interval must be disabled on page load (enabled after chart loads)."""
+    def test_price_interval_starts_enabled_so_held_positions_are_marked_before_any_chart_loads(self, all_ids):
+        """price-interval runs from page load: with no chart loaded it still marks the paper account's open positions
+        (it used to start disabled, so the account card showed cost basis until a chart was loaded)."""
         from dash_app.layout import build_layout
 
         def _find_interval(component):
@@ -194,7 +195,7 @@ class TestLayoutStructure:
         layout = build_layout()
         interval = _find_interval(layout)
         assert interval is not None, "price-interval component not found"
-        assert interval.disabled is True, "price-interval should start disabled"
+        assert interval.disabled is False, "price-interval should run from page load"
 
     def test_order_price_wrapper_starts_hidden(self, all_ids):
         """order-price-wrapper must have display:none initially (shown for Limit/Stop)."""
