@@ -202,3 +202,6 @@ The three findings of the 10-03 paper-execution audit and three paper-account fo
   all rc=1 on DNS at wake). #36 only bounds `resolve`; collect-on-wake belongs with the overnight/sleep resilience
   decision. The fail-fast only catches *consecutive* failures. The news-quality fix slice 1 is merged as a proposal
   (#35), not implemented.
+
+## 2026-10-15 — Dash marks the paper account's open positions before any chart is loaded
+Found while deploying: the Dash account card showed $99,430 and the Positions table showed no last price / 0.00 unrealized for the runner's positions, while the runner's own equity was 98,695. Cause: held positions were only marked inside the live-price callback, which needs a charted symbol, and its interval started disabled until a chart loaded (and was re-disabled after a failed load). The interval now runs from page load and, with no chart, marks the open positions (crypto from the websocket cache, others by throttled REST). Checked in a browser against a snapshot copy of the real account: with no chart loaded the table shows all four positions with last price, value and unrealized P&L, account $97,739.90, P&L -$2,141.13 (realized -$465.39, unrealized -$1,675.74) and the risk panel agrees. The desktop app already marks holdings on a timer.

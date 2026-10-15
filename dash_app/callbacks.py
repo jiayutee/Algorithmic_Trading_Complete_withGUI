@@ -1330,9 +1330,9 @@ def register_callbacks(app: dash.Dash) -> None:
             fig = build_candlestick_figure(df=None, symbol=symbol)
             add_live_tick_trace(fig)
             err_msg = f"Error loading {symbol}: {exc}"
-            # Disable interval and clear symbol store on hard error so the
-            # interval callback doesn't try to fetch a price for a failed load.
-            return fig, err_msg, err_msg, True, None, "⚠ Data unavailable"
+            # Clear the symbol store on hard error so the interval callback doesn't try to fetch a price for a failed
+            # load. The interval itself stays on: it also keeps the account's open positions marked (see update_live_price).
+            return fig, err_msg, err_msg, False, None, "⚠ Data unavailable"
 
     # ------------------------------------------------------------------
     # Phase 1.2: update_live_price (interval-driven)
@@ -1360,6 +1360,9 @@ def register_callbacks(app: dash.Dash) -> None:
         global _equity_tick_count, _equity_last_price, _equity_last_price_at
 
         if not symbol:
+            # No chart loaded (yet, or the load failed): the charted-symbol work below has nothing to do, but the paper
+            # account's open positions still need real marks, or the balance and P&L show cost basis.
+            _mark_other_holdings(_broker_or_none(), None)
             return no_update, no_update
 
         price: Optional[float] = None
