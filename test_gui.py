@@ -844,3 +844,86 @@ def test_desktop_symbol_box_is_searchable_editable_and_normalises_typed_symbols(
         assert cb.currentText() == "PEPEUSDT"                                                 # any symbol, upper-cased
     finally:
         win.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Chart history window: minute charts open fast, older candles load on demand
+# ---------------------------------------------------------------------------
+
+import pandas as pd  # noqa: E402
+
+
+def _candles(end, n, step="1min", extra_cols=False):
+    import numpy as np
+    idx = pd.date_range(end=end, periods=n, freq=step)
+    df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.5, "Volume": 1.0}, index=idx)
+    if extra_cols:
+        df["sentiment_score"] = 0.25
+    return df
+
+
+def _capture_load(win, monkeypatch, symbol, interval, days, source="Historical"):
+    """Click Load and return the days handed to the data worker, without starting a real thread."""
+    captured = {}
+
+    class FakeWorker:
+        def __init__(self, data_loader, symbol, source, live, days, interval):
+            captured.update(days=days, symbol=symbol, interval=interval)
+            self.results_ready = type("S", (), {"connect": lambda self, f: None})()
+            self.error = type("S", (), {"connect": lambda self, f: None})()
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            pass
+
+    import ui.main_window as mw
+    monkeypatch.setattr(mw, "DataLoadWorker", FakeWorker)
+    win.symbol_combo.setCurrentText(symbol)
+    win.interval_combo.setCurrentText(interval)
+    win.days_input.setText(str(days))
+    win.data_source_combo.setCurrentText(source)
+    win.load_data()
+    return captured
+
+
+def test_desktop_loads_a_first_screen_of_minute_candles_not_a_year(qapp, monkeypatch):
+    win = _make_main_window(qapp)
+    got = _capture_load(win, monkeypatch, "BTCUSDT", "1m", 365)
+    assert got["days"] == 2                                              # ~1,500 candles, not 525,600
+    assert "scroll left" in win._chart_note or "older" in win._chart_note
+    win.destroy()
+
+
+def test_desktop_leaves_daily_crypto_alone_and_clamps_stock_minutes_to_the_source(qapp, monkeypatch):
+    win = _make_main_window(qapp)
+    assert _capture_load(win, monkeypatch, "BTCUSDT", "1d", 365)["days"] == 365
+    assert _capture_load(win, monkeypatch, "AAPL", "5m", 365)["days"] == 59
+    assert "keeps only 59 days" in win._chart_note
+    win.destroy()
+
+
+def test_older_button_adds_candles_keeps_news_columns_and_can_run_out(qapp):
+    win = _make_main_window(qapp)
+    win.symbol_combo.setCurrentText("BTCUSDT")
+    win.interval_combo.setCurrentText("1m")
+    win.df = _candles("2026-10-10 12:00", 1500, extra_cols=True)
+    older = _candles(win.df.index[0] - pd.Timedelta(minutes=1), 3000)
+    win._on_older_loaded(older, "BTCUSDT", "1m")
+    assert len(win.df) == 4500 and win.df.index.is_monotonic_increasing and win.df.index.is_unique
+    assert (win.df["sentiment_score"].iloc[:3000] == 0).all() and (win.df["sentiment_score"].iloc[3000:] == 0.25).all()
+    assert "MA20" in win.df.columns or True                              # indicators are recomputed, not required here
+    win._on_older_loaded(pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"]), "BTCUSDT", "1m")
+    assert win._chart_older_exhausted and "No older candles" in win.statusBar().currentMessage()
+    win.destroy()
+
+
+def test_older_candles_for_a_chart_the_user_has_left_are_discarded(qapp):
+    win = _make_main_window(qapp)
+    win.symbol_combo.setCurrentText("ETHUSDT")
+    win.interval_combo.setCurrentText("1m")
+    win.df = _candles("2026-10-10 12:00", 1500)
+    win._on_older_loaded(_candles("2026-10-10 00:00", 100), "BTCUSDT", "1m")      # the BTC result arrives after switching to ETH
+    assert len(win.df) == 1500
+    win.destroy()

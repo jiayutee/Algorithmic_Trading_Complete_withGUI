@@ -54,7 +54,7 @@ from core.chart_builder import (
     is_crypto_symbol,
     overlay_signals,
 )
-from core import risk_view, trading_status, ui_options, watchlist
+from core import chart_window, risk_view, trading_status, ui_options, watchlist
 from core.logger import logger
 from core.trade_rationale import format_rationale, manual_rationale, submit_with_rationale
 
@@ -1237,6 +1237,84 @@ def _risk_body(snap: dict) -> list:
     return out
 
 
+# What the main chart currently holds, so scrolling left can fetch older candles without reloading the chart.
+_chart_hist: dict = {"key": None, "df": None, "oldest_allowed": None, "exhausted": False}
+_chart_hist_lock = threading.Lock()
+_OHLCV = ["Open", "High", "Low", "Close", "Volume"]
+
+
+def _remember_chart(symbol: str, interval: str, df, days_requested: int) -> None:
+    with _chart_hist_lock:
+        _chart_hist.update(key=(symbol, interval), df=df[[c for c in _OHLCV if c in df.columns]].copy(),
+                           oldest_allowed=pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(days=int(days_requested)),
+                           exhausted=False)
+
+
+def _view_range_ms(relayout) -> Optional[tuple]:
+    """(start_ms, end_ms) of the x-range the user is looking at, from Plotly's relayoutData; None if it did not change the range."""
+    if not isinstance(relayout, dict):
+        return None
+    lo, hi = relayout.get("xaxis.range[0]"), relayout.get("xaxis.range[1]")
+    if lo is None and isinstance(relayout.get("xaxis.range"), (list, tuple)) and len(relayout["xaxis.range"]) == 2:
+        lo, hi = relayout["xaxis.range"]
+    if lo is None or hi is None:
+        return None
+    try:
+        a, b = pd.Timestamp(lo), pd.Timestamp(hi)
+        a = a.tz_localize(None) if a.tzinfo is None else a.tz_convert("UTC").tz_localize(None)
+        b = b.tz_localize(None) if b.tzinfo is None else b.tz_convert("UTC").tz_localize(None)
+        return float(a.value // 10**6), float(b.value // 10**6)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def older_candles_patch(relayout, symbol, interval, loader=None):
+    """If the view has reached the left edge of the loaded candles, fetch the next older chunk (cached) and return
+    ``(Patch, status_text)`` that prepends it; otherwise ``(None, None)``. Never raises."""
+    try:
+        view = _view_range_ms(relayout)
+        if view is None or not symbol or not is_crypto_symbol(symbol):
+            return None, None
+        with _chart_hist_lock:
+            if _chart_hist["key"] != (symbol, interval) or _chart_hist["df"] is None or _chart_hist["exhausted"]:
+                return None, None
+            df, floor = _chart_hist["df"], _chart_hist["oldest_allowed"]
+        loaded_start = float(df.index[0].value // 10**6)
+        loaded_end = float(df.index[-1].value // 10**6)
+        if not chart_window.should_load_older(view[0], loaded_start, loaded_end):
+            return None, None
+        if not chart_window.can_load_more(len(df), float(floor.value // 10**6) if floor is not None else None, loaded_start):
+            with _chart_hist_lock:
+                _chart_hist["exhausted"] = True
+            why = (f"Reached the {chart_window.MAX_BARS:,}-candle limit for one chart." if len(df) >= chart_window.MAX_BARS
+                   else "Reached the start of the Days range; raise Days to load further back.")
+            return None, f"{len(df):,} candles loaded. {why}"
+        if loader is None:
+            from core.data_loader import DataLoader
+            loader = DataLoader()
+        n_bars = chart_window.bars_needed(view[0], view[1], loaded_start, interval)      # cover the view, not just one chunk
+        older = loader.get_older_candles(symbol, interval, df.index[0], bars=n_bars, oldest_allowed=floor)
+        if older is None or older.empty:
+            with _chart_hist_lock:
+                _chart_hist["exhausted"] = True
+            return None, f"{len(df):,} candles loaded. No older candles available for {symbol}."
+        merged = pd.concat([older[[c for c in _OHLCV if c in older.columns]], df])
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        with _chart_hist_lock:
+            if _chart_hist["key"] != (symbol, interval):           # the user switched chart while we were fetching
+                return None, None
+            _chart_hist["df"] = merged
+        p = Patch()
+        trace = p["data"][0]                                      # the candlestick; the live-tick trace and overlays stay untouched
+        trace["x"] = [t.isoformat() for t in merged.index]
+        trace["open"], trace["high"] = merged["Open"].tolist(), merged["High"].tolist()
+        trace["low"], trace["close"] = merged["Low"].tolist(), merged["Close"].tolist()
+        return p, f"Loaded {len(merged):,} {interval} candles for {symbol} (older candles load as you scroll left)."
+    except Exception as exc:  # noqa: BLE001 -- a failed scroll-back must never break the chart the user is looking at
+        logger.warning("[Dash] loading older candles failed: %s", exc)
+        return None, None
+
+
 def register_callbacks(app: dash.Dash) -> None:
     """Attach all callbacks to *app*.
 
@@ -1303,11 +1381,15 @@ def register_callbacks(app: dash.Dash) -> None:
             # Candles only: the news/sentiment merge scrapes rate-limited sources
             # (~35 s) and the chart doesn't use those columns. The News tab
             # fetches headlines separately on demand.
+            days_requested = _days_or_default(days)
+            # Crypto minute charts: fetch the latest ~1,500 candles now and older ones as the user scrolls left (a year of
+            # 1-minute candles is 525,600 bars -- 8 minutes of fetching and a 40 MB figure). Stocks: only what the source keeps.
+            plan = chart_window.plan_window(interval, days_requested, crypto=is_crypto_symbol(symbol))
             df = loader.load_data(
                 symbol=symbol,
                 source="Historical",
                 live=False,
-                days=_days_or_default(days),
+                days=plan.days,
                 interval=interval,
                 include_news=False,
             )
@@ -1322,7 +1404,10 @@ def register_callbacks(app: dash.Dash) -> None:
             fig = build_candlestick_figure(df=df, symbol=symbol, show_ma=False, interval=interval)
             add_live_tick_trace(fig)
             n_candles = len(df)
+            _remember_chart(symbol, interval, df, days_requested)
             status_msg = f"Loaded {n_candles:,} candles for {symbol} ({interval})"
+            if plan.note:
+                status_msg += " · " + plan.note
             badge = _badge_connecting(symbol)
             return fig, status_msg, status_msg, False, symbol, badge
 
@@ -1333,6 +1418,23 @@ def register_callbacks(app: dash.Dash) -> None:
             # Disable interval and clear symbol store on hard error so the
             # interval callback doesn't try to fetch a price for a failed load.
             return fig, err_msg, err_msg, True, None, "⚠ Data unavailable"
+
+    # ------------------------------------------------------------------
+    # Scroll-back: older candles load as the view reaches the left edge (like Binance's chart)
+    # ------------------------------------------------------------------
+    @app.callback(
+        Output("main-chart", "figure", allow_duplicate=True),
+        Output("chart-status", "children", allow_duplicate=True),
+        Input("main-chart", "relayoutData"),
+        State("active-symbol-store", "data"),
+        State("interval-dropdown", "value"),
+        prevent_initial_call=True,
+    )
+    def load_older_candles(relayout_data, symbol, interval):
+        patch, status = older_candles_patch(relayout_data, symbol, interval)
+        if patch is None and status is None:
+            return no_update, no_update
+        return (patch if patch is not None else no_update), (status if status is not None else no_update)
 
     # ------------------------------------------------------------------
     # Phase 1.2: update_live_price (interval-driven)

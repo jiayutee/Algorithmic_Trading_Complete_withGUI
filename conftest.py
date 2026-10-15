@@ -27,6 +27,20 @@ def _fast_yf_retries(monkeypatch):
     monkeypatch.setenv("YF_FETCH_MAX_RETRIES", "1")
 
 
+@pytest.fixture(autouse=True)
+def _offline_isolated_kline_cache(monkeypatch, tmp_path):
+    """Candle history is cached on disk and fetched over HTTP. In tests that must never touch the real cache file or the
+    network: use a private temp cache and make the HTTP fetcher fail, which sends the loader to its mocked CCXT path (the
+    behaviour these tests were written against). Tests of the cache itself pass their own cache and fetch function."""
+    monkeypatch.setenv("KLINE_CACHE_PATH", str(tmp_path / "klines_test_cache.sqlite3"))
+
+    def _no_network(*args, **kwargs):
+        raise RuntimeError("network disabled in tests (kline cache)")
+
+    import core.kline_cache as kc
+    monkeypatch.setattr(kc, "fetch_range_http", _no_network)
+
+
 @pytest.fixture
 def ib_env(monkeypatch):
     """Shared mocked ib_insync (no TWS/Gateway ever needed): installs a fake module, reloads the connector and
