@@ -173,6 +173,10 @@ class DataLoader:
                     # Final fallback to Yahoo Finance for crypto-USD pairs
                     return self._get_yahoo_crypto_historical(symbol, days, interval)
         else:
+            # Stocks: intraday history is short at the source (Yahoo: 1m 7 days, 5-30m ~60, 1h ~2 years). Ask for what exists,
+            # so OpenBB is not sent a doomed range first and a 1h request is not cut to the 1-minute limit.
+            from core.chart_window import plan_window
+            days = plan_window(interval, days, crypto=False).days
             # Stocks — try OpenBB first (unified provider interface), fall back to yfinance
             # BACKUP NOTE: original _get_yahoo_historical call is preserved below as fallback.
             try:
@@ -183,7 +187,43 @@ class DataLoader:
                 return self._get_yahoo_historical(symbol, days, interval)
 
     def _get_binance_historical(self, symbol, days, interval):
-        """Get historical data from Binance using CCXT"""
+        """Binance history through the on-disk candle cache: a range is downloaded once (in parallel pages), later requests
+        read the file and a refresh fetches only the candles that closed since. Falls back to the plain CCXT loop for
+        intervals the REST klines API does not offer or if the cached path fails."""
+        from core.kline_cache import BINANCE_INTERVALS, get_klines
+        from core.chart_window import interval_seconds
+        if interval in BINANCE_INTERVALS:
+            try:
+                now_ms = int(time.time() * 1000)
+                step_ms = interval_seconds(interval) * 1000
+                df = get_klines(symbol, interval, now_ms - int(days) * 86_400_000, now_ms + step_ms)
+                if df is not None and not df.empty:
+                    logger.info(f"Binance candles for {symbol} {interval}: {len(df)} bars (cache-backed)")
+                    return df
+            except Exception as exc:  # noqa: BLE001 -- the plain CCXT path below is the safety net
+                logger.warning(f"Cached Binance history failed for {symbol} {interval} ({type(exc).__name__}: {exc}); using CCXT")
+        return self._get_binance_historical_ccxt(symbol, days, interval)
+
+    def get_older_candles(self, symbol, interval, before, bars=1000, oldest_allowed=None):
+        """The ``bars`` candles that precede ``before`` (a timestamp), for scroll-back loading; empty frame if none.
+        Crypto only (Binance, cached). ``oldest_allowed`` (a timestamp) is a floor: nothing older is returned."""
+        from core.kline_cache import BINANCE_INTERVALS, get_klines
+        from core.chart_window import older_chunk_range
+        if interval not in BINANCE_INTERVALS or "USDT" not in str(symbol).upper():
+            return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        before_ms = int(pd.Timestamp(before).tz_localize(None).value // 10**6) if pd.Timestamp(before).tzinfo is None \
+            else int(pd.Timestamp(before).tz_convert("UTC").tz_localize(None).value // 10**6)
+        start_ms, end_ms = older_chunk_range(before_ms, interval, bars)
+        if oldest_allowed is not None:
+            floor_ms = int(pd.Timestamp(oldest_allowed).tz_localize(None).value // 10**6) if pd.Timestamp(oldest_allowed).tzinfo is None \
+                else int(pd.Timestamp(oldest_allowed).tz_convert("UTC").tz_localize(None).value // 10**6)
+            start_ms = max(start_ms, floor_ms)
+        if start_ms >= end_ms:
+            return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        return get_klines(symbol, interval, start_ms, end_ms)
+
+    def _get_binance_historical_ccxt(self, symbol, days, interval):
+        """Get historical data from Binance using CCXT (sequential 1,000-bar pages, no cache)"""
         logger.info(f"Fetching {interval} data for {symbol} from Binance via CCXT for last {days} days")
         
         # Calculate start timestamp in milliseconds
@@ -328,21 +368,23 @@ class DataLoader:
         if interval == '1h':
             interval = '60m'
 
-        # Minute-level intervals where Yahoo restricts historical range
-        minute_intervals = {'1m', '2m', '5m', '15m', '30m', '60m'}
-
-        # Cap days for intraday/minute intervals (Yahoo limits intraday history)
+        # Cap days for intraday intervals to what Yahoo actually keeps (per interval: 1m 7 days, 2-30m ~60, 60m ~2 years).
+        # It used to be a flat 7 days for all of them, which cut 1h/5m/15m history far below what the source offers.
+        from core.chart_window import YAHOO_MAX_DAYS
         capped_days = days
-        if interval in minute_intervals:
-            max_intraday_days = int(os.getenv('YAHOO_INTRADAY_MAX_DAYS', '7'))
-            if days > max_intraday_days:
-                logger.warning(
-                    "Requested %sd of intraday %s data; capping to %sd because Yahoo Finance limits intraday history",
-                    days,
-                    interval,
-                    max_intraday_days,
-                )
-                capped_days = max_intraday_days
+        max_intraday_days = YAHOO_MAX_DAYS.get(interval)
+        override = os.getenv('YAHOO_INTRADAY_MAX_DAYS')          # optional hard ceiling for all intraday intervals
+        if max_intraday_days is not None and override:
+            try:
+                max_intraday_days = min(max_intraday_days, int(override))
+            except ValueError:
+                pass
+        if max_intraday_days is not None and days > max_intraday_days:
+            logger.warning(
+                "Requested %sd of intraday %s data; capping to %sd because Yahoo Finance limits intraday history",
+                days, interval, max_intraday_days,
+            )
+            capped_days = max_intraday_days
 
         valid_intervals = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1d', '5d', '1wk', '1mo', '3mo']
         if interval not in valid_intervals:

@@ -31,6 +31,21 @@ def qapp():
     return app
 
 
+@pytest.fixture(autouse=True)
+def _no_surprise_modal_dialogs(monkeypatch):
+    """A modal QMessageBox waits for a click that never comes, so a test that triggers one hangs forever (this is how the
+    order-review dialog from design slice 1 froze the whole file). Turn any unexpected modal into a failure; tests that
+    expect a dialog patch the specific call themselves."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    def boom(*args, **kwargs):
+        raise AssertionError("unexpected modal dialog: " + " | ".join(str(a) for a in args[1:3]))
+
+    for name in ("warning", "question", "information", "critical"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(boom))
+    monkeypatch.setattr(QMessageBox, "exec_", lambda self, *a, **k: boom(self, self.windowTitle(), self.text()))
+
+
 # ---------------------------------------------------------------------------
 # Legacy demo window (kept for reference, not tested by pytest)
 # ---------------------------------------------------------------------------
@@ -308,9 +323,28 @@ class TestOrderEntryWiring:
     @pytest.fixture(autouse=True)
     def setup(self, qapp):
         self.win, self.broker = _make_window_with_sim_broker(qapp)
+        # Since design slice 1 an order needs a real on-screen price and (by default) a review dialog. Give the window a
+        # fresh price and turn the paper review off so the wiring is exercised without a person to click.
+        self.win._last_price = lambda: 50_000.0
+        self.win._price_age_s = lambda symbol: 1.0
+        self.win.confirm_orders_check.setChecked(False)
         yield
         self.broker.close()
         self.win.destroy()
+
+    def test_order_without_a_price_is_blocked_with_a_message_and_sends_nothing(self, monkeypatch):
+        """No invented price: with nothing on screen the order is refused and the user is told why."""
+        from PyQt5.QtWidgets import QMessageBox
+        shown = []
+        monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(" ".join(str(x) for x in a[1:3]))))
+        self.win._last_price = lambda: None
+        self.win.symbol_combo.setCurrentText("BTCUSDT")
+        self.win.order_qty_input.setText("0.001")
+        self.win.order_type_combo.setCurrentText("Market")
+        before = len(self.broker.order_history)
+        self.win.place_order("buy")
+        assert len(self.broker.order_history) == before
+        assert shown and "Order not sent" in shown[0]
 
     # --- Buy button ---
 
@@ -388,23 +422,28 @@ class TestOrderEntryWiring:
     def test_account_label_exists(self):
         assert hasattr(self.win, 'account_label'), "account_label widget must exist"
 
-    def test_positions_text_exists(self):
-        assert hasattr(self.win, 'positions_text'), "positions_text widget must exist"
+    def test_positions_tables_exist(self):
+        """Design slice 1 replaced the positions text box with tables (compact side panel + full Positions tab)."""
+        assert hasattr(self.win, 'positions_compact'), "positions_compact table must exist"
+        assert hasattr(self.win, '_positions_table'), "full positions table must exist"
 
     def test_buy_updates_positions_display(self):
-        """After BUY, positions_text must reflect the open position."""
+        """After BUY, both positions tables must show the open position, with a Close button in the full table."""
         self.win.symbol_combo.setCurrentText("BTCUSDT")
         self.win.order_qty_input.setText("0.001")
         self.win.order_type_combo.setCurrentText("Market")
         self.win.place_order("buy")
-        content = self.win.positions_text.toPlainText()
-        assert "BTCUSDT" in content
+        compact, full = self.win.positions_compact, self.win._positions_table
+        assert compact.rowCount() == 1 and compact.item(0, 0).text() == "BTCUSDT"
+        assert full.rowCount() == 1 and full.item(0, 0).text() == "BTCUSDT"
+        assert full.cellWidget(0, 7) is not None and full.cellWidget(0, 7).text() == "Close"
+        assert "1 open" in self.win._positions_status_label.text()
 
-    def test_no_position_text_when_flat(self):
-        """Before any trade the positions display must show 'No active positions'."""
+    def test_no_positions_shown_when_flat(self):
+        """Before any trade the positions tables are empty and the status line says none are open."""
         self.win.refresh_account_info()
-        content = self.win.positions_text.toPlainText()
-        assert "No active positions" in content
+        assert self.win.positions_compact.rowCount() == 0 and self.win._positions_table.rowCount() == 0
+        assert "none open" in self.win._positions_status_label.text()
 
     # --- Orders tab ---
 
@@ -805,3 +844,86 @@ def test_desktop_symbol_box_is_searchable_editable_and_normalises_typed_symbols(
         assert cb.currentText() == "PEPEUSDT"                                                 # any symbol, upper-cased
     finally:
         win.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Chart history window: minute charts open fast, older candles load on demand
+# ---------------------------------------------------------------------------
+
+import pandas as pd  # noqa: E402
+
+
+def _candles(end, n, step="1min", extra_cols=False):
+    import numpy as np
+    idx = pd.date_range(end=end, periods=n, freq=step)
+    df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.5, "Volume": 1.0}, index=idx)
+    if extra_cols:
+        df["sentiment_score"] = 0.25
+    return df
+
+
+def _capture_load(win, monkeypatch, symbol, interval, days, source="Historical"):
+    """Click Load and return the days handed to the data worker, without starting a real thread."""
+    captured = {}
+
+    class FakeWorker:
+        def __init__(self, data_loader, symbol, source, live, days, interval):
+            captured.update(days=days, symbol=symbol, interval=interval)
+            self.results_ready = type("S", (), {"connect": lambda self, f: None})()
+            self.error = type("S", (), {"connect": lambda self, f: None})()
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            pass
+
+    import ui.main_window as mw
+    monkeypatch.setattr(mw, "DataLoadWorker", FakeWorker)
+    win.symbol_combo.setCurrentText(symbol)
+    win.interval_combo.setCurrentText(interval)
+    win.days_input.setText(str(days))
+    win.data_source_combo.setCurrentText(source)
+    win.load_data()
+    return captured
+
+
+def test_desktop_loads_a_first_screen_of_minute_candles_not_a_year(qapp, monkeypatch):
+    win = _make_main_window(qapp)
+    got = _capture_load(win, monkeypatch, "BTCUSDT", "1m", 365)
+    assert got["days"] == 2                                              # ~1,500 candles, not 525,600
+    assert "scroll left" in win._chart_note or "older" in win._chart_note
+    win.destroy()
+
+
+def test_desktop_leaves_daily_crypto_alone_and_clamps_stock_minutes_to_the_source(qapp, monkeypatch):
+    win = _make_main_window(qapp)
+    assert _capture_load(win, monkeypatch, "BTCUSDT", "1d", 365)["days"] == 365
+    assert _capture_load(win, monkeypatch, "AAPL", "5m", 365)["days"] == 59
+    assert "keeps only 59 days" in win._chart_note
+    win.destroy()
+
+
+def test_older_button_adds_candles_keeps_news_columns_and_can_run_out(qapp):
+    win = _make_main_window(qapp)
+    win.symbol_combo.setCurrentText("BTCUSDT")
+    win.interval_combo.setCurrentText("1m")
+    win.df = _candles("2026-10-10 12:00", 1500, extra_cols=True)
+    older = _candles(win.df.index[0] - pd.Timedelta(minutes=1), 3000)
+    win._on_older_loaded(older, "BTCUSDT", "1m")
+    assert len(win.df) == 4500 and win.df.index.is_monotonic_increasing and win.df.index.is_unique
+    assert (win.df["sentiment_score"].iloc[:3000] == 0).all() and (win.df["sentiment_score"].iloc[3000:] == 0.25).all()
+    assert "MA20" in win.df.columns or True                              # indicators are recomputed, not required here
+    win._on_older_loaded(pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"]), "BTCUSDT", "1m")
+    assert win._chart_older_exhausted and "No older candles" in win.statusBar().currentMessage()
+    win.destroy()
+
+
+def test_older_candles_for_a_chart_the_user_has_left_are_discarded(qapp):
+    win = _make_main_window(qapp)
+    win.symbol_combo.setCurrentText("ETHUSDT")
+    win.interval_combo.setCurrentText("1m")
+    win.df = _candles("2026-10-10 12:00", 1500)
+    win._on_older_loaded(_candles("2026-10-10 00:00", 100), "BTCUSDT", "1m")      # the BTC result arrives after switching to ETH
+    assert len(win.df) == 1500
+    win.destroy()

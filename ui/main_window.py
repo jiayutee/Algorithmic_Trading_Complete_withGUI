@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
                              QFrame, QSizePolicy, QGridLayout, QCheckBox, QButtonGroup)
 from PyQt5.QtGui import QIntValidator, QDoubleValidator, QColor, QFont
 from core.paper_marking import HeldPriceMarker
-from core import ui_options
+from core import chart_window, ui_options
 from core import design_tokens, risk_view, trading_status, watchlist
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 try:
@@ -117,6 +117,24 @@ class DataLoadWorker(QThread):
             self.error.emit(str(e))
 
 
+class OlderCandlesWorker(QThread):
+    """Fetches the next chunk of older candles (cached Binance klines) off the UI thread."""
+    results_ready = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, data_loader, symbol: str, interval: str, before, bars: int, oldest_allowed):
+        super().__init__()
+        self.data_loader, self.symbol, self.interval = data_loader, symbol, interval
+        self.before, self.bars, self.oldest_allowed = before, bars, oldest_allowed
+
+    def run(self):
+        try:
+            self.results_ready.emit(self.data_loader.get_older_candles(
+                self.symbol, self.interval, self.before, bars=self.bars, oldest_allowed=self.oldest_allowed))
+        except Exception as e:  # noqa: BLE001
+            self.error.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, data_loader, strategy_manager, broker_manager,
                  missing_deps: Optional[List[str]] = None):
@@ -212,6 +230,7 @@ class MainWindow(QMainWindow):
 
         # Connect signals
         self.load_btn.clicked.connect(self.load_data)
+        self.older_btn.clicked.connect(self._load_older_candles)
         self.backtest_btn.clicked.connect(self.run_backtest)
         self.trade_btn.clicked.connect(self.start_trading)
         self.reset_btn.clicked.connect(self.reset_chart_zoom)
@@ -412,6 +431,10 @@ class MainWindow(QMainWindow):
 
         # Action buttons
         self.load_btn = QPushButton("Load")
+        self.older_btn = QPushButton("◀ Older")
+        self.older_btn.setToolTip("Load older candles (crypto). The first load shows only the latest ~1,500 candles so minute "
+                                  "charts open fast; this adds up to 3,000 more each click, back to the number of Days set.")
+        self.older_btn.setEnabled(False)
         self.backtest_btn = QPushButton("Backtest")
         self.simulate_btn = QPushButton("Simulate")
         self.play_btn = QPushButton("▶ Play")
@@ -427,7 +450,7 @@ class MainWindow(QMainWindow):
         self.play_btn.hide()
         self.pause_btn.hide()
 
-        for btn in [self.load_btn, self.backtest_btn, self.simulate_btn,
+        for btn in [self.load_btn, self.older_btn, self.backtest_btn, self.simulate_btn,
                     self.play_btn, self.pause_btn, self.trade_btn, self.reset_btn]:
             layout.addWidget(btn)
 
@@ -1784,12 +1807,18 @@ class MainWindow(QMainWindow):
             return
 
         self.statusBar().showMessage(f"Loading {symbol}...")
+        # Crypto minute charts: the latest ~1,500 candles now, older ones on demand (a year of 1-minute candles is 525,600
+        # bars -- minutes of fetching and a figure too big to draw); stocks: only the history the source keeps.
+        plan = chart_window.plan_window(interval, days, crypto=("USDT" in symbol.upper()))
+        self._chart_note = plan.note
+        self._chart_days_requested = days
+        self._chart_older_exhausted = False
         self._data_load_worker = DataLoadWorker(
             data_loader=self.data_loader,
             symbol=symbol,
             source=source,
             live=(source == "Live"),
-            days=days,
+            days=plan.days if source == "Historical" else days,
             interval=interval,
         )
         self._data_load_worker.results_ready.connect(
@@ -1811,7 +1840,10 @@ class MainWindow(QMainWindow):
             self.calculate_technical_indicators()
             self.plot_candles()
             self._set_price_context(symbol)
-            self.statusBar().showMessage(f"Loaded {len(self.df)} candles for {symbol}")
+            note = getattr(self, "_chart_note", "") or ""
+            self.statusBar().showMessage(f"Loaded {len(self.df):,} candles for {symbol}" + (f" · {note}" if note else ""))
+            self.older_btn.setEnabled(bool(note) and "USDT" in symbol.upper()
+                                      and self.source_is_historical())
 
             # Forward data snapshot to Research Lab panel (does not trigger reanalysis)
             if getattr(self, '_research_lab_panel', None) is not None:
@@ -1821,6 +1853,52 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Error: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
+
+    def source_is_historical(self) -> bool:
+        return self.data_source_combo.currentText() == "Historical"
+
+    def _load_older_candles(self):
+        """Add up to 3,000 older candles to the chart (crypto), without blocking the window."""
+        if getattr(self, "_older_worker", None) and self._older_worker.isRunning():
+            return
+        if not hasattr(self, "df") or self.df is None or self.df.empty or getattr(self, "_chart_older_exhausted", False):
+            return
+        symbol = self.symbol_combo.currentText()
+        interval = self.interval_combo.currentText()
+        if len(self.df) >= chart_window.MAX_BARS:
+            self._chart_older_exhausted = True
+            self.older_btn.setEnabled(False)
+            self.statusBar().showMessage(f"{len(self.df):,} candles loaded: the limit for one chart.")
+            return
+        floor = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(days=int(getattr(self, "_chart_days_requested", 365)))
+        self.older_btn.setEnabled(False)
+        self.statusBar().showMessage("Loading older candles...")
+        self._older_worker = OlderCandlesWorker(self.data_loader, symbol, interval, self.df.index[0],
+                                                3 * chart_window.CHUNK_BARS, floor)
+        self._older_worker.results_ready.connect(lambda older: self._on_older_loaded(older, symbol, interval))
+        self._older_worker.error.connect(lambda msg: (self.older_btn.setEnabled(True),
+                                                      self.statusBar().showMessage(f"Could not load older candles: {msg}")))
+        self._older_worker.start()
+
+    def _on_older_loaded(self, older, symbol, interval):
+        if symbol != self.symbol_combo.currentText() or interval != self.interval_combo.currentText():
+            return                                                   # the user moved on to another chart meanwhile
+        if older is None or older.empty:
+            self._chart_older_exhausted = True
+            self.statusBar().showMessage(f"{len(self.df):,} candles loaded. No older candles to load "
+                                         "(raise Days to go further back).")
+            return
+        cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        merged = pd.concat([older[cols], self.df])
+        for c in merged.columns:
+            if c not in cols:                         # news/event columns: zero for the older rows (as the loader does)
+                merged[c] = merged[c].fillna(0)
+        self.df = merged[~merged.index.duplicated(keep="last")].sort_index()
+        self.calculate_technical_indicators()
+        self.plot_candles()
+        self.older_btn.setEnabled(True)
+        self.statusBar().showMessage(f"Loaded {len(self.df):,} {interval} candles for {symbol}. "
+                                     "Click ◀ Older for more.")
 
     def _on_data_load_error(self, message):
         self.statusBar().showMessage(f"Error: {message}")
