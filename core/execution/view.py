@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Dict, Optional
 
 import os
+import socket
 
 from core.execution.journal import ExecutionJournal, default_journal_path
 
@@ -31,6 +32,22 @@ def _detail(d: Dict) -> str:
     return (rat.get("summary") if isinstance(rat, dict) else "") or "no order needed"
 
 
+def _pid_alive_here(status: dict) -> bool:
+    """True only if the status was written on THIS host and that process still exists. Unknown pid/host -> False."""
+    pid, host = status.get("pid"), status.get("host")
+    if not isinstance(pid, int) or pid <= 0 or host != socket.gethostname():
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True            # exists, owned by someone else
+    except OSError:
+        return False
+    return True
+
+
 def execution_view(journal: Optional[ExecutionJournal] = None, now: Optional[float] = None, limit: int = 40) -> dict:
     """{headline, running, halted, hb_age_s, symbols:[...], decisions:[...], issues:[...], account:{...}}. Never raises."""
     now = time.time() if now is None else now
@@ -44,13 +61,20 @@ def execution_view(journal: Optional[ExecutionJournal] = None, now: Optional[flo
         hb_age = now - st["heartbeat"] if st.get("heartbeat") else None
         fresh = hb_age is not None and hb_age < max(3 * st.get("poll_seconds", 30), 60)
         running = bool(st.get("running") and fresh and holder)
+        # A stale heartbeat does not prove the runner died: while the host sleeps the poll loop is suspended too. If the
+        # recorded process is still alive on this machine, report STALE (not STOPPED) so a sleeping Mac is not a false alarm.
+        asleep = bool(st.get("running") and not fresh and _pid_alive_here(st))
         halted = j.halted()
         issues = list((st.get("reconciliation") or {}).get("issues", []))
         if st.get("last_error"):
             issues.append(f"last error: {st['last_error']}")
         if st.get("running") and not fresh:
-            issues.append(f"heartbeat is {hb_age:.0f}s old -- the service stopped without saying so")
-        state = "RUNNING" if running else "STOPPED"
+            if asleep:
+                issues.append(f"heartbeat is {hb_age:.0f}s old but the runner process (pid {st.get('pid')}) is still alive -- "
+                              "the host was probably asleep; it should resume on its own")
+            else:
+                issues.append(f"heartbeat is {hb_age:.0f}s old -- the service stopped without saying so")
+        state = "RUNNING" if running else ("STALE (host asleep?)" if asleep else "STOPPED")
         headline = (f"Paper execution {state} | {st.get('strategy', '—')} {st.get('interval', '')} on "
                     f"{', '.join(st.get('symbols', [])) or '—'} | last heartbeat {_fmt_ts(st.get('heartbeat'))}"
                     + (f" | HALTED: {halted['reason']}" if halted else ""))
