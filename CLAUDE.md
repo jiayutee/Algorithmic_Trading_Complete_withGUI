@@ -4,7 +4,7 @@
 Read `docs/algotrader_notebook.html`, `docs/CONTINUATION_PLAN.md` and `docs/CODEX_HANDOFF.md` before continuing. After each implementation slice, update the notebook, plan, evidence/handoff artifact, Notion sprint task and GitHub. Distinguish implemented, tested, merged and deployed work; keep remaining limitations explicit.
 
 ## Project
-**Algorithmic Trading Complete with GUI** — sprint to ship by **2026-08-18** (revised launch date — original 2026-07-28 target pushed 3 weeks by owner decision on 2026-08-09, see Daily Log). 51-day sprint total.
+**Algorithmic Trading Complete with GUI** — the 51-day sprint targeted **2026-08-18** (revised from 2026-07-28 on 2026-08-09, see Daily Log). That date has passed; work continues open-ended (see Sprint Context).
 Repo: `jiayutee/Algorithmic_Trading_Complete_withGUI`
 Stack: Python 3.11, PyQt5, backtrader, OpenBB, Binance/Alpaca/KuCoin/SimulatedBroker, SQLite news store.
 
@@ -81,7 +81,9 @@ scripts/
 - Local-only, git-ignored: `logs/`, `datasets/`, `news_store.sqlite3*`, `.env`, `config/settings.py`, model weights (`*.pt`).
 
 ## Sprint Context
-- Launch: 2026-08-18 (revised, was 2026-07-28) | Day counter: `python3 -c "from datetime import date; print(51-(date(2026,8,18)-date.today()).days+1)"`
+- Launch target 2026-08-18 (revised, was 2026-07-28) has PASSED; the 51-day sprint is over and the project continues open-ended (owner decision 2026-11-14).
+  Day numbers stay continuous with the Notion history: label rows `Day N` (NO `/51` suffix) and set Days to Launch to 0.
+  Day counter: `python3 -c "from datetime import date; print(51-(date(2026,8,18)-date.today()).days+1)"` (unchanged formula; 2026-11-13 = Day 139)
 - Notion hub: https://app.notion.com/p/36ad2ab050d980439d4ce7d7d235c9af
 - Daily Log DB ID: `00008c59-c054-4c67-97f8-9753a9a23163`
 - Sprint Board DB ID: `91e3aa02-65de-40fb-8cb4-d297683bd67e`
