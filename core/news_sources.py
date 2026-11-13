@@ -78,6 +78,8 @@ class NewsItem:
     impact_score: float = 0.0
     source_reliability: float = 0.5
     metadata: dict[str, Any] = field(default_factory=dict)
+    # True when the provider gave no publication date and datetime_utc is just the fetch time (DuckDuckGo always).
+    pub_time_is_fetch_time: bool = False
 
 
 def canonicalize_url(url: str) -> str:
@@ -94,6 +96,13 @@ def coerce_datetime(value: Any) -> datetime:
     if pd.isna(timestamp):
         return datetime.now(timezone.utc)
     return timestamp.to_pydatetime()
+
+
+def has_usable_datetime(value: Any) -> bool:
+    """False when the provider gave nothing coerce_datetime() could parse (it would silently substitute 'now')."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return False
+    return not pd.isna(pd.to_datetime(value, utc=True, errors="coerce"))
 
 
 def request_with_retries(session: requests.Session, method: str, url: str, **kwargs):
@@ -580,6 +589,7 @@ class BraveSearchSource(BaseNewsSource):
             items.append(
                 NewsItem(
                     datetime_utc=coerce_datetime(published_at),
+                    pub_time_is_fetch_time=not has_usable_datetime(published_at),
                     source=source_name,
                     headline=result.get("title") or "",
                     url=result.get("url") or result.get("link") or "",
@@ -740,6 +750,7 @@ class DuckDuckGoSource(BaseNewsSource):
                     continue
                 items.append(NewsItem(
                     datetime_utc=coerce_datetime(pd.Timestamp.utcnow()),
+                    pub_time_is_fetch_time=True,
                     source="duckduckgo",
                     headline=title,
                     url=canonicalize_url(href),
@@ -761,6 +772,7 @@ class DuckDuckGoSource(BaseNewsSource):
                     continue
                 items.append(NewsItem(
                     datetime_utc=coerce_datetime(pd.Timestamp.utcnow()),
+                    pub_time_is_fetch_time=True,
                     source="duckduckgo",
                     headline=title,
                     url=canonicalize_url(href),
