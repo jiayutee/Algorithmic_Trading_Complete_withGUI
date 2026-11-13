@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Keeps the Mac awake for the overnight window (22:58 -> ~01:58 local) so the 23:05 brief, 23:20/00:20 work-loop,
+     01:15 debrief and the paper runner's 01:00 bar decision all run on time. -s only holds on AC power; with the lid
+     closed on battery macOS still sleeps. See docs/proposals/overnight_schedule_resilience.md (option b). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.algotrader.overnight-awake</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string><string>-i</string><string>-s</string>
+    <string>-t</string><string>10800</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>58</integer></dict>
+</dict>
+</plist>
