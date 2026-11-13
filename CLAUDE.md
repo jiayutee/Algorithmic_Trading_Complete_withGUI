@@ -151,6 +151,10 @@ so nothing can route around it). **By default all live orders are blocked.** Env
 - `touch .kill_switch` -- stops all live trading instantly, no restart (delete the file to release)
 - `MAX_ORDER_NOTIONAL_USD` (100), `MAX_SESSION_NOTIONAL_USD` (500 per broker), `MAX_ORDERS_PER_MINUTE` (6)
 - An order whose value can't be determined (no price) is refused. Simulator and paper-mode connectors are unaffected.
+- Notional = qty x price x contract multiplier (equity option 100; futures = the contract's size). For options and futures the guard NEVER
+  falls back to the underlying's stock price: an explicit price is required or the order is refused (this includes the legacy
+  `submit_order(sec_type='OPT'/'FUT')` path, which has no price argument and is therefore always refused). Option/futures orders go through
+  `IBKRConnector.submit_instrument_order(instrument, qty, side, price)` (single-leg only), which uses the same guard.
 
 ## Coding Rules
 - **No `.env` in commits** — always check `git status` before committing
