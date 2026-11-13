@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
+import socket
 import threading
 import time
 from dataclasses import dataclass, field
@@ -430,7 +432,8 @@ class ExecutionService:
         except Exception:  # noqa: BLE001
             acct = {}
         self.journal.set("status", {
-            "running": running, "owner": self.journal.owner_id, "heartbeat": self._clock(), "poll_seconds": self.cfg.poll_seconds,
+            "running": running, "owner": self.journal.owner_id, "pid": os.getpid(), "host": socket.gethostname(),
+            "heartbeat": self._clock(), "poll_seconds": self.cfg.poll_seconds,
             "symbols": self.cfg.symbols, "interval": self.cfg.interval, "strategy": self.signal.name, "per_symbol": self._per_symbol,
             "halted": self.journal.halted(), "last_error": self._last_error, "note": note, "reconciliation": rec, "account": acct,
             "allocation_pct": self.cfg.allocation_pct, "allow_short": self.cfg.allow_short,
