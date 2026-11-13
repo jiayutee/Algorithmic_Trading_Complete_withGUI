@@ -1963,7 +1963,9 @@ def build_layout() -> html.Div:
                 id="price-interval",
                 interval=1500,   # milliseconds
                 n_intervals=0,
-                disabled=True,
+                # Always on: with no chart loaded yet it still marks the paper account's open positions to real prices
+                # (before this, the account card and positions table sat at cost basis until someone loaded a chart).
+                disabled=False,
             ),
 
             # Header safety state (account mode, kill switch, price age). Always on: it is cheap (a file check).
