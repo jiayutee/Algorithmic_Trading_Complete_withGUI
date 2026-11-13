@@ -35,6 +35,6 @@ def test_binance_batch_failure_logs_the_exception_class_and_symbol(caplog):
     dl.binance_public.fetch_ohlcv.side_effect = TimeoutError("request timed out after 10s")
     with caplog.at_level(logging.WARNING, logger="AlgoTrading"):
         with pytest.raises(ValueError):
-            dl._get_binance_historical("BTCUSDT", 5, "1d")
+            dl._get_binance_historical_ccxt("BTCUSDT", 5, "1d")
     text = " ".join(r.getMessage() for r in caplog.records)
     assert "BTCUSDT" in text and "TimeoutError" in text and "timed out" in text
