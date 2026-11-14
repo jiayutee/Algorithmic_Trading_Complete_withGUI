@@ -160,7 +160,11 @@ class ExecutionGuard:
     # ------------------------------------------------------------------ evaluation
 
     def evaluate(self, broker: str, symbol: str, qty: Any, side: Any, order_type: str = "market",
-                 price: Optional[float] = None) -> GuardDecision:
+                 price: Optional[float] = None, multiplier: float = 1.0, require_price: bool = False) -> GuardDecision:
+        """``multiplier`` scales qty*price to dollars (an equity option contract controls 100 shares; a futures contract its
+        contract size). ``require_price`` is set for options/futures: the fallback price provider looks up the UNDERLYING's
+        stock price, which is not the contract's price, so for those the caller must pass an explicit price or the order
+        is refused rather than valued with the wrong instrument's price."""
         reason = self.kill_switch_reason()
         if reason:
             return self._record(broker, symbol, qty, side, None, GuardDecision("block", [reason]))
@@ -176,11 +180,19 @@ class ExecutionGuard:
         if str(side).lower() not in ("buy", "sell", "long", "short"):
             problems.append(f"side must be buy/sell/long/short (got {side!r})")
 
+        try:
+            mult = float(multiplier)
+            if not math.isfinite(mult) or mult <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            mult = float("nan")
+            problems.append(f"contract multiplier must be a positive number (got {multiplier!r})")
+
         notional = None
         if not problems:
-            px = price if price else self._price_provider(symbol)
+            px = price if (price or require_price) else self._price_provider(symbol)
             if px and math.isfinite(float(px)) and float(px) > 0:
-                notional = q * float(px)
+                notional = q * float(px) * mult
             else:
                 problems.append("cannot determine the order's value (no price) -- refusing to send an unverifiable order")
 
@@ -240,6 +252,28 @@ def set_guard(guard: Optional[ExecutionGuard]) -> None:
         _guard = guard
 
 
+_DERIVATIVE_SEC_TYPES = ("OPT", "FOP", "FUT", "BAG", "WAR")
+OPTION_CONTRACT_MULTIPLIER = 100.0          # standard US equity option
+
+
+def _contract_terms(bound_args: dict) -> tuple:
+    """(multiplier, require_price) for an order, from either an ``instrument`` argument (core.instrument.Instrument, read by
+    duck-typing) or a raw ``sec_type``. Equities, crypto and FX keep (1.0, False): nothing changes for them.
+    Options/futures require an explicit price, and a futures contract with no contract size gets multiplier=nan -> refused."""
+    inst = bound_args.get("instrument")
+    if inst is not None:
+        cls = str(getattr(getattr(inst, "asset_class", ""), "value", getattr(inst, "asset_class", ""))).upper()
+        if cls == "OPTION":
+            return (bound_args.get("multiplier") or OPTION_CONTRACT_MULTIPLIER), True
+        if cls == "FUTURE":
+            size = bound_args.get("multiplier") or getattr(inst, "contract_size", None)
+            return (size if size else float("nan")), True
+        return float(bound_args.get("multiplier") or 1.0), False
+    if str(bound_args.get("sec_type") or "").upper() in _DERIVATIVE_SEC_TYPES:
+        return (bound_args.get("multiplier") or 1.0), True          # legacy path: no way to value it safely without a price
+    return float(bound_args.get("multiplier") or 1.0), False
+
+
 def guarded_live_order(broker_name: str):
     """Decorate a connector's ``submit_order`` so it cannot reach the exchange without passing the guard.
 
@@ -258,8 +292,10 @@ def guarded_live_order(broker_name: str):
             a = bound.arguments
             symbol, qty, side = a.get("symbol"), a.get("qty"), a.get("side")
             order_type = str(a.get("order_type", "market"))
+            multiplier, require_price = _contract_terms(a)
             guard = get_guard()
-            decision = guard.evaluate(broker_name, symbol, qty, side, order_type, price=a.get("price"))
+            decision = guard.evaluate(broker_name, symbol, qty, side, order_type, price=a.get("price"),
+                                      multiplier=multiplier, require_price=require_price)
             if decision.action == "block":
                 msg = f"{broker_name} order BLOCKED: " + "; ".join(decision.reasons)
                 logger.error("%s | %s %s %s", msg, side, qty, symbol)
