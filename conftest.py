@@ -56,10 +56,16 @@ def ib_env(monkeypatch):
     mod.Stock = lambda symbol, exchange="SMART", currency="USD": NS(
         symbol=symbol, exchange=exchange, currency=currency, secType="STK", conId=0
     )
-    mod.Option = lambda symbol, expiry="", strike=0.0, right="", exchange="SMART", currency="USD": NS(
-        symbol=symbol, lastTradeDateOrContractMonth=expiry, strike=float(strike),
-        right=right, exchange=exchange, secType="OPT", currency=currency, conId=0
+    # Same parameter names/order as the real ib_insync constructors, so code can call them either way
+    mod.Option = lambda symbol="", lastTradeDateOrContractMonth="", strike=0.0, right="", exchange="SMART", multiplier="", currency="USD": NS(
+        symbol=symbol, lastTradeDateOrContractMonth=lastTradeDateOrContractMonth, strike=float(strike),
+        right=right, exchange=exchange, multiplier=multiplier, secType="OPT", currency=currency, conId=0
     )
+    mod.Future = lambda symbol="", lastTradeDateOrContractMonth="", exchange="", multiplier="", currency="USD": NS(
+        symbol=symbol, lastTradeDateOrContractMonth=lastTradeDateOrContractMonth, exchange=exchange,
+        multiplier=multiplier, secType="FUT", currency=currency, conId=0
+    )
+    mod.LimitOrder = lambda action, qty, price: NS(action=action, totalQuantity=qty, lmtPrice=price, orderType="LMT")
     monkeypatch.setitem(sys.modules, "ib_insync", mod)
     import brokers.ib_connector as ibc
     import core.broker_manager as bm
