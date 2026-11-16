@@ -1,6 +1,6 @@
 # Proposal: overnight schedule resilience (Mac sleep + agenda race)
 
-Status: **PROPOSAL, owner decides.** Nothing in this PR changes scheduled-task files, launchd plists or `pmset` settings.
+Status: **option b INSTALLED 2026-11-13 (owner approved); a, c, d, e not applied.** Nothing in this PR changes scheduled-task files, launchd plists or `pmset` settings.
 Evidence: [dns-outage-followups-2026-09-28.md](../artifacts/dns-outage-followups-2026-09-28.md) and `pmset -g log`.
 
 ## Problem
@@ -47,3 +47,6 @@ is left open.
 ## Not proposed
 
 Do not move the schedule into daytime. The 19:30–23:00 and 02:00–16:00 exclusions in CLAUDE.md stay as they are.
+
+## Applied 2026-11-13
+Owner approved option b. `scripts/launchd/com.algotrader.overnight-awake.plist` is installed in `~/Library/LaunchAgents/` (`launchctl print gui/$(id -u)/com.algotrader.overnight-awake`). It runs `caffeinate -i -s -t 10800` at 22:58 local. `-s` only holds on AC power, so keep the Mac plugged in overnight; on battery with the lid closed macOS still sleeps. Remove: `launchctl bootout gui/$(id -u)/com.algotrader.overnight-awake`. Options c and e are not done.
