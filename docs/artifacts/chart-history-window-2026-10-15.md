@@ -44,3 +44,13 @@ test at a private temp cache and makes the HTTP fetcher fail, so no test touches
 - A backtest on 365 days of 1m crypto still has to download the year once (~1.5 min); it is cached afterwards.
 - The always-on paper runner uses the same loader, so after its next restart it also reads daily candles from the cache and
   fetches only the new ones (fewer Binance calls). I did not restart it.
+
+
+## Follow-up 2026-11-16 — the items that were "not covered"
+| Item | Result |
+|---|---|
+| Drags were simulated, not a real mouse | Re-tested with real mouse drags (Pan tool, `left_click_drag`) in the browser pane: BTCUSDT 1m, Days 365. **Found two bugs** that the simulated drags had hidden: (1) three fast drags in a row left a blank strip at the left because each event loaded at most 8,000 candles and no further event followed; (2) callbacks run on parallel threads, so two overlapping events could overwrite each other's merged candles (lost update). Fixed: the chart-view update is serialized with a lock and keeps loading until the view plus a 30% margin is covered (bounded by the Days limit and the 20,000-candle cap). After the fix, three real drags: 2,880 -> 19,009 candles loaded, view fully covered, no gaps. |
+| No auto-coarsening when zoomed far out | Built. When more than 3,000 candles are in view they are merged into 2/3/5/10/15/30/60/120/240...-candle groups (open of first, high max, low min, close of last, volume summed; clock-aligned), and full detail comes back when zooming in. Real-mouse check: a 9-day view of 1m data drew 4,322 groups of 5 minutes out of 21,607 loaded; zooming back in restored all 21,607 candles; the status line says which mode is active. Crypto only (stocks have no scroll-back). |
+| Desktop "Older" button only checked offscreen | **Still not checked on a real display.** The desktop app is a PyQt5 window; I did not drive it with computer use. |
+| Stocks have no scroll-back | **Not fixable here:** Yahoo keeps 7 days of 1m, ~60 days of 5-30m and ~2 years of 1h candles, so there is nothing older to fetch. Daily candles cover long ranges. |
+| 365-day 1m backtest downloads the year once | Unchanged by design (about 1.5 min once, cached afterwards). |
