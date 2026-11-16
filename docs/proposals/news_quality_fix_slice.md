@@ -1,6 +1,6 @@
 # News Quality Fix — Slice 1 Proposal
 
-**Status: proposal only — not implemented, not merged.**
+**Status: slice 1 IMPLEMENTED 2026-11-14 on branch feat/news-quality-slice1 (owner approved; see "Decisions taken" at the end).**
 Date: 2026-10-01
 
 ---
@@ -190,3 +190,12 @@ No destructive rollback step needed. No data is lost.
 4. **Near-duplicate normalisation strength.** The current `_normalized_headline_key` (core/news_pipeline.py line 181) strips trailing `" - Publisher"` and punctuation. A heavier normalisation (stop-word removal, stemming) would catch more paraphrases but risks false positives and requires an additional dependency. Is the simple rule sufficient for now?
 
 5. **Priority relative to other CONTINUATION_PLAN items.** This slice addresses data quality, not strategy edge. If the H3 news-sentiment hypothesis test (target: 300 qualifying days) is the higher-priority gate, this slice can be deferred without blocking that test.
+
+## Decisions taken (2026-11-14, owner approved the slice; the proposal's recommended answers were used)
+1. Dedupe scope: within `(source family, UTC day)` only; cross-family duplicates are kept as independent confirmation.
+2. No backfill: existing rows keep `pub_time_is_fetch_time = 0` (no UPDATE of history). The read-time 60-second rule in `scripts/news_quality_baseline.py` remains the proxy for old DuckDuckGo rows.
+3. Window: one UTC calendar day.
+4. Normalisation: the existing exact lowercase-trimmed headline hash; no stemming or stop-word removal.
+5. Priority: done ahead of the H3 sentiment test because the gap report below shows a 26-day hole in the store.
+
+Verified on a scratch copy of the live store (4,452 rows): migration adds the column, no row changes, canonical file checksum unchanged.
