@@ -45,6 +45,8 @@ core/
   design_tokens.py        # Colors/fonts/sizes for BOTH front ends: qt_stylesheet() (desktop), css_root() (Dash), chart THEME
   watchlist.py            # Shared watchlist (training_ground/paper/watchlist.json, WATCHLIST_PATH) + background QuoteBook
   risk_view.py            # Read-only risk rows: paper account vs the paper runner's limits (never creates the journal)
+  portfolio_rules.py      # Phase 14.0 long-only crypto portfolio weight rules (EW, TS28, C1-C5): pure functions, nothing wired to the runner
+  portfolio_shadow.py     # Phase 14.1 order-free forward shadow ledger of those rules: python -m core.portfolio_shadow update|status
   news_health.py          # Per-source circuit breaker so one rate-limited news source can't stall a refresh
   news_context.py         # Read-only chart-linked news snapshots for the Dash "Market Context" tab (no sentiment/store writes)
   news_interpretation.py  # Deterministic rule-based event reading (conditional bias, mechanism, counterargument) -- not a forecast
@@ -138,6 +140,11 @@ scripts/
   Apply edits: `launchctl kickstart -k gui/$(id -u)/com.algotrader.paper-execution`. Stop: `launchctl bootout gui/$(id -u)/com.algotrader.paper-execution`
   (needed before the desktop/Dash "Start Paper" buttons can run, since only one runner may trade the account). Log: `logs/execution.log`;
   status: `python -m core.execution.service status`. It runs the code in THIS checkout, so keep this checkout on a branch that has `core/execution/`.
+- Portfolio shadow ledger (Phase 14.1, NO orders): `python -m core.portfolio_shadow update|status` logs what the Phase 14.0 rules (EW, TS28, C2 = the
+  pre-registered pick, C3/C5 descriptive) would hold and earn each day on completed UTC closes of 8 fixed coins; file
+  `training_ground/paper/portfolio_shadow.sqlite3` (override `PORTFOLIO_SHADOW_PATH`). `update` backfills every missed day, so a sleeping Mac loses nothing.
+  Schedule (optional): copy `scripts/launchd/com.algotrader.portfolio-shadow.plist` to `~/Library/LaunchAgents/` and `launchctl bootstrap gui/$(id -u)` it
+  (07:40 daily via `scripts/run_collectors.sh shadow`, log `logs/collectors.log`). No conclusion before 180 forward days: docs/PHASE_14_1_SHADOW_PREREGISTRATION.md.
 - Research loop: `python -m core.research_loop run|status` (also visible in the Dash "Research Loop" tab). Promote/retire
   rules are fixed in the module docstring; retired strategies never revive automatically
 - Experiment log: `python -m core.experiment_log list|show|best|compare` (file: training_ground/results/experiments.sqlite3,
