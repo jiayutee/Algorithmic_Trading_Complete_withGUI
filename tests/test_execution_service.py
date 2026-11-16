@@ -382,8 +382,15 @@ def test_view_shows_running_only_while_the_heartbeat_is_fresh_and_flags_a_dead_s
     svc.tick()
     v = execution_view(journal, now=clock.t + 5)
     assert v["running"] and "RUNNING" in v["headline"]
+    # a stale heartbeat from a live process on this host reads STALE (host asleep), not STOPPED (see test_execution_view_stale.py)
+    assert "STALE" in execution_view(journal, now=clock.t + 10_000)["headline"]
+    st = journal.get("status")
+    import subprocess, sys
+    p = subprocess.Popen([sys.executable, "-c", "pass"]); p.wait()
+    journal.set("status", {**st, "pid": p.pid})                       # the runner process is gone
     dead = execution_view(journal, now=clock.t + 10_000)
     assert not dead["running"] and "STOPPED" in dead["headline"] and any("heartbeat" in i for i in dead["issues"])
+    journal.set("status", st)
     svc.halt("x")
     assert "HALTED" in execution_view(journal, now=clock.t + 5)["headline"]
 

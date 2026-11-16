@@ -60,6 +60,41 @@ def coverage(symbols: List[str] = SYMBOLS, db_path: Optional[str] = None,
     return out
 
 
+def ingest_summary(db_path: Optional[str] = None, today: Optional[date] = None) -> Dict[str, object]:
+    """When did the store last receive anything, and where are the holes? Uses the row-insertion day (created_at), which --
+    unlike datetime_utc -- is not the provider's publication time. Read-only; never creates a database."""
+    path = db_path or DEFAULT_DB
+    empty = {"last_ingest": None, "days_since": None, "longest_gap_days": 0, "gap_between": None, "ingest_days": 0}
+    if not os.path.exists(path):
+        return empty
+    today = today or datetime.now(timezone.utc).date()
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        days = [date.fromisoformat(r[0]) for r in conn.execute(
+            "SELECT DISTINCT substr(created_at, 1, 10) FROM news WHERE created_at IS NOT NULL ORDER BY 1").fetchall() if r[0]]
+    finally:
+        conn.close()
+    if not days:
+        return empty
+    longest, between = 0, None
+    for a, b in zip(days, days[1:]):
+        gap = (b - a).days - 1                      # whole days with no ingest between two ingest days
+        if gap > longest:
+            longest, between = gap, (a.isoformat(), b.isoformat())
+    return {"last_ingest": days[-1].isoformat(), "days_since": (today - days[-1]).days,
+            "longest_gap_days": longest, "gap_between": between, "ingest_days": len(days)}
+
+
+def format_ingest(summary: Dict[str, object]) -> str:
+    if not summary.get("last_ingest"):
+        return "Ingest: nothing stored yet."
+    stale = summary["days_since"]
+    flag = "" if stale <= 1 else f"  <-- STALE: no ingest for {stale} days, is the collector running?"
+    gap = (f"; longest gap {summary['longest_gap_days']} day(s) between {summary['gap_between'][0]} and {summary['gap_between'][1]}"
+           if summary["longest_gap_days"] else "; no gaps")
+    return f"Ingest: last {summary['last_ingest']} ({stale}d ago), {summary['ingest_days']} ingest day(s){gap}{flag}"
+
+
 def collect(symbols: List[str] = SYMBOLS, pipeline=None, limit: int = 25, progress=print,
             pause_seconds: float = 2.0) -> Dict[str, dict]:
     """Fetch, filter, score (cached) and store news for each symbol. One failing symbol never stops the rest.
@@ -109,6 +144,7 @@ def _cli(argv=None) -> int:
         load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
         print(f"Collecting news for {len(symbols)} symbols ...")
         collect(symbols)
+    print(format_ingest(ingest_summary()))
     print(format_status(coverage(symbols)))
     return 0
 

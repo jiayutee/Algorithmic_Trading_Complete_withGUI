@@ -76,3 +76,43 @@ def test_a_fast_drag_far_left_fetches_enough_to_cover_the_view_in_one_go():
     assert cw.bars_needed(loaded_start + 10 * min_ms, loaded_start + 600 * min_ms, loaded_start, "1m") == cw.CHUNK_BARS
     # a drag a month away is bounded, the next scroll event continues
     assert cw.bars_needed(loaded_start - 50_000 * min_ms, loaded_start - 49_400 * min_ms, loaded_start, "1m") == cw.MAX_BARS_PER_LOAD
+
+
+# ---------------------------------------------------------------- zoomed out: coarser candles (like an exchange chart)
+
+import pandas as pd
+
+
+@pytest.mark.parametrize("visible,expected", [(0, 1), (1500, 1), (3000, 1), (3001, 2), (6000, 2), (9000, 3), (15000, 5),
+                                              (30000, 10), (525600, 240), (5_000_000, 1440)])
+def test_lod_factor_uses_nice_multiples_and_keeps_the_picture_under_the_target(visible, expected):
+    assert cw.lod_factor(visible) == expected
+    if visible and visible < 5_000_000:
+        assert visible / cw.lod_factor(visible) <= cw.TARGET_VISIBLE_BARS * 1.0001 or cw.lod_factor(visible) == 1440
+
+
+def _bars(n, start="2026-10-10 00:00", step="1min"):
+    idx = pd.date_range(start, periods=n, freq=step)
+    base = pd.Series(range(n), index=idx, dtype=float)
+    return pd.DataFrame({"Open": base, "High": base + 2, "Low": base - 2, "Close": base + 1, "Volume": 1.0}, index=idx)
+
+
+def test_resample_aggregates_ohlcv_correctly_and_aligns_to_the_clock():
+    df = _bars(120)                                              # two hours of 1m candles starting on the hour
+    out = cw.resample_ohlcv(df, 60, "1m")
+    assert len(out) == 2 and out.index[0] == pd.Timestamp("2026-10-10 00:00") and out.index[1] == pd.Timestamp("2026-10-10 01:00")
+    first = out.iloc[0]
+    assert first["Open"] == 0 and first["Close"] == 60 and first["High"] == 61 and first["Low"] == -2 and first["Volume"] == 60
+
+
+def test_resample_buckets_are_epoch_aligned_even_when_the_data_starts_mid_bucket():
+    df = _bars(100, start="2026-10-10 00:17")
+    out = cw.resample_ohlcv(df, 15, "1m")
+    assert all(ts.minute % 15 == 0 for ts in out.index)
+    assert out["Volume"].sum() == 100                            # nothing lost or double counted
+
+
+def test_resample_with_factor_one_or_empty_input_is_a_no_op():
+    df = _bars(10)
+    assert cw.resample_ohlcv(df, 1, "1m") is df
+    assert cw.resample_ohlcv(df.iloc[0:0], 5, "1m").empty

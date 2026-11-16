@@ -87,6 +87,11 @@ def older_chunk_range(loaded_start_ms: int, interval: str, bars: int = CHUNK_BAR
     return int(loaded_start_ms - bars * step_ms), int(loaded_start_ms)
 
 
+def covers_view(view_start_ms: float, view_end_ms: float, loaded_start_ms: float) -> bool:
+    """True when the loaded candles reach the same margin to the left of the view that ``bars_needed`` aims for."""
+    return loaded_start_ms <= view_start_ms - 0.3 * max(0.0, view_end_ms - view_start_ms)
+
+
 MAX_BARS_PER_LOAD = 8 * CHUNK_BARS       # one scroll event never fetches more than this (eight parallel Binance pages)
 
 
@@ -98,6 +103,40 @@ def bars_needed(view_start_ms: float, view_end_ms: float, loaded_start_ms: float
     margin = 0.3 * max(0.0, view_end_ms - view_start_ms)
     gap = loaded_start_ms - (view_start_ms - margin)
     return int(min(MAX_BARS_PER_LOAD, max(CHUNK_BARS, math.ceil(gap / step_ms))))
+
+
+TARGET_VISIBLE_BARS = 3000                 # more candles than this in view and they are thinner than a pixel: coarsen
+_NICE_FACTORS = (1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 360, 720, 1440)
+
+
+def lod_factor(visible_bars: float) -> int:
+    """How many base candles to merge into one so that about TARGET_VISIBLE_BARS or fewer are drawn (1 = full detail).
+    Exchanges do the same when you zoom out: the candles get fatter but never unreadably thin. Only 'nice' multiples are used
+    (1m -> 5m, 15m, 1h, 4h...), so the merged candles line up with the usual intervals."""
+    if not visible_bars or visible_bars <= TARGET_VISIBLE_BARS:
+        return 1
+    need = math.ceil(visible_bars / TARGET_VISIBLE_BARS)
+    for f in _NICE_FACTORS:
+        if f >= need:
+            return f
+    return _NICE_FACTORS[-1]
+
+
+def resample_ohlcv(df, factor: int, interval: str):
+    """Merge ``factor`` consecutive base candles into one: open of the first, high max, low min, close of the last, volume
+    summed. Buckets are aligned to the epoch (so 1h candles start on the hour). ``factor == 1`` returns ``df`` unchanged."""
+    import pandas as pd
+    if factor <= 1 or df is None or df.empty:
+        return df
+    width = pd.Timedelta(seconds=interval_seconds(interval) * int(factor))
+    bucket = (df.index - pd.Timestamp("1970-01-01")) // width
+    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
+    if "Volume" in df.columns:
+        agg["Volume"] = "sum"
+    out = df.groupby(bucket).agg(agg)
+    out.index = pd.Timestamp("1970-01-01") + out.index.to_series().to_numpy() * width
+    out.index.name = df.index.name
+    return out
 
 
 def can_load_more(loaded_bars: int, oldest_allowed_ms: Optional[float], loaded_start_ms: float) -> bool:

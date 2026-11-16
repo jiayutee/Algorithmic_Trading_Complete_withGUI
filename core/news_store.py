@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import sqlite3
 import json
 import hashlib
@@ -49,12 +50,48 @@ class NewsStore:
             logger.warning("Migration file not found: migrations/0001_create_news_table.sql")
         except Exception as exc:
             logger.exception("Failed to ensure news tables: %s", exc)
+        self._apply_additive_migration("0002_pub_time_flag.sql")
+
+    def _apply_additive_migration(self, name: str) -> None:
+        """Run an additive migration statement by statement; 'duplicate column' (already applied) is not an error.
+        Located next to the package, so it works regardless of the current directory."""
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations", name)
+        try:
+            with open(path, "r") as f:
+                text = "\n".join(line for line in f.read().splitlines() if not line.strip().startswith("--"))
+                statements = [st.strip() for st in text.split(";") if st.strip()]
+        except FileNotFoundError:
+            logger.warning("Migration file not found: %s", path)
+            return
+        for st in statements:
+            try:
+                self.conn.execute(st)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    logger.warning("Migration %s statement failed: %s", name, exc)
+        self.conn.commit()
+
+    def _is_same_story_today(self, cur, headline_hash: str, source_api: Optional[str], published_iso: Optional[str]) -> bool:
+        """Same normalised headline, same source family, same UTC day -> same story under a different URL.
+        Different families are kept on purpose (independent confirmation). Never raises: on any error, do not dedupe."""
+        if not headline_hash or not published_iso:
+            return False
+        try:
+            row = cur.execute(
+                "SELECT 1 FROM news WHERE headline_hash = ? AND json_extract(metadata, '$.source_api') IS ? "
+                "AND date(datetime_utc) = date(?) LIMIT 1", (headline_hash, source_api, published_iso)).fetchone()
+            return row is not None
+        except Exception as exc:  # noqa: BLE001 -- e.g. SQLite built without JSON1
+            logger.debug("same-story check unavailable: %s", exc)
+            return False
 
     def add_items(self, items: Iterable[NewsItem]) -> int:
         """
         Insert items into the store. Deduplication rules:
          - If canonical URL present, use INSERT OR IGNORE on url UNIQUE constraint.
          - Otherwise dedupe on headline_hash.
+         - A row with the same headline_hash, source family (metadata.source_api) and UTC day as one already stored is
+           skipped (same story under a different URL). Other source families are kept as independent confirmation.
         Returns number of inserted rows.
         """
         inserted = 0
@@ -63,6 +100,10 @@ class NewsStore:
             url = canonicalize_url(_item_value(item, "url", "") or "")
             headline = _item_value(item, "headline", "") or ""
             hh = _headline_hash(headline)
+            meta = _item_value(item, "metadata", {}) or {}
+            if self._is_same_story_today(cur, hh, meta.get("source_api") if isinstance(meta, dict) else None,
+                                         _iso(_item_value(item, "datetime_utc", None))):
+                continue
             payload = (
                 _iso(_item_value(item, "datetime_utc", None)),
                 _item_value(item, "source", None),
@@ -79,13 +120,14 @@ class NewsStore:
                 float(_item_value(item, "impact_score", 0.0) or 0.0),
                 float(_item_value(item, "source_reliability", 0.5) or 0.5),
                 json.dumps(_item_value(item, "metadata", {}) or {}),
+                1 if _item_value(item, "pub_time_is_fetch_time", False) else 0,
             )
             try:
                 cur.execute(
                     """
                     INSERT OR IGNORE INTO news
-                    (datetime_utc, source, headline, headline_hash, url, summary, content, language, tickers, entities, event_type, sentiment, impact_score, source_reliability, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (datetime_utc, source, headline, headline_hash, url, summary, content, language, tickers, entities, event_type, sentiment, impact_score, source_reliability, metadata, pub_time_is_fetch_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     payload,
                 )
