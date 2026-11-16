@@ -1,3 +1,11 @@
+# Claude / Codex handoff — updated 2026-11-16
+
+## Latest: Phase 9.2 slice 1 harness (2026-11-16, PR #54 pending review)
+Branch `research/phase-9-2-slice1-harness` from main 68bd60f. Adds `training_ground/experiments_9_2.py` (the frozen protocol
+from docs/PHASE_9_2_PREREGISTRATION.md) and `tests/test_experiments_9_2.py` (26 tests, synthetic data only). 1758 passed, 1 skipped.
+Not run on real data: no 9.2 number exists yet. Open items: confirm the family grouping (event_ticker prefix), and the F-bucket
+exploratory output is null for now. Not merged, not deployed. Details: CONTINUATION_PLAN.md, 2026-11-16 entry.
+
 # Claude / Codex handoff — updated 2026-10-14
 
 ## Latest: design slice 2 — structure (2026-10-14, PR pending review, stacked on slice 1)

@@ -236,3 +236,15 @@ Owner asked for the best strategy I can come up with. Pre-registered first ([doc
 
 ## 2026-11-16 — Phase 14.1: forward shadow ledger of the portfolio rules (PR pending review)
 Built `core/portfolio_shadow.py` (`python -m core.portfolio_shadow update|status`): an order-free, persisted ledger that records what EW, TS28, C2 (the 14.0 pick) and C3/C5 (descriptive) would have held and earned on each completed UTC day for 8 fixed coins, so there is finally unseen evidence. Same mechanics as 14.0 (checked: the incremental ledger reproduces `experiments_14_0.simulate` exactly for every rule), backfills missed days, refuses to invent a missing close, all-or-nothing per update. Pre-registered before the first row ([PHASE_14_1](PHASE_14_1_SHADOW_PREREGISTRATION.md)): no conclusion before 180 forward days, a statistically meaningful look at 730. **Started 2026-11-15** on live Binance data; C2 is currently all cash (the trend is down). A launchd plist (07:40 daily) is in `scripts/launchd/` but NOT installed. No orders, no broker, no change to the paper runner.
+
+## 2026-11-16 — Phase 9.2 slice 1: frozen-protocol harness (PR #54, not merged)
+The owner merged the pre-registration (PR #48), and its text says that merge is the go-ahead for model code.
+`training_ground/experiments_9_2.py` implements the protocol exactly: read-only DB, close_time cut-off 2026-11-13,
+L2 logistic recalibration with C=1.0, weekly expanding walk-forward with a 1-day purge, first test week 2026-10-12,
+event bootstrap 5000/seed 0, and the three-criterion verdict. `tests/test_experiments_9_2.py` has 26 tests on
+synthetic data only: a calibrated market gives "no evidence" and a market with a planted bias passes.
+Full suite: 1758 passed, 1 skipped. **No real-data 9.2 number has been computed.** Pre-registration Amendment 1 changes the status only.
+Open before slice 2 (the real run, which needs the owner's go-ahead):
+(a) "series-ticker family" is implemented as the event_ticker prefix before the first '-'; 9.3 code has no explicit
+category grouping, so the owner should confirm it; (b) the exploratory F-bucket output is still null, because yes_ask
+is not yet threaded through the folds; (c) max_iter=1000 was set only so the fit converges, not tuned.
