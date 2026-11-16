@@ -78,7 +78,7 @@ def test_derivative_without_price_is_refused_not_priced_as_the_underlying(conn, 
 def test_legacy_submit_order_for_a_derivative_sec_type_is_refused(conn, ib_env, live_guard):
     live_guard()                                                    # provider would fail the test if consulted
     for sec in ("OPT", "FUT"):
-        with pytest.raises(OrderBlockedError, match="cannot determine"):
+        with pytest.raises(OrderBlockedError, match="LIMIT orders"):        # legacy path: market order AND no price to value it with
             conn.submit_order("AAPL", 1, "buy", sec_type=sec)
     ib_env.ib.placeOrder.assert_not_called()
 
@@ -131,6 +131,8 @@ def pconn(ib_env):
 @pytest.mark.parametrize("kind,right,side,action", [(OptionType.CALL, "C", "buy", "BUY"), (OptionType.CALL, "C", "sell", "SELL"),
                                                     (OptionType.PUT, "P", "buy", "BUY"), (OptionType.PUT, "P", "sell", "SELL")])
 def test_single_leg_option_orders_build_the_right_contract(ib_env, pconn, kind, right, side, action):
+    if side == "sell":                                               # selling is only allowed to close a long position you hold
+        ib_env.ib.positions.return_value = [held("OPT", "AAPL", 2, "20261218", 185.5, right, "100")]
     r = pconn.submit_instrument_order(call(strike=185.5, kind=kind), 2, side, price=3.1)
     contract, order = ib_env.ib.placeOrder.call_args[0]
     assert (contract.secType, contract.symbol, contract.strike, contract.right) == ("OPT", "AAPL", 185.5, right)
@@ -140,11 +142,10 @@ def test_single_leg_option_orders_build_the_right_contract(ib_env, pconn, kind, 
     assert {"order_id", "symbol", "quantity", "side", "status", "filled", "remaining", "avg_fill_price"} <= set(r)
 
 
-def test_limit_order_carries_its_price_and_market_does_not(ib_env, pconn):
-    pconn.submit_instrument_order(call(), 1, "buy", price=2.25, order_type="LMT")
-    assert ib_env.ib.placeOrder.call_args[0][1].lmtPrice == 2.25
-    pconn.submit_instrument_order(call(), 1, "buy", price=2.25, order_type="MKT")
-    assert not hasattr(ib_env.ib.placeOrder.call_args[0][1], "lmtPrice")
+def test_orders_are_limit_orders_and_carry_their_price(ib_env, pconn):
+    pconn.submit_instrument_order(call(), 1, "buy", price=2.25)                      # default is LMT
+    order = ib_env.ib.placeOrder.call_args[0][1]
+    assert order.orderType == "LMT" and order.lmtPrice == 2.25
 
 
 def test_future_contract_uses_contract_month_multiplier_and_exchange(ib_env, pconn):
@@ -170,8 +171,9 @@ def test_incomplete_or_wrong_instruments_are_rejected_before_anything_is_sent(ib
 
 
 def test_bad_order_type_and_missing_price_are_rejected(ib_env, pconn):
-    with pytest.raises(ValueError):
-        pconn.submit_instrument_order(call(), 1, "buy", price=1.0, order_type="STP")
+    for bad in ("STP", "MKT", "market"):
+        with pytest.raises(ValueError, match="LIMIT"):
+            pconn.submit_instrument_order(call(), 1, "buy", price=1.0, order_type=bad)
     with pytest.raises(ValueError):
         pconn.submit_instrument_order(call(), 1, "buy", price=0)
     ib_env.ib.placeOrder.assert_not_called()
@@ -211,3 +213,67 @@ def test_account_info_surfaces_margin_fields_and_keeps_the_old_keys(ib_env, pcon
     assert info["net_liquidation"] == "100000" and info["leverage"] == "250000"      # unchanged keys
     ib_env.ib.accountSummary.return_value = [NS(tag="NetLiquidation", value="1")]
     assert pconn.get_account_info()["initial_margin_req"] is None                    # not reported -> None, not an error
+
+
+# ------------------------------------------------------------------ hardening from the PR review
+def test_guard_refuses_a_market_order_on_a_derivative_even_with_a_tiny_stated_price():
+    """A market order for 100 contracts stated at $0.01 used to value at $100 and slip under a $100 cap (real value ~ $50,000)."""
+    g = ExecutionGuard(env=LIVE, price_provider=lambda s: pytest.fail("underlying price must not be used"))
+    d = g.evaluate("IBKR", "AAPL", 100, "buy", "MKT", price=0.01, multiplier=100.0, require_price=True)
+    assert d.action == "block" and any("LIMIT orders" in r for r in d.reasons)
+    ok = g.evaluate("IBKR", "AAPL", 1, "buy", "LMT", price=0.5, multiplier=100.0, require_price=True)
+    assert ok.action == "allow" and ok.notional == pytest.approx(50.0)
+
+
+def test_stocks_may_still_use_market_orders():
+    g = ExecutionGuard(env=LIVE, price_provider=lambda s: 10.0)
+    assert g.evaluate("IBKR", "AAPL", 2, "buy", "MKT").action == "allow"
+
+
+def test_the_exploit_end_to_end_a_market_order_is_refused_before_ib_is_touched(conn, ib_env, live_guard):
+    live_guard()
+    with pytest.raises(ValueError, match="LIMIT"):
+        conn.submit_instrument_order(call(), 100, "buy", price=0.01, order_type="MKT")
+    ib_env.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", [OptionType.CALL, OptionType.PUT])
+def test_selling_an_option_to_open_a_short_is_refused_in_every_mode(ib_env, kind, live_guard):
+    ib_env.ib.positions.return_value = []
+    for paper, dry in ((True, False), (False, False), (False, True)):
+        live_guard(LIVE_DRY_RUN="true" if dry else "false")
+        c = ib_env.ibc.IBKRConnector()
+        c.paper_mode = paper
+        with pytest.raises(ValueError, match="open a short option"):
+            c.submit_instrument_order(call(kind=kind), 1, "sell", price=0.05)         # $5 'value' of unlimited risk
+    ib_env.ib.placeOrder.assert_not_called()
+
+
+def test_selling_to_close_a_long_option_is_allowed_but_not_more_than_you_hold(ib_env, pconn):
+    ib_env.ib.positions.return_value = [held("OPT", "AAPL", 2, "20261218", 200.0, "C", "100")]
+    pconn.submit_instrument_order(call(), 2, "sell", price=1.0)
+    ib_env.ib.placeOrder.assert_called_once()
+    ib_env.ib.placeOrder.reset_mock()
+    with pytest.raises(ValueError, match="you hold 2"):
+        pconn.submit_instrument_order(call(), 3, "sell", price=1.0)
+    ib_env.ib.placeOrder.assert_not_called()
+
+
+def test_a_long_position_in_a_different_strike_does_not_license_the_sale(ib_env, pconn):
+    ib_env.ib.positions.return_value = [held("OPT", "AAPL", 5, "20261218", 150.0, "C", "100")]      # holds the 150 call, sells the 200
+    with pytest.raises(ValueError, match="open a short option"):
+        pconn.submit_instrument_order(call(strike=200.0), 1, "sell", price=1.0)
+
+
+def test_futures_sells_are_unaffected_by_the_option_rule(ib_env, pconn):
+    ib_env.ib.positions.return_value = []
+    pconn.submit_instrument_order(es(), 1, "sell", price=5000.0)                      # notional is the real exposure for a future
+    ib_env.ib.placeOrder.assert_called_once()
+
+
+def test_the_private_placement_method_also_enforces_the_short_rule(ib_env, pconn):
+    ib_env.ib.positions.return_value = []
+    with pytest.raises(ValueError, match="open a short option"):
+        pconn._place_instrument_order(symbol="AAPL261218C00200000", qty=1, side="sell", instrument=call(), order_type="LMT",
+                                      price=1.0, _contract=pconn.contract_for(call()))
+    ib_env.ib.placeOrder.assert_not_called()

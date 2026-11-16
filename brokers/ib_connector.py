@@ -131,23 +131,41 @@ class IBKRConnector:
                           currency=getattr(instrument, "currency", "USD") or "USD")
         raise ValueError(f"submit_instrument_order handles OPTION and FUTURE only (got {kind or 'unknown'}); use submit_order for stocks")
 
+    def _refuse_short_option_open(self, instrument, qty, side) -> None:
+        """Selling an option is allowed only to CLOSE a long position you hold. Selling to open (a naked short) has unlimited
+        risk on a call and a huge one on a put, and the dollar caps only see the premium, so until sizing is margin-aware it is
+        refused in every mode (dry run included, so a dry run never says 'would submit' for something live would refuse)."""
+        if self._asset_class(instrument) != "OPTION" or str(side).lower() not in ("sell", "short"):
+            return
+        pos = self.get_position(instrument.symbol, instrument=instrument)
+        held = float(pos["position"]) if pos else 0.0
+        if held < abs(float(qty)):
+            raise ValueError(
+                f"selling {abs(float(qty)):g} {instrument.symbol} would open a short option position (you hold {max(held, 0):g}); "
+                "selling options to open is not allowed -- only selling to close a long position")
+
     def submit_instrument_order(self, instrument, qty: Union[int, float], side: str, price: float,
-                                order_type: str = 'MKT') -> dict:
+                                order_type: str = 'LMT') -> dict:
         """Place a single-leg option order (buy/sell call/put) or a futures order for an Instrument.
 
-        ``price`` is REQUIRED: the option premium or futures price. It is the guard's value reference (qty x price x contract
-        multiplier, so one option contract = 100 shares) and the limit for ``order_type='LMT'``; for 'MKT' it is only the
-        reference and the order still goes at market. Multi-leg spreads are out of scope. Always goes through the live-order guard."""
+        LIMIT orders only: ``price`` is REQUIRED (the option premium or futures price) and is both the order's limit and the
+        guard's value reference (qty x price x contract multiplier, so one option contract = 100 shares). A market order is
+        refused because its fill price is not bounded by the stated one, which would let a low stated price slip a large order
+        under the dollar caps. Options can be SOLD only to close a long position you hold. Multi-leg spreads are out of scope.
+        Always goes through the live-order guard."""
         contract = self.contract_for(instrument)                    # validates BEFORE the guard so a bad contract is an error, not a dry run
-        if str(order_type).upper() not in ("MKT", "LMT"):
-            raise ValueError("order_type must be MKT or LMT")
+        if str(order_type).upper() != "LMT":
+            raise ValueError("options and futures are LIMIT orders only (order_type must be 'LMT'): a market order cannot be "
+                             "valued reliably against the dollar caps")
         if not price or float(price) <= 0:
             raise ValueError("price (premium / futures price) is required to value the order")
+        self._refuse_short_option_open(instrument, qty, side)
         return self._place_instrument_order(symbol=instrument.symbol, qty=qty, side=side, instrument=instrument,
                                             order_type=str(order_type).upper(), price=float(price), _contract=contract)
 
     @guarded_live_order("IBKR")
-    def _place_instrument_order(self, symbol, qty, side, instrument, order_type='MKT', price=None, _contract=None) -> dict:
+    def _place_instrument_order(self, symbol, qty, side, instrument, order_type='LMT', price=None, _contract=None) -> dict:
+        self._refuse_short_option_open(instrument, qty, side)      # defence in depth: also when called without the public method
         action = "BUY" if str(side).lower() in ("buy", "long") else "SELL"
         order = LimitOrder(action, abs(qty), price) if order_type == "LMT" else MarketOrder(action, abs(qty))
         trade = self.ib.placeOrder(_contract, order)

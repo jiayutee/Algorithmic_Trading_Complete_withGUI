@@ -188,6 +188,10 @@ class ExecutionGuard:
             mult = float("nan")
             problems.append(f"contract multiplier must be a positive number (got {multiplier!r})")
 
+        if require_price and str(order_type).strip().lower() not in ("lmt", "limit"):
+            problems.append("options and futures must be LIMIT orders: a market order fills at whatever the market gives, so the "
+                            "price the caller states cannot be trusted to value it against the dollar caps")
+
         notional = None
         if not problems:
             px = price if (price or require_price) else self._price_provider(symbol)

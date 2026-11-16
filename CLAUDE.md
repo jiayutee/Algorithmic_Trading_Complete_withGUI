@@ -156,7 +156,9 @@ so nothing can route around it). **By default all live orders are blocked.** Env
 - Notional = qty x price x contract multiplier (equity option 100; futures = the contract's size). For options and futures the guard NEVER
   falls back to the underlying's stock price: an explicit price is required or the order is refused (this includes the legacy
   `submit_order(sec_type='OPT'/'FUT')` path, which has no price argument and is therefore always refused). Option/futures orders go through
-  `IBKRConnector.submit_instrument_order(instrument, qty, side, price)` (single-leg only), which uses the same guard.
+  `IBKRConnector.submit_instrument_order(instrument, qty, side, price)` (single-leg only), which uses the same guard. Options and
+  futures are LIMIT orders only (the guard blocks any other type: a market order's fill is not bounded by the stated price), and an
+  option may be sold only to CLOSE a long position you hold (selling to open a naked short is refused in every mode).
 
 ## Coding Rules
 - **No `.env` in commits** — always check `git status` before committing
