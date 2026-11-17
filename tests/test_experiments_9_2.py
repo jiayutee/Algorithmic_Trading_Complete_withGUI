@@ -598,3 +598,21 @@ def test_run_on_empty_df_returns_no_evidence():
     res = ex.run(df, n_boot=50)
     assert res["verdict"] == "no evidence that the model beats the market price"
     assert res["n_markets"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Datetime-resolution regression (CI runs pandas 3, which parses to microseconds, not nanoseconds)
+# ---------------------------------------------------------------------------
+
+def test_close_ts_is_absolute_unix_seconds_in_both_loaders(tmp_path):
+    """``astype('int64') // 10**9`` assumed nanosecond resolution; under pandas 3 every close time came out ~1000x too small
+    (all markets in 1970) and walk-forward produced no folds. Pin the absolute value, which no relative test would catch."""
+    snaps = [("2026-10-12T04:00:00Z", "T1", "EV1", "2026-10-12T12:00:00Z", 0.30, 0.38)]
+    db = make_db(tmp_path, snaps, {"T1": 1})
+    df, _ = ex.load_data(db)
+    assert df["close_ts"].tolist() == [1791806400]                    # 2026-10-12 12:00:00 UTC
+    assert pd.to_datetime(df["close_ts"], unit="s", utc=True).iloc[0].year == 2026
+
+    from training_ground.experiments_9_3_collected import load_collected
+    c = load_collected(db, lead_h=2.0)
+    assert c["close_ts"].tolist() == [1791806400]

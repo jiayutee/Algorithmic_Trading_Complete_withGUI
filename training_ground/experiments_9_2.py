@@ -101,7 +101,7 @@ def load_data(db_path: Optional[str] = None,
     # Build output DataFrame
     df_filtered["event"] = df_filtered["event_ticker"].where(
         df_filtered["event_ticker"].notna(), df_filtered["ticker"])
-    df_filtered["close_ts"] = (df_filtered["close_"].astype("int64") // 10 ** 9).astype(int)
+    df_filtered["close_ts"] = _epoch_seconds(df_filtered["close_"])
     df_filtered["outcome"] = df_filtered["result"].astype(int)
     df_filtered["lead_h"] = df_filtered["lead_h_"]
     df_filtered["spread"] = df_filtered["yes_ask"] - df_filtered["yes_bid"]
@@ -185,6 +185,12 @@ def _get_rare_families(train_df: pd.DataFrame) -> Tuple[set, set]:
 # ---------------------------------------------------------------------------
 # Walk-forward CV
 # ---------------------------------------------------------------------------
+
+def _epoch_seconds(ts: pd.Series) -> pd.Series:
+    """UTC datetimes -> integer unix seconds, whatever the datetime resolution is. ``astype("int64") // 10**9`` assumed
+    nanoseconds; pandas 3 parses to microseconds, which made every close time ~1000x too small (all markets in 1970)."""
+    return ((ts - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(seconds=1)).astype("int64")
+
 
 def _week_key(close_ts_series: pd.Series) -> pd.Series:
     """Return (iso_year, iso_week) for each unix timestamp."""
