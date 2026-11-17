@@ -97,6 +97,7 @@ scripts/
 - Schedule deliberately avoids: CariGaji orchestrator (02:00-16:00) and the owner's
   reserved manual-prompting window (19:30-23:00) — both share the same Claude token pool
 - Two-way Telegram bot (chat_id=51218456) — user can send instructions, orchestrator responds
+- Late alert: each overnight task runs `scripts/late_check.py` first; >60 min after its slot it sends one Telegram notice (state in `~/.claude/scheduled-tasks/`, never the repo). The work-loop also polls ~20 min for a late agenda before skipping (docs/proposals/overnight_schedule_resilience.md).
 - Uses `--append-system-prompt-file .github/agents/orchestrator.agent.md` (NOT `--agent`)
 - Notion updated via REST API (curl) using `$NOTION_API_KEY` from `.env`
 - CI status checked via `$GITHUB_PAT` from `.env`
