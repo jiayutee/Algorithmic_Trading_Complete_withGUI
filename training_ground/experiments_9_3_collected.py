@@ -56,7 +56,7 @@ def load_collected(db_path: Optional[str] = None, lead_h: float = LEAD_H) -> pd.
     out = pd.DataFrame({
         "ticker": last["ticker"].to_numpy(),
         "event": last["event_ticker"].where(last["event_ticker"].notna(), last["ticker"]).to_numpy(),  # unknown event -> its own cluster
-        "close_ts": (last["close_"].astype("int64") // 10**9).to_numpy(),
+        "close_ts": ((last["close_"] - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(seconds=1)).astype("int64").to_numpy(),  # resolution-independent (pandas 3 is microseconds)
         "outcome": last["result"].astype(int).to_numpy(),
         "yes_ask": last["yes_ask"].to_numpy(), "yes_bid": last["yes_bid"].to_numpy(),
         "lead_h": last["lead_h"].to_numpy()})

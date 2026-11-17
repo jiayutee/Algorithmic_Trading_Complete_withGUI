@@ -4,7 +4,9 @@ Written 2026-11-14, **before any 9.2 code exists and before any 9.2 number has b
 the model code is written only after this file is merged, and any change after that is an amendment, labelled as one.
 Same rules as 6.5 and 9.3: fixed protocol, nothing tuned to pass, deviations labelled exploratory.
 
-Status: **DRAFT. The owner reviews and merges it; nothing runs until then.** No execution path exists or is implied.
+Status: **merged (PR #48, 2026-11-16); slice 1 harness + synthetic tests written, no real-data run yet.**
+
+**Amendment 1 (2026-11-16, status only, no protocol change):** status changed DRAFT -> merged (PR #48, 2026-11-16); slice 1 harness (`training_ground/experiments_9_2.py`) and synthetic tests (`tests/test_experiments_9_2.py`) written on branch `research/phase-9-2-slice1-harness`; no real-data run yet. Protocol unchanged.
 
 ## What is already known (disclosed so the test is honest about its own history)
 - 9.1: no riskless arbitrage in liquid books. 9.3a/9.3 re-runs (2026-09-26, 7 days of data): longshots (L): no evidence;
