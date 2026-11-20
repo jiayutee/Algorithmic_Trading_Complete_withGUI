@@ -248,3 +248,11 @@ Open before slice 2 (the real run, which needs the owner's go-ahead):
 (a) "series-ticker family" is implemented as the event_ticker prefix before the first '-'; 9.3 code has no explicit
 category grouping, so the owner should confirm it; (b) the exploratory F-bucket output is still null, because yes_ask
 is not yet threaded through the folds; (c) max_iter=1000 was set only so the fit converges, not tuned.
+
+## 2026-11-17 — Phase 10.0 pre-registration draft (PR pending, not merged)
+`docs/PHASE_10_0_PREREGISTRATION.md` fixes, before any code or real-data number, how "news gets priced in" will be tested:
+CAR(h) = beta · s · K(h) on Binance 1h bars, with headlines from `news_store.sqlite3` since 2026-09-01 (single `*USDT` ticker, non-neutral,
+6 h de-clustering, BTC-beta-adjusted for alts). K is non-parametric first, then Null/Instant/Exponential/Bass compared on a 60/40 time-split
+holdout. The verdict needs beta's interval to exclude 0, a kernel that beats Null, and a passing pre-event placebo (the reverse-causality guard).
+At least 200 holdout events, otherwise INSUFFICIENT DATA. Only counts were profiled (3,078 crypto headlines since 09-01, 2,114 non-neutral); no returns were computed.
+Next: owner review of decisions a–c in the doc, then slice 1 (synthetic harness + parameter-recovery tests).

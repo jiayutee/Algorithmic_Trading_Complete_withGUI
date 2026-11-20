@@ -110,3 +110,9 @@ Follow item 1 in CONTINUATION_PLAN.md: typed provider failures and replayable fi
 
 ## 2026-09-23 addendum — AI research activation smoke
 Groq retired `llama-3.3-70b-versatile` (HTTP 404). Branch `orchestrator/day88-ai-research-smoke` changes the default to `openai/gpt-oss-120b` after one successful live verification call. The branch is unmerged. Evidence: [ai-research-smoke-2026-09-23.md](artifacts/ai-research-smoke-2026-09-23.md). Next: owner review. Optionally log Groq's error body on failure, and separate reports of past moves from forward reasoning in the prompt.
+
+## 2026-11-17 addendum — Phase 10.0 pre-registration draft
+Branch `orchestrator/phase10-0-prereg-20261117` (worktree `.claude/worktrees/orchestrator-phase10-0-prereg-20261117`) adds
+`docs/PHASE_10_0_PREREGISTRATION.md` (DRAFT). Docs only, no code; it is not merged. Read-only news-store profiling counts only. Next: owner review, then slice 1 (synthetic harness).
+Also checked the same night: the chart-freeze ticket's slice 1 (debug logging in `DataLoadWorker.run` and `_on_data_loaded`) is already on main, so no PR was opened for it.
+The open step is still reproducing the freeze in the real app with DEBUG logging.
