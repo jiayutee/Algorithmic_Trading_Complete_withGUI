@@ -256,3 +256,8 @@ CAR(h) = beta · s · K(h) on Binance 1h bars, with headlines from `news_store.s
 holdout. The verdict needs beta's interval to exclude 0, a kernel that beats Null, and a passing pre-event placebo (the reverse-causality guard).
 At least 200 holdout events, otherwise INSUFFICIENT DATA. Only counts were profiled (3,078 crypto headlines since 09-01, 2,114 non-neutral); no returns were computed.
 Next: owner review of decisions a–c in the doc, then slice 1 (synthetic harness + parameter-recovery tests).
+
+## 2026-11-22 - Phase 10.0 pre-registration revised after review (PR #56)
+Owner asked for a review of the draft; it found that most stored 'publication times' are the collector's fetch clock (all Oct-Nov Brave rows) and that
+`openbb_news` had delivered nothing since about 2026-10-01. The doc now has an eligibility rule, a 500-eligible-event gate before any run, a kernel-free beta48,
+a ratio-based placebo criterion, fit-set kernel selection and separate BTC/alt reporting. Data fix is PR #57. Docs only; no price or return was read.
