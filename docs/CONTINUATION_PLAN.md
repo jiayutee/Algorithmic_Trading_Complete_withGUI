@@ -256,3 +256,11 @@ CAR(h) = beta · s · K(h) on Binance 1h bars, with headlines from `news_store.s
 holdout. The verdict needs beta's interval to exclude 0, a kernel that beats Null, and a passing pre-event placebo (the reverse-causality guard).
 At least 200 holdout events, otherwise INSUFFICIENT DATA. Only counts were profiled (3,078 crypto headlines since 09-01, 2,114 non-neutral); no returns were computed.
 Next: owner review of decisions a–c in the doc, then slice 1 (synthetic harness + parameter-recovery tests).
+
+## 2026-11-22 - openbb_news repaired via Yahoo-search fallback (PR pending review)
+Cause of the seven-week gap in dated headlines: yfinance 0.2.55's `get_news` raises "YAHOO! FINANCE IS CURRENTLY DOWN" while Yahoo
+itself answers (its `ncp` POST no longer returns what the library expects), so `openbb_news` returned nothing and its circuit stayed open.
+Fix: `OpenBBNewsSource` now falls back to Yahoo's public search endpoint (real `providerPublishTime`; crypto searched by coin name,
+kept only if tied to the coin); undated OpenBB rows are now flagged `pub_time_is_fetch_time`. Switch off: `OPENBB_NEWS_YAHOO_FALLBACK=false`.
+Live check 2026-11-22: BTCUSDT 20, ETHUSDT 15, AAPL 23 dated items. 1775 passed. Implemented and tested; not merged, not deployed
+(collectors run this checkout). Limits: Yahoo's endpoint is unofficial and may change; proper fix is upgrading yfinance (not done, env change).

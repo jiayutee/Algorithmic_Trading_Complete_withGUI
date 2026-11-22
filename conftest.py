@@ -28,6 +28,12 @@ def _fast_yf_retries(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_yahoo_news_fallback(monkeypatch):
+    """The OpenBB news source falls back to Yahoo's public search endpoint; tests must never reach it by accident."""
+    monkeypatch.setenv("OPENBB_NEWS_YAHOO_FALLBACK", "false")
+
+
+@pytest.fixture(autouse=True)
 def _offline_isolated_kline_cache(monkeypatch, tmp_path):
     """Candle history is cached on disk and fetched over HTTP. In tests that must never touch the real cache file or the
     network: use a private temp cache and make the HTTP fetcher fail, which sends the loader to its mocked CCXT path (the
