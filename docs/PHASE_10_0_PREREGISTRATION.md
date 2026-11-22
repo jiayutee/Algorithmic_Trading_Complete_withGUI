@@ -1,7 +1,7 @@
-# Phase 10.0 pre-registration (DRAFT): how news sentiment gets priced in over time
+# Phase 10.0 pre-registration (APPROVED 2026-11-22): how news sentiment gets priced in over time
 
 Written 2026-11-17 by the overnight work-loop, **before any model code exists and before any real-data number has been computed.**
-Status: **DRAFT — awaiting owner review.** This file is a plan, not a result. Phase 10.0 is a LEARNING exercise: the bar is that the owner
+Status: **APPROVED by the owner on 2026-11-22 (all three decisions below accepted at the defaults written here; no protocol change).** Slice 1 may start; no real-data number exists yet. This file is a plan, not a result. Phase 10.0 is a LEARNING exercise: the bar is that the owner
 understands the model after reading it, not only that the tests pass (Sprint Board acceptance criteria).
 
 ## The question in plain language
@@ -83,7 +83,17 @@ price moving. The companion doc `docs/diffusion_sentiment_explained.md` (slice 3
 It is not a trading signal, a forecast or a profit claim. No order path, no change to the paper runner, and no change to the sentiment pipeline.
 A DIFFUSION SUPPORTED verdict would justify a separate, pre-registered test of a strategy. It would not justify trading.
 
-## Owner decisions needed before slice 2
-a. Is the 2026-09-01 start and the 60/40 time split acceptable?
-b. Is a 48 h horizon with a 6 h de-clustering window acceptable?
-c. Is a BTC-beta-adjusted abnormal return acceptable for alts? The alternative is raw returns.
+## Owner decisions (resolved 2026-11-22)
+Owner said "approved, go ahead with the defaults" in chat on 2026-11-22. The protocol above is frozen as of that date; any later change must be
+a dated amendment below, made before the real-data run, never after seeing its numbers.
+
+a. **2026-09-01 start and 60/40 time split: approved.** At approval time the window was about 82 days, so the holdout is roughly 33 days.
+b. **48 h horizon with 6 h de-clustering: approved.**
+c. **BTC raw log return, other coins BTC-beta-adjusted (30-day hourly beta, past data only): approved.**
+
+Sample-size risk accepted in advance: the 200-event holdout minimum has not been checked against the de-clustered event count (headline yield of
+the free collectors is low). If it is not met the verdict is INSUFFICIENT DATA and is reported as such; the bar is not lowered, and the run may
+instead wait for more data.
+
+## Amendments
+None yet.

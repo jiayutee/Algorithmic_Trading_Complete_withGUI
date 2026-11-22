@@ -116,3 +116,6 @@ Branch `orchestrator/phase10-0-prereg-20261117` (worktree `.claude/worktrees/orc
 `docs/PHASE_10_0_PREREGISTRATION.md` (DRAFT). Docs only, no code; it is not merged. Read-only news-store profiling counts only. Next: owner review, then slice 1 (synthetic harness).
 Also checked the same night: the chart-freeze ticket's slice 1 (debug logging in `DataLoadWorker.run` and `_on_data_loaded`) is already on main, so no PR was opened for it.
 The open step is still reproducing the freeze in the real app with DEBUG logging.
+
+## 2026-11-22 addendum — Phase 10.0 pre-registration APPROVED
+Owner approved `docs/PHASE_10_0_PREREGISTRATION.md` at the defaults (2026-09-01 start, 60/40 split, 48 h horizon, 6 h de-clustering, BTC raw / alts BTC-beta-adjusted). Draft merged earlier as PR #56; this slice records the approval only (docs, no code). Next: slice 1, the synthetic harness `core/diffusion_sentiment.py` with planted-signal tests; no real data until it is merged. Risk noted: 200 holdout events may not be reached with ~82 days of data, giving INSUFFICIENT DATA.

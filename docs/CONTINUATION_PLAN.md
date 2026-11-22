@@ -256,3 +256,6 @@ CAR(h) = beta · s · K(h) on Binance 1h bars, with headlines from `news_store.s
 holdout. The verdict needs beta's interval to exclude 0, a kernel that beats Null, and a passing pre-event placebo (the reverse-causality guard).
 At least 200 holdout events, otherwise INSUFFICIENT DATA. Only counts were profiled (3,078 crypto headlines since 09-01, 2,114 non-neutral); no returns were computed.
 Next: owner review of decisions a–c in the doc, then slice 1 (synthetic harness + parameter-recovery tests).
+
+## 2026-11-22 — Phase 10.0 pre-registration approved
+Owner approved the draft at its defaults (see the Owner decisions section of `docs/PHASE_10_0_PREREGISTRATION.md`). Implemented: nothing new (docs only). Remaining: slice 1 synthetic harness, slice 2 single real-data run, slice 3 teaching doc and plot. The real-data verdict may be INSUFFICIENT DATA if fewer than 200 de-clustered holdout events exist.
