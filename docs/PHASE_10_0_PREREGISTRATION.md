@@ -96,4 +96,14 @@ the free collectors is low). If it is not met the verdict is INSUFFICIENT DATA a
 instead wait for more data.
 
 ## Amendments
-None yet.
+**2026-11-22 (slice 1, before any real-data run): operationalisations the text left open. No criterion, threshold or data rule changed.**
+- CAR(h) is the sum of abnormal hourly log returns of bars t0 .. t0+h-1 (CAR(1) = the return of the first bar that opens after publication).
+- "Fit on the first 60% of the event-time range" means the first 60% of the TIME SPAN between the first and last event, not 60% of the events.
+- The kernel is fitted by least squares of CAR(h) on beta*s*K(h) over all events and horizons 1..48. For a fixed shape the best beta is closed form;
+  shape parameters are found on a fixed grid (tau 0.25..500 h; Bass p 0.001..3.2, q 0.001..10). Nothing is tuned afterwards.
+- Criterion (a) beta holdout = the best kernel's shape (fixed from the fit set) re-scaled on the holdout; criterion (b) = holdout MSE of Null minus
+  holdout MSE of the best non-null kernel (parameters from the fit set), both with day-block bootstrap on the holdout.
+- Criterion (c) placebo = least-squares slope of the abnormal return over the 24 h BEFORE t0 on s, holdout only; it passes if its 95% interval includes 0.
+- Events whose 48 h window is incomplete, or whose coin has fewer than 360 hourly bars of history in the 720 before t0, are dropped and counted.
+- Slice 1 implements `diffusion_verdict` exactly as above; tests on synthetic data with a planted signal (recovery, pure-noise false-positive rate,
+  a pre-headline move, too few events) are in `tests/test_diffusion_sentiment.py`.

@@ -119,3 +119,6 @@ The open step is still reproducing the freeze in the real app with DEBUG logging
 
 ## 2026-11-22 addendum — Phase 10.0 pre-registration APPROVED
 Owner approved `docs/PHASE_10_0_PREREGISTRATION.md` at the defaults (2026-09-01 start, 60/40 split, 48 h horizon, 6 h de-clustering, BTC raw / alts BTC-beta-adjusted). Draft merged earlier as PR #56; this slice records the approval only (docs, no code). Next: slice 1, the synthetic harness `core/diffusion_sentiment.py` with planted-signal tests; no real data until it is merged. Risk noted: 200 holdout events may not be reached with ~82 days of data, giving INSUFFICIENT DATA.
+
+## 2026-11-22 addendum — Phase 10.0 slice 1 (synthetic harness), branch `research/phase-10-0-slice1-harness`
+Implemented and tested (21 tests, synthetic data only): `core/diffusion_sentiment.py` (event construction, the four kernels, least-squares fit, day-block bootstrap, the pre-registered verdict) and `tests/test_diffusion_sentiment.py`. Operationalisations are recorded as a dated amendment in the pre-registration. Not merged until the PR is reviewed. No real data read; slice 2 (one real run) waits for the merge. The tau fit is weakly identified under random-walk noise (single-sample misses of ~30% are normal); the median over seeds is unbiased.
