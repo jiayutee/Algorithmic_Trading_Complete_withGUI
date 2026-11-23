@@ -882,6 +882,11 @@ class OpenBBNewsSource(BaseNewsSource):
                 logger.warning("OpenBB news: timeout for %s", ticker)
                 return [], OUTCOME_TIMEOUT
             logger.warning("OpenBB news fetch failed for %s: %s", ticker, type(e).__name__)
+            # yfinance's own news call broke (it reports "YAHOO! FINANCE IS CURRENTLY DOWN" even while Yahoo
+            # answers) -- fall back to Yahoo's public search endpoint, which also carries real publish times.
+            fallback = self._yahoo_search_news(ticker, limit)
+            if fallback:
+                return fallback, OUTCOME_OK
             return [], OUTCOME_ERROR
 
         items: list[NewsItem] = []
@@ -891,8 +896,10 @@ class OpenBBNewsSource(BaseNewsSource):
                 pub_date = getattr(article, "date", None) or getattr(article, "published_utc", None)
                 if pub_date and hasattr(pub_date, "replace"):
                     dt = pub_date if pub_date.tzinfo else pub_date.replace(tzinfo=timezone.utc)
+                    fetch_clock = False
                 else:
                     dt = datetime.now(timezone.utc)
+                    fetch_clock = True       # no publication date given: this is just when we fetched it
 
                 headline = str(getattr(article, "title", "") or "").strip()
                 url = str(getattr(article, "url", "") or "").strip()
@@ -910,6 +917,7 @@ class OpenBBNewsSource(BaseNewsSource):
                     summary=summary[:500],
                     content="",
                     source_reliability=self.reliability,
+                    pub_time_is_fetch_time=fetch_clock,
                 ))
             except Exception as e:
                 logger.debug("OpenBB news item parse error: %s", e)
@@ -923,6 +931,63 @@ class OpenBBNewsSource(BaseNewsSource):
             f" [mapped from {raw_ticker}]" if ticker != raw_ticker else "",
         )
         return items, (OUTCOME_OK if items else OUTCOME_OK_EMPTY)
+
+    _YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+    # Yahoo's search matches crypto news by coin NAME, not by "BTC-USD" (which returns nothing).
+    _COIN_NAMES: dict[str, str] = {
+        "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "BNB": "BNB", "XRP": "XRP", "ADA": "Cardano",
+        "DOGE": "Dogecoin", "DOT": "Polkadot", "LTC": "Litecoin", "AVAX": "Avalanche", "LINK": "Chainlink",
+        "UNI": "Uniswap", "ATOM": "Cosmos", "MATIC": "Polygon",
+    }
+
+    def _yahoo_search_news(self, ticker: str, limit: int) -> list[NewsItem]:
+        """Yahoo's public search endpoint as a backup for yfinance's broken news call. [] on any problem.
+
+        Only used for the default yfinance provider; set OPENBB_NEWS_YAHOO_FALLBACK=false to switch it off.
+        Items carry the real ``providerPublishTime`` (epoch seconds), so they are valid for event timing.
+        """
+        if self.provider != "yfinance" or os.getenv("OPENBB_NEWS_YAHOO_FALLBACK", "true").lower() in ("0", "false", "no", "off"):
+            return []
+        coin = self._COIN_NAMES.get(ticker[:-4]) if ticker.endswith("-USD") else None
+        if ticker.endswith("-USD") and not coin:
+            return []                              # unknown coin: Yahoo search cannot find it by ticker
+        try:
+            resp = requests.get(
+                self._YAHOO_SEARCH_URL,
+                params={"q": coin or ticker, "newsCount": max(1, min(int(limit), 50)), "quotesCount": 0},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=4,
+            )
+            if resp.status_code != 200:
+                return []
+            raw = resp.json().get("news") or []
+        except Exception as e:
+            logger.debug("Yahoo search news fallback failed for %s: %s", ticker, type(e).__name__)
+            return []
+        items: list[NewsItem] = []
+        for row in raw:
+            try:
+                headline = str(row.get("title") or "").strip()
+                url = str(row.get("link") or "").strip()
+                ts = row.get("providerPublishTime")
+                if not headline or not url or not isinstance(ts, (int, float)) or ts <= 0:
+                    continue                      # no usable publish time -> not valid for event timing
+                if coin and ticker not in (row.get("relatedTickers") or []) and coin.lower() not in headline.lower():
+                    continue                      # a name search is loose: keep only items tied to this coin
+                items.append(NewsItem(
+                    datetime_utc=datetime.fromtimestamp(ts, tz=timezone.utc),
+                    source=f"openbb:{row.get('publisher') or 'yahoo'}",
+                    headline=headline,
+                    url=url,
+                    summary="",
+                    content="",
+                    source_reliability=self.reliability,
+                    pub_time_is_fetch_time=False,
+                ))
+            except Exception:
+                continue
+        logger.info("OpenBB news: Yahoo search fallback returned %d articles for %s", len(items), ticker)
+        return items
 
     def fetch(self, query: str, limit: int = 25) -> list[NewsItem]:
         return self.fetch_classified(query, limit)[0]

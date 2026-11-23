@@ -259,3 +259,11 @@ Next: owner review of decisions a–c in the doc, then slice 1 (synthetic harnes
 
 ## 2026-11-22 — Phase 10.0 pre-registration approved
 Owner approved the draft at its defaults (see the Owner decisions section of `docs/PHASE_10_0_PREREGISTRATION.md`). Implemented: nothing new (docs only). Remaining: slice 1 synthetic harness, slice 2 single real-data run, slice 3 teaching doc and plot. The real-data verdict may be INSUFFICIENT DATA if fewer than 200 de-clustered holdout events exist.
+
+## 2026-11-22 - openbb_news repaired via Yahoo-search fallback (PR pending review)
+Cause of the seven-week gap in dated headlines: yfinance 0.2.55's `get_news` raises "YAHOO! FINANCE IS CURRENTLY DOWN" while Yahoo
+itself answers (its `ncp` POST no longer returns what the library expects), so `openbb_news` returned nothing and its circuit stayed open.
+Fix: `OpenBBNewsSource` now falls back to Yahoo's public search endpoint (real `providerPublishTime`; crypto searched by coin name,
+kept only if tied to the coin); undated OpenBB rows are now flagged `pub_time_is_fetch_time`. Switch off: `OPENBB_NEWS_YAHOO_FALLBACK=false`.
+Live check 2026-11-22: BTCUSDT 20, ETHUSDT 15, AAPL 23 dated items. 1775 passed. Implemented and tested; not merged, not deployed
+(collectors run this checkout). Limits: Yahoo's endpoint is unofficial and may change; proper fix is upgrading yfinance (not done, env change).
