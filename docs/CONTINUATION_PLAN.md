@@ -257,6 +257,9 @@ holdout. The verdict needs beta's interval to exclude 0, a kernel that beats Nul
 At least 200 holdout events, otherwise INSUFFICIENT DATA. Only counts were profiled (3,078 crypto headlines since 09-01, 2,114 non-neutral); no returns were computed.
 Next: owner review of decisions a–c in the doc, then slice 1 (synthetic harness + parameter-recovery tests).
 
+## 2026-11-22 — Phase 10.0 pre-registration approved
+Owner approved the draft at its defaults (see the Owner decisions section of `docs/PHASE_10_0_PREREGISTRATION.md`). Implemented: nothing new (docs only). Remaining: slice 1 synthetic harness, slice 2 single real-data run, slice 3 teaching doc and plot. The real-data verdict may be INSUFFICIENT DATA if fewer than 200 de-clustered holdout events exist.
+
 ## 2026-11-22 - openbb_news repaired via Yahoo-search fallback (PR pending review)
 Cause of the seven-week gap in dated headlines: yfinance 0.2.55's `get_news` raises "YAHOO! FINANCE IS CURRENTLY DOWN" while Yahoo
 itself answers (its `ncp` POST no longer returns what the library expects), so `openbb_news` returned nothing and its circuit stayed open.
