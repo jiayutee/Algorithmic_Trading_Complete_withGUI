@@ -83,7 +83,10 @@ class Events:
 
     @property
     def day(self) -> np.ndarray:
-        return np.asarray(self.t0.tz_convert("UTC").normalize().asi8 // 86_400_000_000_000)
+        # Whole UTC days since the epoch. Do NOT divide .asi8 by a nanosecond constant: pandas 3 defaults to microsecond (or coarser)
+        # resolution, which put every event on "day 0" and collapsed the day-block bootstrap (PR #59 CI failure, 2026-11-22).
+        t = self.t0.tz_convert("UTC")
+        return np.asarray((t - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(days=1), dtype=np.int64)
 
     def subset(self, mask) -> "Events":
         mask = np.asarray(mask)

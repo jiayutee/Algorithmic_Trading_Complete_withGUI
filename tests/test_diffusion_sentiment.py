@@ -95,6 +95,16 @@ def test_too_few_holdout_events_is_insufficient_data_not_a_finding():
 
 
 # ------------------------------------------------------------------ bootstrap and split
+@pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+def test_event_day_does_not_depend_on_timestamp_resolution(unit):
+    # regression (PR #59 CI): pandas 3 stores timestamps in microseconds by default; the day key must not assume nanoseconds
+    ev = ds.simulate_events(200, beta=0.02, days=30, seed=7)
+    expected = ev.day.copy()
+    assert len(np.unique(expected)) > 20
+    ev.t0 = ev.t0.as_unit(unit)
+    assert np.array_equal(ev.day, expected)
+
+
 def test_day_block_bootstrap_keeps_whole_days_together():
     ev = ds.simulate_events(300, beta=0.02, days=30, seed=7)
     rng = np.random.default_rng(0)
