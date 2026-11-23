@@ -259,3 +259,9 @@ Next: owner review of decisions a–c in the doc, then slice 1 (synthetic harnes
 
 ## 2026-11-22 — Phase 10.0 pre-registration approved
 Owner approved the draft at its defaults (see the Owner decisions section of `docs/PHASE_10_0_PREREGISTRATION.md`). Implemented: nothing new (docs only). Remaining: slice 1 synthetic harness, slice 2 single real-data run, slice 3 teaching doc and plot. The real-data verdict may be INSUFFICIENT DATA if fewer than 200 de-clustered holdout events exist.
+
+## 2026-11-22 — Phase 10.0 slice 1 built
+Implemented and tested on synthetic data (PR pending review): `core/diffusion_sentiment.py` + tests. Remaining: slice 2 (one real-data run, after merge; may end INSUFFICIENT DATA) and slice 3 (teaching doc + plot).
+
+## 2026-11-23 — Phase 10.0 slice 1: CI fix
+Fixed a pandas-3 timestamp-resolution bug in `Events.day` that broke the day-block bootstrap on CI (PR #59, same branch). Tested locally; awaiting CI and owner review. Not merged.

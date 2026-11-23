@@ -408,6 +408,14 @@
   <!-- ============ SPRINT BOARD ============ -->
   <section class="panel" id="panel-sprint">
     <div class="assess-card">
+      <h3>2026-11-23 — Phase 10.0 slice 1: CI failure fixed</h3>
+      <p>The two red CI tests came from a real bug, not a loose tolerance: on newer pandas the event times are stored in microseconds, and the code that groups events by day assumed nanoseconds, so it put every event on the same day and the bootstrap stopped varying. The day key now works at any time resolution, with a test for that. No pre-registered threshold changed. Tested locally; CI and review still pending, not merged.</p>
+    </div>
+    <div class="assess-card">
+      <h3>2026-11-22 — Phase 10.0 slice 1: synthetic harness built</h3>
+      <p>The measuring tool for news diffusion exists and is tested on fake data with a planted signal: it recovers a planted size and decay, says "no effect" on pure noise, and fails the placebo when the price moved before the headline. No real data has been read. Next is one real-data run after review (it may end INSUFFICIENT DATA). PR pending review.</p>
+    </div>
+    <div class="assess-card">
       <h3>2026-11-22 — Phase 10.0 pre-registration approved</h3>
       <p>Owner approved the news-diffusion protocol at its defaults: data from 2026-09-01, 60/40 time split, 48 h horizon, 6 h de-clustering, BTC raw and alts BTC-beta-adjusted. Docs only; no code and no real-data number yet. Next is slice 1 (synthetic harness with planted signals). Risk: about 82 days of data may not reach the 200 holdout events needed, in which case the verdict is INSUFFICIENT DATA. See <code>PHASE_10_0_PREREGISTRATION.md</code>.</p>
     </div>
